@@ -4,19 +4,25 @@
   [pre v score]
   (prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
 
-(defn dump [g] (map (comp (juxt :id :state) deref) (vals (:vertices @g))))
+(defn dump
+  [g] (map (comp (juxt :id :state) deref) (vals (:vertices @g))))
 
-(defn dot [g]
-  (let [xs (mapcat
-            (fn [v]
-              (if (:state @v)
-                (->> (:out @v)
-                     (map #(str (:id @v) "->" (:target %) ";\n"))
-                     (cons (format "%d[label=\"%d (%d)\"];\n" (:id @v) (:id @v) (int (:state @v)))))))
-            (vals (:vertices @g)))]
-    (spit "sc.dot" (str "digraph g {\nranksep=2;\noverlap=scale;\n" (apply str xs) "}"))))
-
-(defn vertex-id [g id] (get-in @g [:vertices id]))
+(defn dot
+  [g]
+  (->> (:vertices @g)
+       (vals)
+       (mapcat
+        (fn [v]
+          (if (:state @v)
+            (->> (:out @v)
+                 (map #(str (:id @v) "->" (:target %) ";\n"))
+                 (cons
+                  (format
+                   "%d[label=\"%d (%d)\"];\n"
+                   (:id @v) (:id @v) (int (:state @v))))))))
+       (apply str)
+       (format "digraph g {\nranksep=2;\noverlap=scale;\n%s}")
+       (spit "sc.dot")))
 
 (defn default-score-signal
   [{:keys [state prev mod-since-sig]}]
@@ -30,66 +36,74 @@
   [{:keys [mod-since-collect]}]
   (if mod-since-collect 1 0))
 
-(defn vertex
-  [id {:keys [state prev collect score-sig score-coll]}]
-  (atom
-   {:id id
-    :state state
-    :prev prev
-    :out #{}
-    :uncollected nil
-    :collect collect
-    :mod-since-sig false
-    :mod-since-collect false
-    :score-sig (or score-sig default-score-signal)
-    :score-coll (or score-coll default-score-collect)}))
-
-(defn edge
-  [s-vertex t-vertex {:keys [signal sig-map]}]
-  (let [e {:src (:id @s-vertex)
-           :target (:id @t-vertex)
-           :signal signal
-           :sig-map? sig-map}]
-    (swap! s-vertex update-in [:out] conj e)
-    e))
-
 (defn graph
   []
   (atom
    {:vertices {}
     :next-id 0}))
 
+(defn vertex-for-id
+  [g id] (get-in @g [:vertices id]))
+
+(defn vertex
+  [^long id {:keys [state collect score-sig score-coll]}]
+  (atom
+   {:id                id
+    :state             state
+    :out               #{}
+    :uncollected       nil
+    :collect           collect
+    :mod-since-sig     false
+    :mod-since-collect false
+    :score-sig         (or score-sig default-score-signal)
+    :score-coll        (or score-coll default-score-collect)}))
+
+(defn edge
+  [src-vertex target-vertex {:keys [signal sig-map]}]
+  (let [e {:src      (:id @src-vertex)
+           :target   (:id @target-vertex)
+           :signal   signal
+           :sig-map? sig-map}]
+    (when-not ((:out @src-vertex) e)
+      (swap!
+       src-vertex
+       #(-> %
+            (update-in [:out] conj e)
+            (assoc :mod-since-sig true
+                   :mod-since-collect true))))
+    e))
+
 (defn add-vertex
   [g vspec]
   (let [id (:next-id @g)
-        v (vertex id vspec)]
+        v  (vertex id vspec)]
     (swap! g #(-> % (update-in [:vertices] assoc id v) (assoc :next-id (inc id))))
     v))
 
 (defn do-signal
   [v g]
   (let [verts (:vertices @g)]
-    (swap! v assoc :prev (:state @v))
+    (swap! v assoc :prev (:state @v) :mod-since-sig false)
     (doseq [e (:out @v)]
-      (swap! (verts (:target e))
-             (fn [t]
-               (if-let [sigv ((:signal e) (verts (:src e)))]
-                 (let [t (update-in t [:uncollected] conj sigv)]
-                   (if (:sig-map? e)
-                     (update-in t [:signals] assoc (:src e) sigv)
-                     t))
-                 t))))))
+      (swap!
+       (verts (:target e))
+       (fn [t]
+         (if-let [sigv ((:signal e) (verts (:src e)))]
+           (let [t (update-in t [:uncollected] conj sigv)]
+             (if (:sig-map? e)
+               (update-in t [:signals] assoc (:src e) sigv)
+               t))
+           t))))))
 
 (defn do-collect
   [v]
   (swap!
-   v (fn [v]
-       (reduce
-        (fn [v sig] ((:collect v) v sig))
-        (assoc v :uncollected nil)
-        (:uncollected v)))))
+   v #(reduce
+       (fn [v sig] ((:collect v) v sig))
+       (assoc % :uncollected nil :mod-since-collect false)
+       (:uncollected %))))
 
-(defn signal-collect-scored
+(defn execute-scored
   [g n sig-thresh coll-thresh]
   (loop [done false, i 0]
     (when (and (not done) (< i n))
