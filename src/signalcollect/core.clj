@@ -5,7 +5,12 @@
   (prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
 
 (defn dump
-  [g] (map (comp (juxt :id :state) deref) (vals (:vertices @g))))
+  [g]
+  (->> (:vertices @g)
+       (vals)
+       (map deref)
+       (sort-by :id)
+       (map (juxt :id :state))))
 
 (defn dot
   [g]
@@ -45,32 +50,36 @@
 (defn vertex-for-id
   [g id] (get-in @g [:vertices id]))
 
+(defrecord Vertex
+    [id state prev
+     out uncollected
+     collect score-sig score-coll
+     mod-sig mod-collect])
+
+(defrecord Edge
+    [src target signal weight sig-map?])
+
 (defn vertex
   [^long id {:keys [state collect score-sig score-coll]}]
   (atom
-   {:id                id
-    :state             state
-    :out               #{}
-    :uncollected       nil
-    :collect           collect
-    :mod-since-sig     false
-    :mod-since-collect false
-    :score-sig         (or score-sig default-score-signal)
-    :score-coll        (or score-coll default-score-collect)}))
+   (Vertex.
+    id state nil
+    #{} nil
+    collect
+    (or score-sig default-score-signal)
+    (or score-coll default-score-collect)
+    false
+    false)))
 
 (defn edge
   [src-vertex target-vertex {:keys [signal sig-map]}]
-  (let [e {:src      (:id @src-vertex)
-           :target   (:id @target-vertex)
-           :signal   signal
-           :sig-map? sig-map}]
+  (let [e (Edge. (:id @src-vertex) (:id @target-vertex) signal 1 sig-map)]
     (when-not ((:out @src-vertex) e)
       (swap!
        src-vertex
        #(-> %
             (update-in [:out] conj e)
-            (assoc :mod-since-sig true
-                   :mod-since-collect true))))
+            (assoc :mod-sig true :mod-collect true))))
     e))
 
 (defn add-vertex
@@ -83,7 +92,7 @@
 (defn do-signal
   [v g]
   (let [verts (:vertices @g)]
-    (swap! v assoc :prev (:state @v) :mod-since-sig false)
+    (swap! v assoc :prev (:state @v) :mod-sig false)
     (doseq [e (:out @v)]
       (swap!
        (verts (:target e))
@@ -100,7 +109,7 @@
   (swap!
    v #(reduce
        (fn [v sig] ((:collect v) v sig))
-       (assoc % :uncollected nil :mod-since-collect false)
+       (assoc % :uncollected nil :mod-collect false)
        (:uncollected %))))
 
 (defn execute-scored
@@ -132,58 +141,3 @@
         ;;(prn :collect-done done i (dump g))
         ;;(prn "-----")
         (recur done (inc i))))))
-
-(defn signal-sssp
-  [v] (if (:state @v) (inc (:state @v))))
-
-(defn collect-sssp
-  [v sig]
-  (if (:state v)
-    (assoc v :state (min (:state v) sig))
-    (assoc v :state sig)))
-
-(defn score-sig-sssp
-  [{:keys [state prev]}]
-  (if (and state (or (not prev) (not= state prev))) 1 0))
-
-(defn score-coll-sssp
-  [v] (count (:uncollected v)))
-
-;; a -> b -> c ; b -> d
-(defn sssp-test-graph
-  []
-  (let [g (graph)
-        spec {:collect collect-sssp :score-sig score-sig-sssp :score-coll score-coll-sssp}
-        a (add-vertex g (assoc spec :state 0))
-        [b c d e f] (repeatedly 5 #(add-vertex g spec))]
-    (doseq [[a b] [[a b] [b c] [c d] [a e] [d f] [e f]]]
-      (edge a b {:signal signal-sssp :sig-map true}))
-    g))
-
-(defn make-strand
-  [verts]
-  (let [n (count verts)
-        l (+ 1 (rand-int 3))
-        s (rand-int (- n (* l 2)))]
-    (reduce
-     (fn [acc i]
-       (let [v (+ (inc (peek acc)) (rand-int (/ (- n (peek acc)) 2)))]
-         (if (< v n)
-           (conj acc v)
-           (reduced acc))))
-     [s] (range l))))
-
-(defn sssp-test-linked
-  [n ne]
-  (let [g (graph)
-        spec {:collect collect-sssp :score-sig score-sig-sssp :score-coll score-coll-sssp}
-        verts (->> (range n)
-                   (map (fn [_] (add-vertex g spec)))
-                   (cons (add-vertex g (assoc spec :state 0)))
-                   vec)]
-    (dotimes [i ne]
-      (->> (make-strand verts)
-           (partition 2 1)
-           (map (fn [[a b]] (edge (verts a) (verts b) {:signal signal-sssp})))
-           (doall)))
-    g))
