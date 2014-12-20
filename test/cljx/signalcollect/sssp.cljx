@@ -1,7 +1,11 @@
 (ns signalcollect.sssp
+  #+cljs
+  (:require-macros
+   [cemerick.cljs.test :refer [is deftest with-test testing]])
   (:require
-   [clojure.test :refer :all]
-   [signalcollect.core :as sc]))
+   [signalcollect.core :as sc]
+   #+clj  [clojure.test :refer :all]
+   #+cljs [cemerick.cljs.test :as t]))
 
 (defn signal-sssp
   [e v] (if (:state v) (+ (:weight e) (:state v))))
@@ -59,11 +63,11 @@
 (deftest test-sssp-simple
   (let [g (sssp-test-graph '[[a b] [b c] [c d] [a e] [d f] [e f]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (sc/dump g)))
-    (sc/execute-scored-sync g 1000 0 0)
+    (sc/execute g {:iter 1000})
     (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (sc/dump g)))))
 
 (deftest test-sssp-weighted
   (let [g (sssp-test-graph '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (sc/dump g)))
-    (sc/execute-scored-sync g 1000 0 0)
+    (sc/execute g {:iter 1000})
     (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (sc/dump g)))))

@@ -1,7 +1,11 @@
 (ns signalcollect.rdfs
+  #+cljs
+  (:require-macros
+   [cemerick.cljs.test :refer [is deftest with-test testing]])
   (:require
    [signalcollect.core :as sc]
-   [clojure.test :refer :all]))
+   #+clj  [clojure.test :refer :all]
+   #+cljs [cemerick.cljs.test :as t]))
 
 (def types
   '[animal vertebrae mammal human dog fish shark])
@@ -30,7 +34,7 @@
     (is (= '[[0 #{animal}] [1 #{vertebrae}] [2 #{mammal}]
              [3 #{human}] [4 #{dog}] [5 #{fish}] [6 #{shark}]]
            (sc/dump g)))
-    (sc/execute-scored-sync g 1000 0 0)
+    (sc/execute g {:iter 1000})
     (is (= '[[0 #{animal}]
              [1 #{vertebrae animal}]
              [2 #{vertebrae mammal animal}]

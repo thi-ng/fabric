@@ -1,20 +1,28 @@
 (ns signalcollect.core)
 
+(defprotocol PComputeGraph
+  (add-vertex [_ vspec])
+  (add-edge [_ a b espec])
+  (vertex-for-id [_ id])
+  (execute [_ opts])
+  (vertices [_]))
+
 (defn trace-v
   [pre v score]
   #_(prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
 
 (defn dump
   [g]
-  (->> (:vertices @g)
+  (->> (vertices g)
        (vals)
        (map deref)
        (sort-by :id)
        (map (juxt :id :state))))
 
+#+clj
 (defn dot
   [g]
-  (->> (:vertices @g)
+  (->> (vertices g)
        (vals)
        (mapcat
         (fn [v]
@@ -44,16 +52,7 @@
 (defn signal-forward [e v] (:state v))
 
 (defn collect-union
-  [v sig] (update-in v [:state] into sig))
-
-(defn graph
-  []
-  (atom
-   {:vertices {}
-    :next-id 0}))
-
-(defn vertex-for-id
-  [g id] (get-in @g [:vertices id]))
+  [v sig] (update v :state into sig))
 
 (defrecord Vertex
     [id state prev
@@ -83,67 +82,84 @@
       (swap!
        src-vertex
        #(-> %
-            (update-in [:out] conj e)
+            (update :out conj e)
             (assoc :mod-sig true :mod-collect true))))
     e))
 
-(defn add-vertex
-  [g vspec]
-  (let [id (:next-id @g)
-        v  (vertex id vspec)]
-    (swap! g #(-> % (update-in [:vertices] assoc id v) (assoc :next-id (inc id))))
-    v))
-
 (defn do-signal
-  [v g]
-  (let [verts (:vertices @g)
-        v' @v]
+  [v vertices]
+  (let [v' @v]
     (swap! v assoc :prev (:state v') :mod-sig false)
     (doseq [{:keys [src] :as e} (:out v')]
       (swap!
-       (verts (:target e))
+       (vertices (:target e))
        (fn [t]
          (if-let [sigv ((:signal e) e v')]
-           (let [t (update-in t [:uncollected] conj sigv)]
+           (let [t (update t :uncollected conj sigv)]
              (if (:sig-map? e)
-               (update-in t [:signals] assoc (:src e) sigv)
+               (update t :signals assoc (:src e) sigv)
                t))
            t))))))
 
 (defn do-collect
-  [v]
+  [v _]
   (swap!
    v #(reduce
        (fn [v sig] ((:collect v) v sig))
        (assoc % :uncollected nil :mod-collect false)
        (:uncollected %))))
 
-(defn execute-scored-sync
-  [g n sig-thresh coll-thresh]
-  (loop [done false, i 0]
-    (when (and (not done) (< i n))
-      (let [done (reduce
-                  (fn [done v]
-                    (let [v' @v
-                          score ((:score-sig v') v')
-                          done (if (> score sig-thresh)
-                                 (do (do-signal v g) false)
-                                 done)]
-                      (trace-v :sig v score)
-                      done))
-                  true (vals (:vertices @g)))
-            ;;_ (prn :signal-done done)
-            done (reduce
-                  (fn [done v]
-                    (let [v' @v
-                          score ((:score-coll v') v')
-                          _ (trace-v :coll-1 v score)
-                          done (if (> score coll-thresh)
-                                 (do (do-collect v) false)
-                                 done)]
-                      (trace-v :coll-2 v score)
-                      done))
-                  done (vals (:vertices @g)))]
-        ;;(prn :collect-done done i (dump g))
-        ;;(prn "-----")
-        (recur done (inc i))))))
+(defn sc-phase
+  [phase-fn score thresh verts done]
+  (reduce
+   (fn [done v]
+     (let [v' @v
+           score ((score v') v')
+           ;;_ (trace-v :coll-1 v score)
+           done (if (> score thresh)
+                  (do (phase-fn v verts) false)
+                  done)]
+       ;;(trace-v :coll-2 v score)
+       done))
+   done (vals verts)))
+
+(deftype SyncGraph
+    [state]
+
+  #+clj  clojure.lang.IDeref
+  #+clj  (deref [_] (deref state))
+  #+cljs IDeref
+  #+cljs (-deref [_] (deref state))
+
+  PComputeGraph
+  (add-vertex
+    [_ vspec]
+    (let [id (:next-id @state)
+          v  (vertex id vspec)]
+      (swap! state #(-> % (update :vertices assoc id v) (assoc :next-id (inc id))))
+      v))
+  (add-edge
+    [_  a b espec]
+    (edge a b espec))
+  (vertices
+    [_] (:vertices @state))
+  (vertex-for-id
+    [_ id] ((@state :vertices) id))
+  (execute
+    [_ {:keys [iter sig-thresh coll-thresh]
+        :or {sig-thresh 0 coll-thresh 0}}]
+    (loop [done false, i 0]
+      (when (and (not done) (< i iter))
+        (let [verts (:vertices @state)
+              done (sc-phase do-signal :score-sig sig-thresh verts true)
+              done (sc-phase do-collect :score-coll coll-thresh verts done)]
+          (prn :collect-done done i (dump _))
+          ;;(prn "-----")
+          (recur done (inc i)))))))
+
+(defn graph
+  []
+  (SyncGraph.
+   (atom
+    {:vertices {}
+     :next-id 0})))
