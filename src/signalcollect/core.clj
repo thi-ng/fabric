@@ -2,7 +2,7 @@
 
 (defn trace-v
   [pre v score]
-  (prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
+  #_(prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
 
 (defn dump
   [g]
@@ -20,7 +20,7 @@
         (fn [v]
           (if (:state @v)
             (->> (:out @v)
-                 (map #(str (:id @v) "->" (:target %) ";\n"))
+                 (map #(str (:id @v) "->" (:target %) "[label=" (:weight %) "];\n"))
                  (cons
                   (format
                    "%d[label=\"%d (%d)\"];\n"
@@ -41,7 +41,7 @@
   [v]
   (+ (count (:uncollected v)) (if (:mod-since-collect v) 1 0)))
 
-(defn signal-forward [v] (:state @v))
+(defn signal-forward [e v] (:state v))
 
 (defn collect-union
   [v sig] (update-in v [:state] into sig))
@@ -77,8 +77,8 @@
     false)))
 
 (defn edge
-  [src-vertex target-vertex {:keys [signal sig-map]}]
-  (let [e (Edge. (:id @src-vertex) (:id @target-vertex) signal 1 sig-map)]
+  [src-vertex target-vertex {:keys [weight signal sig-map]}]
+  (let [e (Edge. (:id @src-vertex) (:id @target-vertex) signal (or weight 1) sig-map)]
     (when-not ((:out @src-vertex) e)
       (swap!
        src-vertex
@@ -96,13 +96,14 @@
 
 (defn do-signal
   [v g]
-  (let [verts (:vertices @g)]
-    (swap! v assoc :prev (:state @v) :mod-sig false)
-    (doseq [e (:out @v)]
+  (let [verts (:vertices @g)
+        v' @v]
+    (swap! v assoc :prev (:state v') :mod-sig false)
+    (doseq [{:keys [src] :as e} (:out v')]
       (swap!
        (verts (:target e))
        (fn [t]
-         (if-let [sigv ((:signal e) (verts (:src e)))]
+         (if-let [sigv ((:signal e) e v')]
            (let [t (update-in t [:uncollected] conj sigv)]
              (if (:sig-map? e)
                (update-in t [:signals] assoc (:src e) sigv)
@@ -128,7 +129,7 @@
                           done (if (> score sig-thresh)
                                  (do (do-signal v g) false)
                                  done)]
-                      ;;(trace-v :sig v score)
+                      (trace-v :sig v score)
                       done))
                   true (vals (:vertices @g)))
             ;;_ (prn :signal-done done)
@@ -136,11 +137,11 @@
                   (fn [done v]
                     (let [v' @v
                           score ((:score-coll v') v')
-                          ;;_ (trace-v :coll-1 v score)
+                          _ (trace-v :coll-1 v score)
                           done (if (> score coll-thresh)
                                  (do (do-collect v) false)
                                  done)]
-                      ;;(trace-v :coll-2 v score)
+                      (trace-v :coll-2 v score)
                       done))
                   done (vals (:vertices @g)))]
         ;;(prn :collect-done done i (dump g))
