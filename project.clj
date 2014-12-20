@@ -1,11 +1,11 @@
-(defproject signalcollect "0.1.0-SNAPSHOT"
-  :description  "Signal/Collect inspired graph computations"
-  :url          "https://github.com/postspectacular/sc-dev"
+(defproject thi.ng/fabric "0.1.0-SNAPSHOT"
+  :description  "Signal/Collect inspired compute graph"
+  :url          "http://thi.ng/fabric"
   :license      {:name "Apache Software License 2.0"
                  :url "http://www.apache.org/licenses/LICENSE-2.0"
                  :distribution :repo}
   :scm          {:name "git"
-                 :url "git@github.com:postspectacular/sc-dev.git"}
+                 :url "https://github.com/thi-ng/fabric"}
 
   :min-lein-vesion "2.4.0"
 
