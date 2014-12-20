@@ -16,18 +16,15 @@
   [{:keys [state prev]}]
   (if (and state (or (not prev) (not= state prev))) 1 0))
 
-(defn score-coll-sssp
-  [v] (count (:uncollected v)))
-
 ;; a -> b -> c ; b -> d
 (defn sssp-test-graph
   []
   (let [g (sc/graph)
-        spec {:collect collect-sssp :score-sig score-sig-sssp :score-coll score-coll-sssp}
+        spec {:collect collect-sssp :score-sig score-sig-sssp}
         a (sc/add-vertex g (assoc spec :state 0))
         [b c d e f] (repeatedly 5 #(sc/add-vertex g spec))]
     (doseq [[a b] [[a b] [b c] [c d] [a e] [d f] [e f]]]
-      (sc/edge a b {:signal signal-sssp :sig-map true}))
+      (sc/edge a b {:signal signal-sssp}))
     g))
 
 (defn make-strand
@@ -46,7 +43,7 @@
 (defn sssp-test-linked
   [n ne]
   (let [g (sc/graph)
-        spec {:collect collect-sssp :score-sig score-sig-sssp :score-coll score-coll-sssp}
+        spec {:collect collect-sssp :score-sig score-sig-sssp}
         verts (->> (range n)
                    (map (fn [_] (sc/add-vertex g spec)))
                    (cons (sc/add-vertex g (assoc spec :state 0)))
@@ -61,5 +58,5 @@
 (deftest test-sssp-simple
   (let [g (sssp-test-graph)]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (sc/dump g)))
-    (sc/execute-scored g 1000 0 0)
+    (sc/execute-scored-sync g 1000 0 0)
     (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (sc/dump g)))))

@@ -38,8 +38,13 @@
       1)))
 
 (defn default-score-collect
-  [{:keys [mod-since-collect]}]
-  (if mod-since-collect 1 0))
+  [v]
+  (+ (count (:uncollected v)) (if (:mod-since-collect v) 1 0)))
+
+(defn signal-forward [v] (:state @v))
+
+(defn collect-union
+  [v sig] (update-in v [:state] into sig))
 
 (defn graph
   []
@@ -112,7 +117,7 @@
        (assoc % :uncollected nil :mod-collect false)
        (:uncollected %))))
 
-(defn execute-scored
+(defn execute-scored-sync
   [g n sig-thresh coll-thresh]
   (loop [done false, i 0]
     (when (and (not done) (< i n))
