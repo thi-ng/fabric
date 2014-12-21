@@ -1,4 +1,6 @@
-(ns thi.ng.fabric.core)
+(ns thi.ng.fabric.core
+  (:require
+   [thi.ng.fabric.utils :as fu]))
 
 (defprotocol PComputeGraph
   (add-vertex [_ vspec])
@@ -7,35 +9,14 @@
   (execute [_ opts])
   (vertices [_]))
 
-(defn trace-v
-  [pre v score]
-  #_(prn pre (:id @v) score (dissoc @v :out :collect :score-sig :score-coll)))
+(defrecord Vertex
+    [id state prev
+     out uncollected
+     collect score-sig score-coll
+     mod-sig mod-collect])
 
-(defn dump
-  [g]
-  (->> (vertices g)
-       (vals)
-       (map deref)
-       (sort-by :id)
-       (map (juxt :id :state))))
-
-#+clj
-(defn dot
-  [g]
-  (->> (vertices g)
-       (vals)
-       (mapcat
-        (fn [v]
-          (if (:state @v)
-            (->> (:out @v)
-                 (map #(str (:id @v) "->" (:target %) "[label=" (:weight %) "];\n"))
-                 (cons
-                  (format
-                   "%d[label=\"%d (%d)\"];\n"
-                   (:id @v) (:id @v) (int (:state @v))))))))
-       (apply str)
-       (format "digraph g {\nranksep=2;\noverlap=scale;\n%s}")
-       (spit "sc.dot")))
+(defrecord Edge
+    [src target signal weight sig-map?])
 
 (defn default-score-signal
   [{:keys [state prev mod-since-sig]}]
@@ -54,17 +35,8 @@
 (defn collect-union
   [v sig] (update v :state into sig))
 
-(defrecord Vertex
-    [id state prev
-     out uncollected
-     collect score-sig score-coll
-     mod-sig mod-collect])
-
-(defrecord Edge
-    [src target signal weight sig-map?])
-
 (defn vertex
-  [^long id {:keys [state collect score-sig score-coll]}]
+  [id {:keys [state collect score-sig score-coll]}]
   (atom
    (Vertex.
     id state nil
@@ -115,11 +87,11 @@
    (fn [done v]
      (let [v' @v
            score ((score v') v')
-           ;;_ (trace-v :coll-1 v score)
+           ;;_ (fu/trace-v :coll-1 v score)
            done (if (> score thresh)
                   (do (phase-fn v verts) false)
                   done)]
-       ;;(trace-v :coll-2 v score)
+       ;;(fu/trace-v :coll-2 v score)
        done))
    done (vals verts)))
 
@@ -149,13 +121,15 @@
     [_ {:keys [iter sig-thresh coll-thresh]
         :or {sig-thresh 0 coll-thresh 0}}]
     (loop [done false, i 0]
-      (when (and (not done) (< i iter))
-        (let [verts (:vertices @state)
-              done (sc-phase do-signal :score-sig sig-thresh verts true)
-              done (sc-phase do-collect :score-coll coll-thresh verts done)]
-          (prn :collect-done done i (dump _))
-          ;;(prn "-----")
-          (recur done (inc i)))))))
+      (if done
+        {:converged true :iter i}
+        (if (< i iter)
+          (let [verts (:vertices @state)
+                done (sc-phase do-signal :score-sig sig-thresh verts true)
+                done (sc-phase do-collect :score-coll coll-thresh verts done)]
+            ;;(prn :collect-done done i (fu/dump _))
+            (recur done (inc i)))
+          {:converged false :iter i})))))
 
 (defn graph
   []
