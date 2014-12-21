@@ -1,9 +1,9 @@
-(ns signalcollect.rdfs
+(ns thi.ng.fabric.rdfs
   #+cljs
   (:require-macros
    [cemerick.cljs.test :refer [is deftest with-test testing]])
   (:require
-   [signalcollect.core :as sc]
+   [thi.ng.fabric.core :as f]
    #+clj  [clojure.test :refer :all]
    #+cljs [cemerick.cljs.test :as t]))
 
@@ -20,21 +20,21 @@
 
 (defn rdfs-test-graph
   [types hierarchy]
-  (let [g (sc/graph)
-        spec {:collect sc/collect-union}
+  (let [g (f/graph)
+        spec {:collect f/collect-union}
         verts (reduce
-               (fn [acc v] (assoc acc v (sc/add-vertex g (assoc spec :state #{v}))))
+               (fn [acc v] (assoc acc v (f/add-vertex g (assoc spec :state #{v}))))
                {} types)]
     (doseq [[a b] hierarchy]
-      (sc/edge (verts a) (verts b) {:signal sc/signal-forward}))
+      (f/edge (verts a) (verts b) {:signal f/signal-forward}))
     g))
 
 (deftest test-rdfs-simple
   (let [g (rdfs-test-graph types hierarchy)]
     (is (= '[[0 #{animal}] [1 #{vertebrae}] [2 #{mammal}]
              [3 #{human}] [4 #{dog}] [5 #{fish}] [6 #{shark}]]
-           (sc/dump g)))
-    (sc/execute g {:iter 1000})
+           (f/dump g)))
+    (f/execute g {:iter 1000})
     (is (= '[[0 #{animal}]
              [1 #{vertebrae animal}]
              [2 #{vertebrae mammal animal}]
@@ -42,4 +42,4 @@
              [4 #{vertebrae dog mammal animal}]
              [5 #{vertebrae fish animal}]
              [6 #{vertebrae shark fish animal}]]
-           (sc/dump g)))))
+           (f/dump g)))))

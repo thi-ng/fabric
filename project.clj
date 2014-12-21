@@ -42,8 +42,8 @@
                            :source-paths ["target/classes" "target/test-classes"]
                            :compiler {:optimizations :whitespace
                                       :pretty-print true
-                                      :output-to "target/signalcollect-0.1.0-SNAPSHOT.js"}}]
-                 :test-commands {"unit-tests" ["phantomjs" :runner "target/signalcollect-0.1.0-SNAPSHOT.js"]}}
+                                      :output-to "target/fabric-0.1.0-SNAPSHOT.js"}}]
+                 :test-commands {"unit-tests" ["phantomjs" :runner "target/fabric-0.1.0-SNAPSHOT.js"]}}
 
   :pom-addition [:developers [:developer
                               [:name "Karsten Schmidt"]

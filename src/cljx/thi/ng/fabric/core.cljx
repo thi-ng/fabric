@@ -1,4 +1,4 @@
-(ns signalcollect.core)
+(ns thi.ng.fabric.core)
 
 (defprotocol PComputeGraph
   (add-vertex [_ vspec])
