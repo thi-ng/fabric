@@ -27,5 +27,10 @@
                    "%d[label=\"%d (%d)\"];\n"
                    (:id @v) (:id @v) (int (:state @v))))))))
        (apply str)
-       (format "digraph g {\nranksep=2;\noverlap=scale;\n%s}")
+       (format "digraph g {
+node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];
+edge[fontname=Inconsolata,fontsize=9];
+ranksep=1;
+overlap=scale;
+%s}")
        (spit "sc.dot")))
