@@ -125,7 +125,7 @@
     [_ id] ((@state :vertices) id))
   (execute
     [_ {:keys [iter sig-thresh coll-thresh]
-        :or {sig-thresh 0 coll-thresh 0}}]
+        :or {iter 1e6 sig-thresh 0 coll-thresh 0}}]
     (loop [done false, i 0]
       (if done
         {:converged true :iter i}
@@ -176,28 +176,32 @@
     [_ id] ((@state :vertices) id))
   (execute
     [_ {:keys [ops sig-thresh coll-thresh select]
-        :or {sig-thresh 0 coll-thresh 0}}]
+        :or {ops 1e6 sig-thresh 0 coll-thresh 0}}]
     (let [active (filter #(active-vertex? % sig-thresh coll-thresh))]
-      (loop [i 0]
+      (loop [i 0, fverts (into #{} active (vals (:vertices @state)))]
         (if (< i ops)
-          (let [verts (:vertices @state)
-                fverts (into [] active (vec (vals verts)))]
-            (if (seq fverts)
-              (let [i (r/fold
-                       (fn
-                         ([] i)
-                         ([i v]
-                            (let [v' @v]
-                              (if (> ((:score-coll v') v') coll-thresh)
-                                (do
-                                  (do-collect v nil)
-                                  (inc i))
-                                (do
-                                  (do-signal v verts)
-                                  (inc i))))))
-                       fverts)]
-                (recur i))
-              {:converged true :ops i}))
+          (if (seq fverts)
+            (let [verts (:vertices @state)
+                  [i fverts]
+                  (r/fold
+                   (fn
+                     ([] [i fverts])
+                     ([[i fverts] v]
+                        (let [v' @v]
+                          (if (> ((:score-coll v') v') coll-thresh)
+                            (do
+                              (do-collect v nil)
+                              (if (> ((:score-sig @v) @v) sig-thresh)
+                                [(inc i) fverts]
+                                [(inc i) (disj fverts v)]))
+                            (do
+                              (do-signal v verts)
+                              [(inc i)
+                               (into (disj fverts v)
+                                     (map (comp verts :target)) (:out @v))])))))
+                   fverts)]
+              (recur i fverts))
+            {:converged true :ops i})
           {:converged false :ops i})))))
 
 (defn async-graph
