@@ -23,9 +23,8 @@
 
 ;; a -> b -> c ; b -> d
 (defn sssp-test-graph
-  [edges]
-  (let [g (f/graph)
-        vspec {:collect collect-sssp :score-sig score-sig-sssp}
+  [g edges]
+  (let [vspec {:collect collect-sssp :score-sig score-sig-sssp}
         espec {:signal signal-sssp :sig-map true}
         verts (reduce-kv
                (fn [acc k v] (assoc acc k (f/add-vertex g (assoc vspec :state v))))
@@ -48,9 +47,8 @@
      [s] (range l))))
 
 (defn sssp-test-linked
-  [n ne]
-  (let [g (f/graph)
-        vspec {:collect collect-sssp :score-sig score-sig-sssp}
+  [g n ne]
+  (let [vspec {:collect collect-sssp :score-sig score-sig-sssp}
         espec {:signal signal-sssp}
         verts (->> (range n)
                    (map (fn [_] (f/add-vertex g vspec)))
@@ -64,13 +62,13 @@
     g))
 
 (deftest test-sssp-simple
-  (let [g (sssp-test-graph '[[a b] [b c] [c d] [a e] [d f] [e f]])]
+  (let [g (sssp-test-graph (f/graph) '[[a b] [b c] [c d] [a e] [d f] [e f]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/dump g)))
     (is (:converged (f/execute g {:iter 1000})))
     (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (fu/dump g)))))
 
 (deftest test-sssp-weighted
-  (let [g (sssp-test-graph '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])]
+  (let [g (sssp-test-graph (f/graph) '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/dump g)))
     (is (:converged (f/execute g {:iter 1000})))
     (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (fu/dump g)))))

@@ -1,6 +1,8 @@
 (ns thi.ng.fabric.core
   (:require
-   [thi.ng.fabric.utils :as fu]))
+   [thi.ng.fabric.utils :as fu]
+   ;;#+clj [clojure.core.async :as a :refer [go go-loop chan close! <! >! >!!]]
+   [clojure.core.reducers :as r]))
 
 (defprotocol PComputeGraph
   (add-vertex [_ vspec])
@@ -83,17 +85,19 @@
 
 (defn sc-phase
   [phase-fn score thresh verts done]
-  (reduce
-   (fn [done v]
-     (let [v' @v
-           score ((score v') v')
-           ;;_ (fu/trace-v :coll-1 v score)
-           done (if (> score thresh)
-                  (do (phase-fn v verts) false)
-                  done)]
-       ;;(fu/trace-v :coll-2 v score)
-       done))
-   done (vals verts)))
+  (r/fold
+   (fn
+     ([] done)
+     ([done v]
+        (let [v' @v
+              score ((score v') v')
+              ;;_ (fu/trace-v :coll-1 v score)
+              done (if (> score thresh)
+                     (do (phase-fn v verts) false)
+                     done)]
+          ;;(fu/trace-v :coll-2 v score)
+          done)))
+   (vals verts)))
 
 (deftype SyncGraph
     [state]
@@ -112,7 +116,9 @@
       v))
   (add-edge
     [_  a b espec]
-    (edge a b espec))
+    (let [a (if (number? a) (vertex-for-id _ a))
+          b (if (number? b) (vertex-for-id _ b))]
+      (edge a b espec)))
   (vertices
     [_] (:vertices @state))
   (vertex-for-id
@@ -134,6 +140,69 @@
 (defn graph
   []
   (SyncGraph.
+   (atom
+    {:vertices {}
+     :next-id 0})))
+
+(defn active-vertex?
+  [v sig-thresh coll-thresh]
+  (let [v @v]
+    (or (> ((:score-sig v) v) sig-thresh)
+        (> ((:score-coll v) v) coll-thresh))))
+
+(deftype ASyncGraph
+    [state]
+
+  #+clj  clojure.lang.IDeref
+  #+clj  (deref [_] (deref state))
+  #+cljs IDeref
+  #+cljs (-deref [_] (deref state))
+
+  PComputeGraph
+  (add-vertex
+    [_ vspec]
+    (let [id (:next-id @state)
+          v  (vertex id vspec)]
+      (swap! state #(-> % (update :vertices assoc id v) (assoc :next-id (inc id))))
+      v))
+  (add-edge
+    [_  a b espec]
+    (let [a (if (number? a) (vertex-for-id _ a))
+          b (if (number? b) (vertex-for-id _ b))]
+      (edge a b espec)))
+  (vertices
+    [_] (:vertices @state))
+  (vertex-for-id
+    [_ id] ((@state :vertices) id))
+  (execute
+    [_ {:keys [ops sig-thresh coll-thresh select]
+        :or {sig-thresh 0 coll-thresh 0}}]
+    (let [active (filter #(active-vertex? % sig-thresh coll-thresh))]
+      (loop [i 0]
+        (if (< i ops)
+          (let [verts (:vertices @state)
+                fverts (into [] active (vec (vals verts)))]
+            (if (seq fverts)
+              (let [i (r/fold
+                       (fn
+                         ([] i)
+                         ([i v]
+                            (let [v' @v]
+                              (if (> ((:score-coll v') v') coll-thresh)
+                                (do
+                                  (do-collect v nil)
+                                  (inc i))
+                                (do
+                                  (do-signal v verts)
+                                  (inc i))))))
+                       fverts)]
+                (recur i))
+              {:converged true :ops i}))
+          {:converged false :ops i})))))
+
+(defn async-graph
+  []
+  (ASyncGraph.
    (atom
     {:vertices {}
      :next-id 0})))
