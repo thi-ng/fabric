@@ -1,7 +1,7 @@
 (ns thi.ng.fabric.core
   (:require
    [thi.ng.fabric.utils :as fu]
-   ;;#+clj [clojure.core.async :as a :refer [go go-loop chan close! <! >! >!!]]
+   [clojure.core.async :as a :refer [go go-loop chan close! <! >! >!!]]
    [clojure.core.reducers :as r]))
 
 (defprotocol PComputeGraph
@@ -89,23 +89,25 @@
    (fn
      ([] done)
      ([done v]
-        (let [v' @v
-              score ((score v') v')
-              ;;_ (fu/trace-v :coll-1 v score)
-              done (if (> score thresh)
-                     (do (phase-fn v verts) false)
-                     done)]
-          ;;(fu/trace-v :coll-2 v score)
-          done)))
+      (let [v' @v
+            score ((score v') v')
+            ;;_ (fu/trace-v :coll-1 v score)
+            done (if (> score thresh)
+                   (do (phase-fn v verts) false)
+                   done)]
+        ;;(fu/trace-v :coll-2 v score)
+        done)))
    (vals verts)))
 
 (deftype SyncGraph
     [state]
 
-  #+clj  clojure.lang.IDeref
-  #+clj  (deref [_] (deref state))
-  #+cljs IDeref
-  #+cljs (-deref [_] (deref state))
+  #?@(:clj
+       [clojure.lang.IDeref
+        (deref [_] (deref state))]
+       :cljs
+       [IDeref
+        (-deref [_] (deref state))])
 
   PComputeGraph
   (add-vertex
@@ -153,10 +155,12 @@
 (deftype ASyncGraph
     [state]
 
-  #+clj  clojure.lang.IDeref
-  #+clj  (deref [_] (deref state))
-  #+cljs IDeref
-  #+cljs (-deref [_] (deref state))
+  #?@(:clj
+       [clojure.lang.IDeref
+        (deref [_] (deref state))]
+       :cljs
+       [IDeref
+        (-deref [_] (deref state))])
 
   PComputeGraph
   (add-vertex
@@ -187,18 +191,18 @@
                    (fn
                      ([] [i fverts])
                      ([[i fverts] v]
-                        (let [v' @v]
-                          (if (> ((:score-coll v') v') coll-thresh)
-                            (do
-                              (do-collect v nil)
-                              (if (> ((:score-sig @v) @v) sig-thresh)
-                                [(inc i) fverts]
-                                [(inc i) (disj fverts v)]))
-                            (do
-                              (do-signal v verts)
-                              [(inc i)
-                               (into (disj fverts v)
-                                     (map (comp verts :target)) (:out @v))])))))
+                      (let [v' @v]
+                        (if (> ((:score-coll v') v') coll-thresh)
+                          (do
+                            (do-collect v nil)
+                            (if (> ((:score-sig @v) @v) sig-thresh)
+                              [(inc i) fverts]
+                              [(inc i) (disj fverts v)]))
+                          (do
+                            (do-signal v verts)
+                            [(inc i)
+                             (into (disj fverts v)
+                                   (map (comp verts :target)) (:out @v))])))))
                    fverts)]
               (recur i fverts))
             {:converged true :ops i})

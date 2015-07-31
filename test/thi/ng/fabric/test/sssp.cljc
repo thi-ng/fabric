@@ -1,12 +1,11 @@
-(ns thi.ng.fabric.sssp
-  #+cljs
-  (:require-macros
-   [cemerick.cljs.test :refer [is deftest with-test testing]])
+(ns thi.ng.fabric.test.sssp
   (:require
    [thi.ng.fabric.core :as f]
    [thi.ng.fabric.utils :as fu]
-   #+clj  [clojure.test :refer :all]
-   #+cljs [cemerick.cljs.test :as t]))
+   #?(:clj
+      [clojure.test :refer :all]
+      :cljs
+      [cemerick.cljs.test :refer-macros [is deftest with-test testing]])))
 
 (defn signal-sssp
   [e v] (if (:state v) (+ (:weight e) (:state v))))
