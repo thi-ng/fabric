@@ -107,7 +107,7 @@
 (def default-context-opts
   {:collect-thresh 0
    :signal-thresh  0
-   :timeout        100
+   :timeout        5
    :max-ops        1e6})
 
 (defn vertex
@@ -161,11 +161,13 @@
     vertex))
 
 (defn execution-result
-  [p t0 colls sigs]
-  (deliver
-   p {:collections colls
-      :signals     sigs
-      :time        (* (- (System/nanoTime) t0) 1e-6)}))
+  [type p colls sigs t0 & [opts]]
+  (->> {:collections colls
+        :signals     sigs
+        :type        type
+        :time        (* (- (System/nanoTime) t0) 1e-6)}
+       (merge opts)
+       (deliver p)))
 
 (defn async-context
   [opts]
@@ -186,7 +188,7 @@
             (loop [verts (vertices g)]
               (when-let [v (first verts)]
                 (when (should-collect? v c-thresh)
-                  ((-> v :state deref ::collect-fn) vertex))
+                  (collect! v))
                 (when (should-signal? v s-thresh)
                   (signal! v))
                 (recur (next verts))))
@@ -195,15 +197,23 @@
                 (let [t (timeout max-t)
                       [[evt v ex] port] (alts! [ctrl t])]
                   (if (= port t)
-                    (do (info "graph converged, done...")
-                        (execution-result res t0 colls sigs))
+                    (execution-result :converged res colls sigs t0)
                     (case evt
                       :collect (recur (inc colls) sigs)
                       :signal  (recur colls (inc sigs))
-                      :error   (warn ex "@ vertex" v)
-                      (do (info "wrong event" evt v)))))
-                (do (info "reached max ops: " max-ops)
-                    (execution-result res t0 colls sigs)))))
+                      :error   (do (warn ex "@ vertex" v)
+                                   (execution-result
+                                    :error res colls sigs t0
+                                    {:reason           :error
+                                     :reason-exception ex
+                                     :reason-vertex    v}))
+                      (do (info "wrong event" evt v)
+                          (execution-result
+                           :interrupted res colls sigs t0
+                           {:reason        :unknown
+                            :reason-event  evt
+                            :reason-vertex v})))))
+                (execution-result :terminated res colls sigs t0))))
           res)))))
 
 (def g (compute-graph))
