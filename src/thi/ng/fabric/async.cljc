@@ -3,6 +3,8 @@
    [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
    [taoensso.timbre :refer [debug warn error]]))
 
+(taoensso.timbre/set-level! :warn)
+
 (defprotocol IVertex
   (connect-to! [_ v sig-fn edge-opts])
   (disconnect-vertex! [_ v])
@@ -21,7 +23,8 @@
 
 (defprotocol IGraphExecutor
   (execute! [_])
-  (stop! [_]))
+  (stop! [_])
+  (control-channel [_]))
 
 (defn simple-collect
   [collect-fn]
@@ -56,7 +59,10 @@
     [_] (::val @state))
   IVertex
   (collect!
-    [_] ((::collect-fn @state) _))
+    [_]
+    ((::collect-fn @state) _)
+    (swap! state assoc ::uncollected [])
+    _)
   (score-collect
     [_] ((::score-collect-fn @state) _))
   (connect-to!
@@ -76,7 +82,7 @@
       (warn (str id " already closed")))
     _)
   (input-channel
-    [_] (or @in (reset! in (chan))))
+    [_] (or @in (reset! in ((::input-channel-fn @state)))))
   (score-signal
     [_] ((::score-signal-fn @state) _))
   (signal!
@@ -112,7 +118,8 @@
    ::signal-map       {}
    ::score-collect-fn default-score-collect
    ::score-signal-fn  default-score-signal
-   ::collect-fn       default-collect})
+   ::collect-fn       default-collect
+   ::input-channel-fn chan})
 
 (def default-context-opts
   {:collect-thresh 0
@@ -153,8 +160,9 @@
 
 (defn eager-vertex-processor
   [{:keys [id state] :as vertex} ctx]
-  (let [{:keys [collect-thresh signal-thresh ctrl]} ctx
-        in (input-channel vertex)]
+  (let [{:keys [collect-thresh signal-thresh]} @ctx
+        ctrl (control-channel ctx)
+        in   (input-channel vertex)]
     (go-loop []
       (let [[src-id sig] (<! in)]
         (if sig
@@ -163,7 +171,6 @@
               (when (should-collect? vertex collect-thresh)
                 (when (>! ctrl [:collect id])
                   (collect! vertex)
-                  (swap! state assoc ::uncollected [])
                   (when (should-signal? vertex signal-thresh)
                     (>! ctrl [:signal id])
                     (signal! vertex))))
@@ -187,8 +194,9 @@
 
 (defn async-context
   [opts]
-  (let [ctrl      (chan)
-        ctx       (merge default-context-opts {:ctrl ctrl} opts)
+  (let [ctx       (merge default-context-opts opts)
+        ctx       (update ctx :channel #(or % (chan)))
+        ctrl      (:channel ctx)
         processor (:processor ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
@@ -203,13 +211,15 @@
         [_]
         (stop-execution ctrl (vertices (:graph ctx)))
         result)
+      (control-channel
+        [_] ctrl)
       (execute! [_]
         (if-not (realized? result)
           (let [t0 (System/nanoTime)]
             (go
               (loop [verts (vertices (:graph ctx))]
                 (when-let [v (first verts)]
-                  (processor v ctx)
+                  (processor v _)
                   (when (should-collect? v c-thresh)
                     (collect! v))
                   (when (should-signal? v s-thresh)
@@ -268,7 +278,11 @@ overlap=scale;
           (spit path)))
 
 (def g (compute-graph))
-(def ctx (async-context {:graph g :processor eager-vertex-processor}))
+(def ctx
+  (async-context
+   {:graph     g
+    :channel   (chan 1024)
+    :processor eager-vertex-processor}))
 
 (defn signal-sssp
   [state dist] (if-let [v (::val state)] (+ dist v)))
@@ -325,7 +339,11 @@ overlap=scale;
 
 (comment
   (def g (compute-graph))
-  (def ctx (async-context {:graph g :processor eager-vertex-processor}))
+  (def ctx
+    (async-context
+     {:graph     g
+      :processor eager-vertex-processor
+      :channel   (chan 4096)}))
 
   (def types
     '[animal vertebrae mammal human dog fish shark plant tree oak fir])
