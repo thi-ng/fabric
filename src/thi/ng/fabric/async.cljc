@@ -24,7 +24,7 @@
 (defprotocol IGraphExecutor
   (execute! [_])
   (stop! [_])
-  (control-channel [_]))
+  (notify [_ evt]))
 
 (defn simple-collect
   [collect-fn]
@@ -124,6 +124,7 @@
 (def default-context-opts
   {:collect-thresh 0
    :signal-thresh  0
+   :bus-size       16
    :timeout        100
    :max-ops        1e6})
 
@@ -151,7 +152,7 @@
                  (assoc  :curr-vertex v)))))
         :curr-vertex))
   (vertex-for-id
-    [_ id] (-> @state :vertices id))
+    [_ id] (get-in @state [:vertices id]))
   (vertices
     [_] (-> @state :vertices vals)))
 
@@ -161,7 +162,6 @@
 (defn eager-vertex-processor
   [{:keys [id state] :as vertex} ctx]
   (let [{:keys [collect-thresh signal-thresh]} @ctx
-        ctrl (control-channel ctx)
         in   (input-channel vertex)]
     (go-loop []
       (let [[src-id sig] (<! in)]
@@ -169,11 +169,11 @@
           (do (debug (format "%d receive from %d: %s" id src-id (pr-str sig)))
               (receive-signal vertex src-id sig)
               (when (should-collect? vertex collect-thresh)
-                (when (>! ctrl [:collect id])
-                  (collect! vertex)
-                  (when (should-signal? vertex signal-thresh)
-                    (>! ctrl [:signal id])
-                    (signal! vertex))))
+                (notify ctx [:collect id])
+                (collect! vertex)
+                (when (should-signal? vertex signal-thresh)
+                  (notify ctx [:signal id])
+                  (signal! vertex)))
               (recur))
           (debug (str id " stopped")))))
     vertex))
@@ -188,15 +188,15 @@
        (deliver p)))
 
 (defn stop-execution
-  [ctrl vertices]
-  (close! ctrl)
+  [bus vertices]
+  (run! close! bus)
   (run! close-input! vertices))
 
 (defn async-context
   [opts]
   (let [ctx       (merge default-context-opts opts)
-        ctx       (update ctx :channel #(or % (chan)))
-        ctrl      (:channel ctx)
+        bus       (vec (repeatedly (:bus-size ctx) chan))
+        ctx       (assoc ctx :bus bus)
         processor (:processor ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
@@ -209,10 +209,10 @@
       IGraphExecutor
       (stop!
         [_]
-        (stop-execution ctrl (vertices (:graph ctx)))
+        (stop-execution bus (vertices (:graph ctx)))
         result)
-      (control-channel
-        [_] ctrl)
+      (notify [_ evt]
+        (go (>! (rand-nth bus) evt)))
       (execute! [_]
         (if-not (realized? result)
           (let [t0 (System/nanoTime)]
@@ -228,7 +228,7 @@
               (loop [colls 0 sigs 0]
                 (if (<= (+ colls sigs) max-ops)
                   (let [t (timeout max-t)
-                        [[evt v ex] port] (alts! [ctrl t])]
+                        [[evt v ex] port] (alts! (conj bus t))]
                     (if (= port t)
                       (do (stop! _)
                           (execution-result :converged result colls sigs t0))
@@ -254,34 +254,34 @@
           (throw (IllegalStateException. "Context already executed once")))))))
 
 (defn dot
-     [path g flt]
-     (->> (vertices g)
-          (filter flt)
-          (mapcat
-           (fn [v]
-             (if-let [outs @(:outs v)]
-               (->> outs
-                    (map
-                     (fn [[k [_ opts]]]
-                       (str (:id v) "->" (:id k) "[label=" (pr-str opts) "];\n")))
-                    (cons
-                     (format
-                      "%d[label=\"%d (%s)\"];\n"
-                      (:id v) (:id v) (pr-str @v)))))))
-          (apply str)
-          (format "digraph g {
+  [path g flt]
+  (->> (vertices g)
+       (filter flt)
+       (mapcat
+        (fn [v]
+          (if-let [outs @(:outs v)]
+            (->> outs
+                 (map
+                  (fn [[k [_ opts]]]
+                    (str (:id v) "->" (:id k) "[label=" (pr-str opts) "];\n")))
+                 (cons
+                  (format
+                   "%d[label=\"%d (%s)\"];\n"
+                   (:id v) (:id v) (pr-str @v)))))))
+       (apply str)
+       (format "digraph g {
 node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];
 edge[fontname=Inconsolata,fontsize=9];
 ranksep=1;
 overlap=scale;
 %s}")
-          (spit path)))
+       (spit path)))
 
 (def g (compute-graph))
 (def ctx
   (async-context
    {:graph     g
-    :channel   (chan 1024)
+    :bus-size  64
     :processor eager-vertex-processor}))
 
 (defn signal-sssp
@@ -291,24 +291,6 @@ overlap=scale;
   (simple-collect
    (fn [val uncollected]
      (if val (reduce min val uncollected) (reduce min uncollected)))))
-
-(comment
-  (def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
-  (def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-  (def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-  (def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-
-  (connect-to! a b signal-sssp 1)
-  (connect-to! a c signal-sssp 3)
-  (connect-to! b c signal-sssp 1)
-  (connect-to! c d signal-sssp 1)
-
-  (prn @(execute! ctx))
-
-  (prn @a)
-  (prn @b)
-  (prn @c)
-  (prn @d))
 
 (defn make-strand
   [verts e-length]
@@ -338,12 +320,29 @@ overlap=scale;
     nil))
 
 (comment
+  (def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
+  (def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+  (def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+  (def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+
+  (connect-to! a b signal-sssp 1)
+  (connect-to! a c signal-sssp 3)
+  (connect-to! b c signal-sssp 1)
+  (connect-to! c d signal-sssp 1)
+
+  (prn @(execute! ctx))
+
+  (prn @a)
+  (prn @b)
+  (prn @c)
+  (prn @d))
+
+(comment
   (def g (compute-graph))
   (def ctx
     (async-context
      {:graph     g
-      :processor eager-vertex-processor
-      :channel   (chan 4096)}))
+      :processor eager-vertex-processor}))
 
   (def types
     '[animal vertebrae mammal human dog fish shark plant tree oak fir])
@@ -375,4 +374,3 @@ overlap=scale;
       (doseq [[a b] hierarchy]
         (connect-to! (verts a) (verts b) signal-forward nil))
       verts)))
-
