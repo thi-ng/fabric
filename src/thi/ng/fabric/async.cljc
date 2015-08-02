@@ -205,7 +205,7 @@
         result)
       (execute! [_]
         (if-not (realized? result)
-          (let [t0  (System/nanoTime)]
+          (let [t0 (System/nanoTime)]
             (go
               (loop [verts (vertices (:graph ctx))]
                 (when-let [v (first verts)]
@@ -243,6 +243,30 @@
             result)
           (throw (IllegalStateException. "Context already executed once")))))))
 
+(defn dot
+     [path g flt]
+     (->> (vertices g)
+          (filter flt)
+          (mapcat
+           (fn [v]
+             (if-let [outs @(:outs v)]
+               (->> outs
+                    (map
+                     (fn [[k [_ opts]]]
+                       (str (:id v) "->" (:id k) "[label=" (pr-str opts) "];\n")))
+                    (cons
+                     (format
+                      "%d[label=\"%d (%s)\"];\n"
+                      (:id v) (:id v) (pr-str @v)))))))
+          (apply str)
+          (format "digraph g {
+node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];
+edge[fontname=Inconsolata,fontsize=9];
+ranksep=1;
+overlap=scale;
+%s}")
+          (spit path)))
+
 (def g (compute-graph))
 (def ctx (async-context {:graph g :processor eager-vertex-processor}))
 
@@ -254,27 +278,83 @@
    (fn [val uncollected]
      (if val (reduce min val uncollected) (reduce min uncollected)))))
 
-(def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
-(def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-(def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-(def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+(comment
+  (def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
+  (def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+  (def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+  (def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
 
-(connect-to! a b signal-sssp 1)
-(connect-to! a c signal-sssp 3)
-(connect-to! b c signal-sssp 1)
-(connect-to! c d signal-sssp 1)
+  (connect-to! a b signal-sssp 1)
+  (connect-to! a c signal-sssp 3)
+  (connect-to! b c signal-sssp 1)
+  (connect-to! c d signal-sssp 1)
 
-;;(prn @(execute! ctx))
+  (prn @(execute! ctx))
 
-(prn @a)
-(prn @b)
-(prn @c)
-(prn @d)
+  (prn @a)
+  (prn @b)
+  (prn @c)
+  (prn @d))
 
+(defn make-strand
+  [verts e-length]
+  (let [n (count verts)
+        l (+ 1 (rand-int 3))
+        s (rand-int (- n (* l 2)))]
+    (reduce
+     (fn [acc i]
+       (let [v (+ (inc (peek acc)) (rand-int (/ (- n (peek acc)) 2)))]
+         (if (< v n)
+           (conj acc v)
+           (reduced acc))))
+     [s] (range l))))
+
+(defn sssp-test-linked
+  [g num-verts num-edges e-length]
+  (let [vspec {::collect-fn collect-sssp}
+        verts (->> (range num-verts)
+                   (map (fn [_] (add-vertex! g vspec)))
+                   (cons (add-vertex! g (assoc vspec ::val 0)))
+                   vec)]
+    (dotimes [i num-edges]
+      (->> (make-strand verts e-length)
+           (partition 2 1)
+           (map (fn [[a b]] (connect-to! (verts a) (verts b) signal-sssp 1)))
+           (doall)))
+    nil))
 
 (comment
-  (close-input! a)
-  (close-input! b)
-  (close-input! c)
-  (close-input! d)
-  )
+  (def g (compute-graph))
+  (def ctx (async-context {:graph g :processor eager-vertex-processor}))
+
+  (def types
+    '[animal vertebrae mammal human dog fish shark plant tree oak fir])
+
+  (def hierarchy
+    '[[animal vertebrae]
+      [vertebrae mammal]
+      [vertebrae fish]
+      [fish shark]
+      [mammal human]
+      [mammal dog]
+      [plant tree]
+      [tree oak]
+      [tree fir]])
+
+  (def rdfs-collect
+    (simple-collect
+     (fn [val incoming]
+       (reduce into val incoming))))
+
+  (def verts
+    (let [vspec {::collect-fn rdfs-collect
+                 ;;::score-collect-fn (constantly 1)
+                 ;;::score-signal-fn (constantly 1)
+                 }
+          verts (reduce
+                 (fn [acc v] (assoc acc v (add-vertex! g (assoc vspec ::val #{v}))))
+                 {} types)]
+      (doseq [[a b] hierarchy]
+        (connect-to! (verts a) (verts b) signal-forward nil))
+      verts)))
+
