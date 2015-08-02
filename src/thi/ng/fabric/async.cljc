@@ -1,12 +1,12 @@
 (ns thi.ng.fabric.async
   (:require
    [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
-   [taoensso.timbre :refer [info warn error]]))
+   [taoensso.timbre :refer [debug warn error]]))
 
 (defprotocol IVertex
   (connect-to! [_ v sig-fn edge-opts])
-  (disconnect-from! [_ v])
-  (disconnect! [_])
+  (disconnect-vertex! [_ v])
+  (close-input! [_])
   (input-channel [_])
   (collect! [_])
   (score-collect [_])
@@ -20,11 +20,15 @@
   (vertices [_]))
 
 (defprotocol IGraphExecutor
-  (execute! [_ vertices]))
+  (execute! [_])
+  (stop! [_]))
 
-(defn default-collect
-  [vertex]
-  (swap! (:state vertex) #(update % ::val into (::uncollected %))))
+(defn simple-collect
+  [collect-fn]
+  (fn [vertex]
+    (swap! (:state vertex) #(update % ::val collect-fn (::uncollected %)))))
+
+(def default-collect (simple-collect into))
 
 (defn signal-forward
   [state _] (::val state))
@@ -48,26 +52,33 @@
 
 (defrecord Vertex [id state last-sig-state in outs]
   clojure.lang.IDeref
-  (deref [_] (::val @state))
+  (deref
+    [_] (::val @state))
   IVertex
-  (collect! [_] ((::collect-fn @state) _))
-  (score-collect [_] ((::score-collect-fn @state) _))
+  (collect!
+    [_] ((::collect-fn @state) _))
+  (score-collect
+    [_] ((::score-collect-fn @state) _))
   (connect-to!
     [_ v sig-fn opts]
-    (info (format "%d connecting to %d (%s)" id (:id v) (pr-str opts)))
+    (debug (format "%d connecting to %d (%s)" id (:id v) (pr-str opts)))
     (swap! outs assoc v [sig-fn opts]) _)
-  (disconnect-from!
+  (disconnect-vertex!
     [_ v]
-    (info (format "%d disconnecting from %d" id (:id v)))
+    (debug (format "%d disconnecting from %d" id (:id v)))
     (swap! outs dissoc v)
     _)
-  (disconnect! [_]
-    (info (format "%d disconnecting..." id))
-    (close! in)
+  (close-input! [_]
+    (if @in
+      (do (debug (str id " closing..."))
+          (close! @in)
+          (reset! in nil))
+      (warn (str id " already closed")))
     _)
   (input-channel
-    [_] in)
-  (score-signal [_] ((::score-signal-fn @state) _))
+    [_] (or @in (reset! in (chan))))
+  (score-signal
+    [_] ((::score-signal-fn @state) _))
   (signal!
     [_]
     (let [state @state]
@@ -78,16 +89,15 @@
             (let [signal (f state opts)]
               (if-not (nil? signal)
                 (>! (input-channel v) [id signal])
-                (warn (format "signal fn for %d return nil, skipping..." (:id v)))))
+                (warn (format "signal fn for %d returned nil, skipping..." (:id v)))))
             (recur (next outs)))))
       _))
   (receive-signal
     [_ src sig]
     (swap! state
-           (fn [state]
-             (-> state
-                 (update ::uncollected conj sig)
-                 (assoc-in [::signal-map src] sig))))
+           #(-> %
+                (update ::uncollected conj sig)
+                (assoc-in [::signal-map src] sig)))
     _))
 
 #?(:clj
@@ -107,7 +117,7 @@
 (def default-context-opts
   {:collect-thresh 0
    :signal-thresh  0
-   :timeout        5
+   :timeout        100
    :max-ops        1e6})
 
 (defn vertex
@@ -116,7 +126,7 @@
    {:id             id
     :state          (atom (merge default-vertex-state state))
     :last-sig-state (atom nil)
-    :in             (chan)
+    :in             (atom nil)
     :outs           (atom {})}))
 
 (defrecord Graph [state]
@@ -141,13 +151,14 @@
 (defn compute-graph
   [] (Graph. (atom {:vertices {} :next-id 0})))
 
-(defn eager-async-vertex
-  [{:keys [id in state] :as vertex} ctx]
-  (let [{:keys [collect-thresh signal-thresh ctrl]} @ctx]
+(defn eager-vertex-processor
+  [{:keys [id state] :as vertex} ctx]
+  (let [{:keys [collect-thresh signal-thresh ctrl]} ctx
+        in (input-channel vertex)]
     (go-loop []
       (let [[src-id sig] (<! in)]
         (if sig
-          (do (info id "receive from" src-id sig)
+          (do (debug (format "%d receive from %d: %s" id src-id (pr-str sig)))
               (receive-signal vertex src-id sig)
               (when (should-collect? vertex collect-thresh)
                 (when (>! ctrl [:collect id])
@@ -157,7 +168,7 @@
                     (>! ctrl [:signal id])
                     (signal! vertex))))
               (recur))
-          (info id "stopped"))))
+          (debug (str id " stopped")))))
     vertex))
 
 (defn execution-result
@@ -169,79 +180,91 @@
        (merge opts)
        (deliver p)))
 
+(defn stop-execution
+  [ctrl vertices]
+  (close! ctrl)
+  (run! close-input! vertices))
+
 (defn async-context
   [opts]
-  (let [ctrl     (chan)
-        ctx      (merge default-context-opts {:ctrl ctrl} opts)
-        c-thresh (:collect-thresh ctx)
-        s-thresh (:signal-thresh ctx)
-        max-ops  (:max-ops ctx)
-        max-t    (:timeout ctx)]
+  (let [ctrl      (chan)
+        ctx       (merge default-context-opts {:ctrl ctrl} opts)
+        processor (:processor ctx)
+        c-thresh  (:collect-thresh ctx)
+        s-thresh  (:signal-thresh ctx)
+        max-ops   (:max-ops ctx)
+        max-t     (:timeout ctx)
+        result    (promise)]
     (reify
       clojure.lang.IDeref
       (deref [_] ctx)
       IGraphExecutor
-      (execute! [_ g]
-        (let [t0  (System/nanoTime)
-              res (promise)]
-          (go
-            (loop [verts (vertices g)]
-              (when-let [v (first verts)]
-                (when (should-collect? v c-thresh)
-                  (collect! v))
-                (when (should-signal? v s-thresh)
-                  (signal! v))
-                (recur (next verts))))
-            (loop [colls 0 sigs 0]
-              (if (<= (+ colls sigs) max-ops)
-                (let [t (timeout max-t)
-                      [[evt v ex] port] (alts! [ctrl t])]
-                  (if (= port t)
-                    (execution-result :converged res colls sigs t0)
-                    (case evt
-                      :collect (recur (inc colls) sigs)
-                      :signal  (recur colls (inc sigs))
-                      :error   (do (warn ex "@ vertex" v)
-                                   (execution-result
-                                    :error res colls sigs t0
-                                    {:reason           :error
-                                     :reason-exception ex
-                                     :reason-vertex    v}))
-                      (do (info "wrong event" evt v)
-                          (execution-result
-                           :interrupted res colls sigs t0
-                           {:reason        :unknown
-                            :reason-event  evt
-                            :reason-vertex v})))))
-                (execution-result :terminated res colls sigs t0))))
-          res)))))
+      (stop!
+        [_]
+        (stop-execution ctrl (vertices (:graph ctx)))
+        result)
+      (execute! [_]
+        (if-not (realized? result)
+          (let [t0  (System/nanoTime)]
+            (go
+              (loop [verts (vertices (:graph ctx))]
+                (when-let [v (first verts)]
+                  (processor v ctx)
+                  (when (should-collect? v c-thresh)
+                    (collect! v))
+                  (when (should-signal? v s-thresh)
+                    (signal! v))
+                  (recur (next verts))))
+              (loop [colls 0 sigs 0]
+                (if (<= (+ colls sigs) max-ops)
+                  (let [t (timeout max-t)
+                        [[evt v ex] port] (alts! [ctrl t])]
+                    (if (= port t)
+                      (do (stop! _)
+                          (execution-result :converged result colls sigs t0))
+                      (case evt
+                        :collect (recur (inc colls) sigs)
+                        :signal  (recur colls (inc sigs))
+                        :error   (do (warn ex "@ vertex" v)
+                                     (stop! _)
+                                     (execution-result
+                                      :error result colls sigs t0
+                                      {:reason           :error
+                                       :reason-event     evt
+                                       :reason-exception ex
+                                       :reason-vertex    v}))
+                        (do (warn "execution interrupted")
+                            (execution-result
+                             :interrupted result colls sigs t0
+                             {:reason        :unknown
+                              :reason-event  evt
+                              :reason-vertex v})))))
+                  (execution-result :terminated result colls sigs t0))))
+            result)
+          (throw (IllegalStateException. "Context already executed once")))))))
 
 (def g (compute-graph))
-(def ctx (async-context {}))
+(def ctx (async-context {:graph g :processor eager-vertex-processor}))
 
 (defn signal-sssp
   [state dist] (if-let [v (::val state)] (+ dist v)))
 
-(defn collect-sssp
-  [vertex]
-  (swap! (:state vertex)
-         (fn [{:keys [val] :as state}]
-           (update state ::val
-                   (if val
-                     (fn [_] (reduce min _ (::uncollected state)))
-                     (fn [_] (reduce min (::uncollected state))))))))
+(def collect-sssp
+  (simple-collect
+   (fn [val uncollected]
+     (if val (reduce min val uncollected) (reduce min uncollected)))))
 
-(def a (eager-async-vertex (add-vertex! g {::val 0   ::collect-fn collect-sssp}) ctx))
-(def b (eager-async-vertex (add-vertex! g {::val nil ::collect-fn collect-sssp}) ctx))
-(def c (eager-async-vertex (add-vertex! g {::val nil ::collect-fn collect-sssp}) ctx))
-(def d (eager-async-vertex (add-vertex! g {::val nil ::collect-fn collect-sssp}) ctx))
+(def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
+(def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+(def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+(def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
 
 (connect-to! a b signal-sssp 1)
 (connect-to! a c signal-sssp 3)
 (connect-to! b c signal-sssp 1)
 (connect-to! c d signal-sssp 1)
 
-(prn @(execute! ctx g))
+;;(prn @(execute! ctx))
 
 (prn @a)
 (prn @b)
@@ -250,8 +273,8 @@
 
 
 (comment
-  (disconnect! a)
-  (disconnect! b)
-  (disconnect! c)
-  (disconnect! d)
+  (close-input! a)
+  (close-input! b)
+  (close-input! c)
+  (close-input! d)
   )
