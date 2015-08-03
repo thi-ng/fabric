@@ -1,9 +1,12 @@
 (ns thi.ng.fabric.async
   (:require
    [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
-   [taoensso.timbre :refer [debug warn error]]))
+   [taoensso.timbre :refer [debug info warn error]]
+   [clojure.set :as set]))
 
 (taoensso.timbre/set-level! :warn)
+
+;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
 
 (defprotocol IVertex
   (connect-to! [_ v sig-fn edge-opts])
@@ -18,6 +21,7 @@
 
 (defprotocol IComputeGraph
   (add-vertex! [_ vstate])
+  (remove-vertex! [_ v])
   (vertex-for-id [_ id])
   (vertices [_]))
 
@@ -34,7 +38,7 @@
 (def default-collect (simple-collect into))
 
 (defn signal-forward
-  [state _] (::val state))
+  [vertex _] @vertex)
 
 (defn default-score-signal
   "Computes vertex signal score. Returns 0 if state's ::val
@@ -76,7 +80,7 @@
     _)
   (close-input! [_]
     (if @in
-      (do (debug (str id " closing..."))
+      (do #_(debug (str id " closing..."))
           (close! @in)
           (reset! in nil))
       (warn (str id " already closed")))
@@ -92,7 +96,7 @@
       (go-loop [outs @outs]
         (let [[v [f opts]] (first outs)]
           (when v
-            (let [signal (f state opts)]
+            (let [signal (f _ opts)]
               (if-not (nil? signal)
                 (>! (input-channel v) [id signal])
                 (warn (format "signal fn for %d returned nil, skipping..." (:id v)))))
@@ -125,7 +129,7 @@
   {:collect-thresh 0
    :signal-thresh  0
    :bus-size       16
-   :timeout        100
+   :timeout        25
    :max-ops        1e6})
 
 (defn vertex
@@ -151,6 +155,8 @@
                  (update :vertices assoc id v)
                  (assoc  :curr-vertex v)))))
         :curr-vertex))
+  (remove-vertex!
+    [_ v] (swap! state update :vertices dissoc (:id v)))
   (vertex-for-id
     [_ id] (get-in @state [:vertices id]))
   (vertices
@@ -160,9 +166,9 @@
   [] (Graph. (atom {:vertices {} :next-id 0})))
 
 (defn eager-vertex-processor
-  [{:keys [id state] :as vertex} ctx]
+  [{:keys [id] :as vertex} ctx]
   (let [{:keys [collect-thresh signal-thresh]} @ctx
-        in   (input-channel vertex)]
+        in (input-channel vertex)]
     (go-loop []
       (let [[src-id sig] (<! in)]
         (if sig
@@ -171,11 +177,12 @@
               (when (should-collect? vertex collect-thresh)
                 (notify ctx [:collect id])
                 (collect! vertex)
+                ;;(debug (format "%d post-collection: %s" id (pr-str @vertex)))
                 (when (should-signal? vertex signal-thresh)
                   (notify ctx [:signal id])
                   (signal! vertex)))
               (recur))
-          (debug (str id " stopped")))))
+          #_(debug (str id " stopped")))))
     vertex))
 
 (defn execution-result
@@ -227,8 +234,8 @@
                   (recur (next verts))))
               (loop [colls 0 sigs 0]
                 (if (<= (+ colls sigs) max-ops)
-                  (let [t (timeout max-t)
-                        [[evt v ex] port] (alts! (conj bus t))]
+                  (let [t (if max-t (timeout max-t))
+                        [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
                     (if (= port t)
                       (do (stop! _)
                           (execution-result :converged result colls sigs t0))
@@ -285,7 +292,7 @@ overlap=scale;
     :processor eager-vertex-processor}))
 
 (defn signal-sssp
-  [state dist] (if-let [v (::val state)] (+ dist v)))
+  [vertex dist] (if-let [v @vertex] (+ dist v)))
 
 (def collect-sssp
   (simple-collect
@@ -374,3 +381,113 @@ overlap=scale;
       (doseq [[a b] hierarchy]
         (connect-to! (verts a) (verts b) signal-forward nil))
       verts)))
+
+(defn signal-triple
+  [vertex _]
+  [(:id vertex) @vertex])
+
+(defn collect-index
+  [spo]
+  (simple-collect
+   (fn [val incoming]
+     (transduce
+      (map (fn [[id t]] [id (nth t spo)]))
+      (completing (fn [acc [id x]] (update acc x (fnil conj #{}) id)))
+      val incoming))))
+
+(defn index-vertex
+  [g spo]
+  (add-vertex! g {::val {}
+                  ::collect-fn (collect-index spo)
+                  ::score-signal-fn (constantly 1)}))
+
+(def s-idx (index-vertex g 0))
+(def p-idx (index-vertex g 1))
+(def o-idx (index-vertex g 2))
+
+(defn add-triple
+  [g t]
+  (let [v (add-vertex! g {::val t})]
+    (connect-to! v s-idx signal-triple nil)
+    (connect-to! v p-idx signal-triple nil)
+    (connect-to! v o-idx signal-triple nil)
+    (signal! v)
+    v))
+
+(defn signal-select
+  [vertex [idx sel]]
+  [idx (if sel (@vertex sel [nil]) (->> @vertex vals (eduction (mapcat identity))))])
+
+(def collect-select
+  (simple-collect
+   (fn [val incoming]
+     (reduce (fn [acc [idx res]] (update acc idx (fnil into #{}) res)) val incoming))))
+
+(def aggregate-select
+  (simple-collect
+   (fn [val incoming]
+     (let [res (vals (last incoming))]
+       ;;(info :res res)
+       (when (and (seq res) (every? #(not= #{nil} %) res))
+         (->> res
+              (map #(disj % nil))
+              (set)
+              (sort-by count)
+              ;;(#(do (info :sorted %) %))
+              (reduce set/intersection)
+              (map #(deref (vertex-for-id g %)))))))))
+
+;; TODO figure out way how to at to a running context
+(defn register-query
+  [g s p o]
+  (let [acc (add-vertex! g {::val {} ::collect-fn collect-select})
+        res (add-vertex! g {::val nil ::collect-fn aggregate-select})]
+    (connect-to! s-idx acc signal-select [0 s])
+    (connect-to! p-idx acc signal-select [1 p])
+    (connect-to! o-idx acc signal-select [2 o])
+    (connect-to! acc res signal-forward nil)
+    ;;[acc res]
+    res))
+
+#_(defn select
+  [g s p o]
+  (let [acc (add-vertex! g {::val {} ::collect-fn collect-select})
+        ctx (async-context
+             {:graph     g
+              :processor eager-vertex-processor})]
+    (connect-to! s-idx acc signal-select [0 s])
+    (connect-to! p-idx acc signal-select [1 p])
+    (connect-to! o-idx acc signal-select [2 o])
+    (info @(execute! ctx))
+    (disconnect-vertex! s-idx acc)
+    (disconnect-vertex! p-idx acc)
+    (disconnect-vertex! o-idx acc)
+    (remove-vertex! g acc)
+    (let [res (vals @acc)]
+      (info :res res)
+      (when-not (some #(= #{:void} %) res)
+        (->> res
+             (map #(disj % :void))
+             (set)
+             (sort-by count)
+             (#(do (info :sorted %) %))
+             (reduce set/intersection)
+             (map #(deref (vertex-for-id g %))))))))
+
+(def triples
+  (mapv
+   #(add-triple g %)
+   '[[toxi author fabric]
+     [fabric type project]
+     [toxi type person]]))
+
+(def ctx (async-context {:graph g :processor eager-vertex-processor :timeout nil}))
+(def toxi (register-query g 'toxi nil nil))
+(def types (register-query g nil 'type nil))
+(def projects (register-query g nil 'type 'project))
+
+(execute! ctx)
+
+;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
+
+;; TODO add TripleGraph w/ separate sets of triple, index, rule & query vertices
