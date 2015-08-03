@@ -435,18 +435,21 @@ overlap=scale;
    (fn [val incoming]
      (reduce (fn [acc [idx res]] (update acc idx (fnil into #{}) res)) val incoming))))
 
-(def aggregate-select
-  (simple-collect
-   (fn [val incoming]
-     (let [res (vals (peek incoming))]
+(defn aggregate-select
+  [vertex]
+  (swap! (:state vertex)
+   (fn [state]
+     (let [res (vals (peek (::uncollected state)))]
        ;;(info :res res)
-       (when (and (seq res) (every? #(not= #{nil} %) res))
-         (->> res
-              (map #(disj % nil))
-              (set)
-              (sort-by count)
-              (reduce set/intersection)
-              (map #(deref (vertex-for-id g %)))))))))
+       (assoc state ::val
+              (when (and (seq res) (every? #(not= #{nil} %) res))
+                (->> res
+                     (map #(disj % nil))
+                     (set)
+                     (sort-by count)
+                     (reduce set/intersection)
+                     (#(do (info (:id vertex) :isec-result %) %))
+                     (map #(deref (vertex-for-id g %))))))))))
 
 ;; TODO figure out way how to at to a running context
 (defn add-query
@@ -502,17 +505,20 @@ overlap=scale;
                 ::collect-fn
                 (fn [vertex]
                   (let [prev @vertex
-                        in   (reduce into (::uncollected @(:state vertex)))
-                        adds (set/difference in prev)]
+                        in   (reduce into #{} (::uncollected @(:state vertex)))
+                        adds (set/difference in prev)
+                        inferred (mapcat triple-fn adds)]
                     (info :additions adds)
-                    (doseq [a adds t (triple-fn a)]
+                    (doseq [t inferred]
                       (info :add-triple t)
                       (add-triple g t))
-                    (swap! (:state vertex) update ::val set/union in)))})]
+                    (swap! (:state vertex) update ::val set/union in (set inferred))))})]
     (connect-to! q inf signal-forward nil)
     inf))
 
 (def inf1 (add-inference g [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]])))
+
+(execute! ctx)
 
 (def triples
   (mapv
@@ -521,7 +527,8 @@ overlap=scale;
      [fabric type project]
      [toxi type person]]))
 
-(execute! ctx)
+
+
 
 ;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
 
