@@ -4,7 +4,7 @@
    [taoensso.timbre :refer [debug info warn error]]
    [clojure.set :as set]))
 
-(taoensso.timbre/set-level! :warn)
+(taoensso.timbre/set-level! :debug)
 
 ;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
 
@@ -397,9 +397,10 @@ overlap=scale;
 
 (defn index-vertex
   [g spo]
-  (add-vertex! g {::val {}
-                  ::collect-fn (collect-index spo)
-                  ::score-signal-fn (constantly 1)}))
+  (add-vertex!
+   g {::val             {}
+      ::collect-fn      (collect-index spo)
+      ::score-signal-fn (constantly 1)}))
 
 (def s-idx (index-vertex g 0))
 (def p-idx (index-vertex g 1))
@@ -414,6 +415,17 @@ overlap=scale;
     (signal! v)
     v))
 
+(defn add-counter
+  [g src]
+  (let [v (add-vertex!
+           g {::collect-fn
+              (simple-collect
+               (fn [val in]
+                 (info :updated-result (pr-str (peek in)))
+                 (count (peek in))))})]
+    (connect-to! src v signal-forward nil)
+    v))
+
 (defn signal-select
   [vertex [idx sel]]
   [idx (if sel (@vertex sel [nil]) (->> @vertex vals (eduction (mapcat identity))))])
@@ -426,21 +438,20 @@ overlap=scale;
 (def aggregate-select
   (simple-collect
    (fn [val incoming]
-     (let [res (vals (last incoming))]
+     (let [res (vals (peek incoming))]
        ;;(info :res res)
        (when (and (seq res) (every? #(not= #{nil} %) res))
          (->> res
               (map #(disj % nil))
               (set)
               (sort-by count)
-              ;;(#(do (info :sorted %) %))
               (reduce set/intersection)
               (map #(deref (vertex-for-id g %)))))))))
 
 ;; TODO figure out way how to at to a running context
-(defn register-query
+(defn add-query
   [g s p o]
-  (let [acc (add-vertex! g {::val {} ::collect-fn collect-select})
+  (let [acc (add-vertex! g {::val {}  ::collect-fn collect-select})
         res (add-vertex! g {::val nil ::collect-fn aggregate-select})]
     (connect-to! s-idx acc signal-select [0 s])
     (connect-to! p-idx acc signal-select [1 p])
@@ -449,7 +460,7 @@ overlap=scale;
     ;;[acc res]
     res))
 
-#_(defn select
+(defn select
   [g s p o]
   (let [acc (add-vertex! g {::val {} ::collect-fn collect-select})
         ctx (async-context
@@ -474,17 +485,41 @@ overlap=scale;
              (reduce set/intersection)
              (map #(deref (vertex-for-id g %))))))))
 
+(def ctx (async-context {:graph g :processor eager-vertex-processor :timeout nil}))
+(def toxi (add-query g 'toxi nil nil))
+(def types (add-query g nil 'type nil))
+(def projects (add-query g nil 'type 'project))
+(def all (add-query g nil nil nil))
+
+(def num-projects (add-counter g projects))
+(def num-types (add-counter g types))
+
+(defn add-inference
+  [g query triple-fn]
+  (let [q   (apply add-query g query)
+        inf (add-vertex!
+             g {::val #{}
+                ::collect-fn
+                (fn [vertex]
+                  (let [prev @vertex
+                        in   (reduce into (::uncollected @(:state vertex)))
+                        adds (set/difference in prev)]
+                    (info :additions adds)
+                    (doseq [a adds t (triple-fn a)]
+                      (info :add-triple t)
+                      (add-triple g t))
+                    (swap! (:state vertex) update ::val set/union in)))})]
+    (connect-to! q inf signal-forward nil)
+    inf))
+
+(def inf1 (add-inference g [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]])))
+
 (def triples
   (mapv
    #(add-triple g %)
    '[[toxi author fabric]
      [fabric type project]
      [toxi type person]]))
-
-(def ctx (async-context {:graph g :processor eager-vertex-processor :timeout nil}))
-(def toxi (register-query g 'toxi nil nil))
-(def types (register-query g nil 'type nil))
-(def projects (register-query g nil 'type 'project))
 
 (execute! ctx)
 
