@@ -27,7 +27,8 @@
 (defprotocol IGraphExecutor
   (execute! [_])
   (stop! [_])
-  (notify [_ evt]))
+  (notify! [_ evt])
+  (include-vertex! [_ v]))
 
 (defn simple-collect
   [collect-fn]
@@ -103,10 +104,13 @@
       _))
   (receive-signal
     [_ src sig]
-    (swap! state
-           #(-> %
-                (update ::uncollected conj sig)
-                (assoc-in [::signal-map src] sig)))
+    (let [sig-map (::signal-map @state)]
+      (if-not (= sig (sig-map src))
+        (swap! state
+               #(-> %
+                    (update ::uncollected conj sig)
+                    (assoc-in [::signal-map src] sig)))
+        (info (str id " ignoring unchanged signal: " (pr-str sig)))))
     _))
 
 #?(:clj
@@ -174,11 +178,11 @@
           (do (debug (format "%d receive from %d: %s" id src-id (pr-str sig)))
               (receive-signal vertex src-id sig)
               (when (should-collect? vertex collect-thresh)
-                (notify ctx [:collect id])
+                (notify! ctx [:collect id])
                 (collect! vertex)
                 ;;(debug (format "%d post-collection: %s" id (pr-str @vertex)))
                 (when (should-signal? vertex signal-thresh)
-                  (notify ctx [:signal id])
+                  (notify! ctx [:signal id])
                   (signal! vertex)))
               (recur))
           #_(debug (str id " stopped")))))
@@ -217,20 +221,21 @@
         [_]
         (stop-execution bus (vertices (:graph ctx)))
         result)
-      (notify [_ evt]
+      (notify! [_ evt]
         (go (>! (rand-nth bus) evt)))
+      (include-vertex!
+        [_ v]
+        (processor v _)
+        (when (should-collect? v c-thresh)
+          (collect! v))
+        (when (should-signal? v s-thresh)
+          (signal! v))
+        _)
       (execute! [_]
         (if-not (realized? result)
           (let [t0 (System/nanoTime)]
             (go
-              (loop [verts (vertices (:graph ctx))]
-                (when-let [v (first verts)]
-                  (processor v _)
-                  (when (should-collect? v c-thresh)
-                    (collect! v))
-                  (when (should-signal? v s-thresh)
-                    (signal! v))
-                  (recur (next verts))))
+              (run! #(include-vertex! _ %) (vertices (:graph ctx)))
               (loop [colls 0 sigs 0]
                 (if (<= (+ colls sigs) max-ops)
                   (let [t (if max-t (timeout max-t))
@@ -269,7 +274,7 @@
             (->> outs
                  (map
                   (fn [[k [_ opts]]]
-                    (str (:id v) "->" (:id k) "[label=" (pr-str opts) "];\n")))
+                    (str (:id v) "->" (:id k) "[label=\"" (pr-str opts) "\"];\n")))
                  (cons
                   (format
                    "%d[label=\"%d (%s)\"];\n"
@@ -283,8 +288,8 @@ overlap=scale;
 %s}")
        (spit path)))
 
-(def g (compute-graph))
-(def ctx
+#_(def g (compute-graph))
+#_(def ctx
   (async-context
    {:graph     g
     :bus-size  64
