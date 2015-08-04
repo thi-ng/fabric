@@ -16,7 +16,9 @@
   (score-collect [_])
   (signal! [_])
   (score-signal [_])
-  (receive-signal [_ src sig]))
+  (receive-signal [_ src sig])
+  (set-value! [_ val])
+  (update-value! [_ f]))
 
 (defprotocol IComputeGraph
   (add-vertex! [_ vstate])
@@ -62,6 +64,10 @@
   (deref
     [_] (:val @state))
   IVertex
+  (set-value!
+    [_ val] (swap! state assoc :val val) (signal! _) _)
+  (update-value!
+    [_ f] (swap! state update :val f) (signal! _) _)
   (collect!
     [_]
     ((::collect-fn @state) _)
