@@ -10,8 +10,10 @@
 (defprotocol IVertex
   (connect-to! [_ v sig-fn edge-opts])
   (disconnect-vertex! [_ v])
+  (disconnect-all! [_])
   (close-input! [_])
   (input-channel [_])
+  (connected-vertices [_])
   (collect! [_])
   (score-collect [_])
   (signal! [_])
@@ -24,7 +26,8 @@
   (add-vertex! [_ vstate])
   (remove-vertex! [_ v])
   (vertex-for-id [_ id])
-  (vertices [_]))
+  (vertices [_])
+  (add-edge! [_ src dest f opts]))
 
 (defprotocol IGraphExecutor
   (execute! [_])
@@ -59,6 +62,14 @@
 (defn should-collect?
   [vertex thresh] (> (score-collect vertex) thresh))
 
+(def default-vertex-state
+  {::uncollected      []
+   ::signal-map       {}
+   ::score-collect-fn default-score-collect
+   ::score-signal-fn  default-score-signal
+   ::collect-fn       default-collect
+   ::input-channel-fn chan})
+
 (defrecord Vertex [id state last-sig-state in outs]
   clojure.lang.IDeref
   (deref
@@ -79,11 +90,15 @@
     [_ v sig-fn opts]
     (debug (format "%d connecting to %d (%s)" id (:id v) (pr-str opts)))
     (swap! outs assoc v [sig-fn opts]) _)
+  (connected-vertices
+    [_] (keys @outs))
   (disconnect-vertex!
     [_ v]
     (debug (format "%d disconnecting from %d" id (:id v)))
     (swap! outs dissoc v)
     _)
+  (disconnect-all!
+    [_] (run! #(disconnect-vertex! _ %) (keys @outs)) _)
   (close-input! [_]
     (if @in
       (do #_(debug (str id " closing..."))
@@ -126,21 +141,6 @@
    (defmethod print-method Vertex
      [^Vertex o ^java.io.Writer w] (.write w (.toString (into {} o)))))
 
-(def default-vertex-state
-  {::uncollected      []
-   ::signal-map       {}
-   ::score-collect-fn default-score-collect
-   ::score-signal-fn  default-score-signal
-   ::collect-fn       default-collect
-   ::input-channel-fn chan})
-
-(def default-context-opts
-  {:collect-thresh 0
-   :signal-thresh  0
-   :bus-size       16
-   :timeout        25
-   :max-ops        1e6})
-
 (defn vertex
   [id state]
   (map->Vertex
@@ -165,14 +165,43 @@
                  (assoc  :curr-vertex v)))))
         :curr-vertex))
   (remove-vertex!
-    [_ v] (swap! state update :vertices dissoc (:id v)))
+    [_ v]
+    (when (get-in @state [:vertices (:id v)])
+      (swap! state update :vertices dissoc (:id v))
+      (disconnect-all! v)
+      true))
   (vertex-for-id
     [_ id] (get-in @state [:vertices id]))
   (vertices
-    [_] (-> @state :vertices vals)))
+    [_] (-> @state :vertices vals))
+  (add-edge!
+    [_ src dest sig-fn opts]
+    (connect-to! src dest sig-fn opts)))
+
+(defrecord LoggedGraph [g logger]
+  IComputeGraph
+  (add-vertex! [_ v]
+    (let [v (add-vertex! g v)]
+      (go (>! logger [:add-vertex (:id v) @v]))
+      v))
+  (remove-vertex! [_ v]
+    (when (remove-vertex! g v)
+      (go (>! logger [:remove-vertex (:id v)]))
+      true))
+  (vertex-for-id
+    [_ id] (vertex-for-id g id))
+  (vertices
+    [_] (vertices g))
+  (add-edge!
+    [_ src dest f opts]
+    (connect-to! src dest f opts)
+    (go (>! logger [:add-edge (:id src) (:id dest) f opts]))))
 
 (defn compute-graph
   [] (Graph. (atom {:vertices {} :next-id 0})))
+
+(defn logged-compute-graph
+  [logger] (LoggedGraph. (compute-graph) logger))
 
 (defn eager-vertex-processor
   [{:keys [id] :as vertex} ctx]
@@ -207,6 +236,14 @@
   [bus vertices]
   (run! close! bus)
   (run! close-input! vertices))
+
+(def default-context-opts
+  {:collect-thresh 0
+   :signal-thresh  0
+   :processor      eager-vertex-processor
+   :bus-size       16
+   :timeout        25
+   :max-ops        1e6})
 
 (defn async-context
   [opts]
@@ -294,13 +331,6 @@ overlap=scale;
 %s}")
        (spit path)))
 
-#_(def g (compute-graph))
-#_(def ctx
-  (async-context
-   {:graph     g
-    :bus-size  64
-    :processor eager-vertex-processor}))
-
 (defn signal-sssp
   [vertex dist] (if-let [v @vertex] (+ dist v)))
 
@@ -332,20 +362,26 @@ overlap=scale;
     (dotimes [i num-edges]
       (->> (make-strand verts e-length)
            (partition 2 1)
-           (map (fn [[a b]] (connect-to! (verts a) (verts b) signal-sssp 1)))
+           (map (fn [[a b]] (add-edge! g (verts a) (verts b) signal-sssp 1)))
            (doall)))
     nil))
 
 (comment
+  (def g (compute-graph))
+  (def ctx
+    (async-context
+     {:graph     g
+      :bus-size  64
+      :processor eager-vertex-processor}))
   (def a (add-vertex! g {:val 0   ::collect-fn collect-sssp}))
   (def b (add-vertex! g {:val nil ::collect-fn collect-sssp}))
   (def c (add-vertex! g {:val nil ::collect-fn collect-sssp}))
   (def d (add-vertex! g {:val nil ::collect-fn collect-sssp}))
 
-  (connect-to! a b signal-sssp 1)
-  (connect-to! a c signal-sssp 3)
-  (connect-to! b c signal-sssp 1)
-  (connect-to! c d signal-sssp 1)
+  (add-edge! g a b signal-sssp 1)
+  (add-edge! g a c signal-sssp 3)
+  (add-edge! g b c signal-sssp 1)
+  (add-edge! g c d signal-sssp 1)
 
   (prn @(execute! ctx))
 
@@ -389,7 +425,7 @@ overlap=scale;
                  (fn [acc v] (assoc acc v (add-vertex! g (assoc vspec :val #{v}))))
                  {} types)]
       (doseq [[a b] hierarchy]
-        (connect-to! (verts a) (verts b) signal-forward nil))
+        (add-edge! g (verts a) (verts b) signal-forward nil))
       verts)))
 
 ;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
