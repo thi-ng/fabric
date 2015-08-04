@@ -18,6 +18,7 @@
   [spo]
   (f/simple-collect
    (fn [val incoming]
+     (info :update-index spo incoming)
      (transduce
       (map (fn [[id t]] [id (nth t spo)]))
       (completing (fn [acc [id x]] (update acc x (fnil conj #{}) id)))
@@ -58,7 +59,7 @@
                 (::f/uncollected @(:state vertex)))
           adds (set/difference in prev)
           inferred (mapcat production adds)]
-      (info :additions adds)
+      (debug :additions adds)
       (doseq [t inferred]
         (info :add-triple t)
         (add-triple g t))
@@ -82,15 +83,17 @@
     [_ id] (f/vertex-for-id g id))
   (vertices
     [_] (f/vertices g))
+  (add-edge!
+    [_ src dest sig opts] (f/add-edge! g src dest sig opts))
   ITripleGraph
   (add-triple
     [_ t]
     (or (@triples t)
         (let [{:keys [subj pred obj]} indices
               v (f/add-vertex! g {:val t})]
-          (f/connect-to! v subj signal-triple nil)
-          (f/connect-to! v pred signal-triple nil)
-          (f/connect-to! v obj  signal-triple nil)
+          (f/add-edge! g v subj signal-triple nil)
+          (f/add-edge! g v pred signal-triple nil)
+          (f/add-edge! g v obj  signal-triple nil)
           (f/signal! v)
           (swap! triples conj t)
           v)))
@@ -101,12 +104,15 @@
     (let [{:keys [subj pred obj]} indices
           acc (f/add-vertex! g {:val {}          ::f/collect-fn collect-select})
           res (f/add-vertex! g {:val (delay nil) ::f/collect-fn (aggregate-select g)})]
-      (f/connect-to! subj acc signal-select [0 s])
-      (f/connect-to! pred acc signal-select [1 p])
-      (f/connect-to! obj  acc signal-select [2 o])
-      (f/connect-to! acc  res f/signal-forward nil)
-      (swap! queries assoc id {:acc acc :res res})
-      res))
+      (f/add-edge! g subj acc signal-select [0 s])
+      (f/add-edge! g pred acc signal-select [1 p])
+      (f/add-edge! g obj  acc signal-select [2 o])
+      (f/add-edge! g acc  res f/signal-forward nil)
+      (f/signal! subj)
+      (f/signal! pred)
+      (f/signal! obj)
+      (swap! queries assoc id {:acc acc :result res})
+      {:acc acc :result res}))
   (query-result
     [_ id] (when-let [q (@queries id)] @@(:res q)))
   (add-rule
@@ -114,21 +120,20 @@
     (let [qid (keyword (str "inf-" (name id)))
           q   (add-query _ qid query)
           inf (f/add-vertex! g {:val #{} ::f/collect-fn (collect-inference _ production)})]
-      (f/connect-to! q inf f/signal-forward nil)
+      (f/add-edge! g (:result q) inf f/signal-forward nil)
       inf))
   )
 
 (defn triple-graph
-  []
-  (let [g (f/compute-graph)]
-    (map->TripleGraph
-     {:indices {:subj (index-vertex g 0)
-                :pred (index-vertex g 1)
-                :obj  (index-vertex g 2)}
-      :triples (atom #{})
-      :queries (atom {})
-      :rules   (atom {})
-      :g       g})))
+  [g]
+  (map->TripleGraph
+   {:indices {:subj (index-vertex g 0)
+              :pred (index-vertex g 1)
+              :obj  (index-vertex g 2)}
+    :triples (atom #{})
+    :queries (atom {})
+    :rules   (atom {})
+    :g       g}))
 
 (defn add-counter
   [g src]
@@ -136,9 +141,9 @@
            g {::f/collect-fn
               (f/simple-collect
                (fn [val in]
-                 (info :updated-result (pr-str @(peek in)))
+                 ;;(debug :updated-result (pr-str @(peek in)))
                  (count @(peek in))))})]
-    (f/connect-to! src v f/signal-forward nil)
+    (f/add-edge! g src v f/signal-forward nil)
     v))
 
 #_(defn select
@@ -147,9 +152,9 @@
         ctx (f/async-context
              {:graph     g
               :processor f/eager-vertex-processor})]
-    (f/connect-to! s-idx acc f/signal-select [0 s])
-    (f/connect-to! p-idx acc f/signal-select [1 p])
-    (f/connect-to! o-idx acc f/signal-select [2 o])
+    (f/add-edge! g s-idx acc f/signal-select [0 s])
+    (f/add-edge! g p-idx acc f/signal-select [1 p])
+    (f/add-edge! g o-idx acc f/signal-select [2 o])
     (info @(f/execute! ctx))
     (f/disconnect-vertex! s-idx acc)
     (f/disconnect-vertex! p-idx acc)
@@ -166,14 +171,14 @@
              (reduce set/intersection)
              (map #(deref (f/vertex-for-id g %))))))))
 
-(def g (triple-graph))
-(def toxi (add-query g :toxi ['toxi nil nil]))
-(def types (add-query g :types [nil 'type nil]))
-(def projects (add-query g :projects [nil 'type 'project]))
-(def all (add-query g :all [nil nil nil]))
+(def g (triple-graph (f/compute-graph)))
+(def toxi (:result (add-query g :toxi ['toxi nil nil])))
+(def types (:result (add-query g :types [nil 'type nil])))
+(def projects (:result (add-query g :projects [nil 'type 'project])))
+(def all (:result (add-query g :all [nil nil nil])))
 
-(def num-projects (add-counter g projects))
-(def num-types (add-counter g types))
+;;(def num-projects (add-counter g projects))
+;;(def num-types (add-counter g types))
 
 (def inf1 (add-rule g :knows [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]])))
 
