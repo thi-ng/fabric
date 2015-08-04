@@ -1,8 +1,7 @@
 (ns thi.ng.fabric.async
   (:require
    [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
-   [taoensso.timbre :refer [debug info warn error]]
-   [clojure.set :as set]))
+   [taoensso.timbre :refer [debug info warn error]]))
 
 (taoensso.timbre/set-level! :debug)
 
@@ -33,7 +32,7 @@
 (defn simple-collect
   [collect-fn]
   (fn [vertex]
-    (swap! (:state vertex) #(update % ::val collect-fn (::uncollected %)))))
+    (swap! (:state vertex) #(update % :val collect-fn (::uncollected %)))))
 
 (def default-collect (simple-collect into))
 
@@ -41,10 +40,10 @@
   [vertex _] @vertex)
 
 (defn default-score-signal
-  "Computes vertex signal score. Returns 0 if state's ::val
+  "Computes vertex signal score. Returns 0 if state's :val
   equals :last-sig-state, else returns 1."
   [{:keys [state last-sig-state]}]
-  (if (= (::val @state) @last-sig-state) 0 1))
+  (if (= (:val @state) @last-sig-state) 0 1))
 
 (defn default-score-collect
   "Computes vertex collect score, here simply the number
@@ -60,7 +59,7 @@
 (defrecord Vertex [id state last-sig-state in outs]
   clojure.lang.IDeref
   (deref
-    [_] (::val @state))
+    [_] (:val @state))
   IVertex
   (collect!
     [_]
@@ -92,7 +91,7 @@
   (signal!
     [_]
     (let [state @state]
-      (reset! last-sig-state (::val state))
+      (reset! last-sig-state (:val state))
       (go-loop [outs @outs]
         (let [[v [f opts]] (first outs)]
           (when v
@@ -190,7 +189,7 @@
   (->> {:collections colls
         :signals     sigs
         :type        type
-        :time        (* (- (System/nanoTime) t0) 1e-6)}
+        :runtime     (* (- (System/nanoTime) t0) 1e-6)}
        (merge opts)
        (deliver p)))
 
@@ -317,7 +316,7 @@ overlap=scale;
   (let [vspec {::collect-fn collect-sssp}
         verts (->> (range num-verts)
                    (map (fn [_] (add-vertex! g vspec)))
-                   (cons (add-vertex! g (assoc vspec ::val 0)))
+                   (cons (add-vertex! g (assoc vspec :val 0)))
                    vec)]
     (dotimes [i num-edges]
       (->> (make-strand verts e-length)
@@ -327,10 +326,10 @@ overlap=scale;
     nil))
 
 (comment
-  (def a (add-vertex! g {::val 0   ::collect-fn collect-sssp}))
-  (def b (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-  (def c (add-vertex! g {::val nil ::collect-fn collect-sssp}))
-  (def d (add-vertex! g {::val nil ::collect-fn collect-sssp}))
+  (def a (add-vertex! g {:val 0   ::collect-fn collect-sssp}))
+  (def b (add-vertex! g {:val nil ::collect-fn collect-sssp}))
+  (def c (add-vertex! g {:val nil ::collect-fn collect-sssp}))
+  (def d (add-vertex! g {:val nil ::collect-fn collect-sssp}))
 
   (connect-to! a b signal-sssp 1)
   (connect-to! a c signal-sssp 3)
@@ -376,160 +375,10 @@ overlap=scale;
                  ;;::score-signal-fn (constantly 1)
                  }
           verts (reduce
-                 (fn [acc v] (assoc acc v (add-vertex! g (assoc vspec ::val #{v}))))
+                 (fn [acc v] (assoc acc v (add-vertex! g (assoc vspec :val #{v}))))
                  {} types)]
       (doseq [[a b] hierarchy]
         (connect-to! (verts a) (verts b) signal-forward nil))
       verts)))
 
-(defn signal-triple
-  [vertex _]
-  [(:id vertex) @vertex])
-
-(defn collect-index
-  [spo]
-  (simple-collect
-   (fn [val incoming]
-     (transduce
-      (map (fn [[id t]] [id (nth t spo)]))
-      (completing (fn [acc [id x]] (update acc x (fnil conj #{}) id)))
-      val incoming))))
-
-(defn index-vertex
-  [g spo]
-  (add-vertex!
-   g {::val             {}
-      ::collect-fn      (collect-index spo)
-      ::score-signal-fn (constantly 1)}))
-
-(def s-idx (index-vertex g 0))
-(def p-idx (index-vertex g 1))
-(def o-idx (index-vertex g 2))
-
-(defn add-triple
-  [g t]
-  (let [v (add-vertex! g {::val t})]
-    (connect-to! v s-idx signal-triple nil)
-    (connect-to! v p-idx signal-triple nil)
-    (connect-to! v o-idx signal-triple nil)
-    (signal! v)
-    v))
-
-(defn add-counter
-  [g src]
-  (let [v (add-vertex!
-           g {::collect-fn
-              (simple-collect
-               (fn [val in]
-                 (info :updated-result (pr-str (peek in)))
-                 (count (peek in))))})]
-    (connect-to! src v signal-forward nil)
-    v))
-
-(defn signal-select
-  [vertex [idx sel]]
-  [idx (if sel (@vertex sel [nil]) (->> @vertex vals (eduction (mapcat identity))))])
-
-(def collect-select
-  (simple-collect
-   (fn [val incoming]
-     (reduce (fn [acc [idx res]] (update acc idx (fnil into #{}) res)) val incoming))))
-
-(defn aggregate-select
-  [vertex]
-  (swap! (:state vertex)
-   (fn [state]
-     (let [res (vals (peek (::uncollected state)))]
-       ;;(info :res res)
-       (assoc state ::val
-              (when (and (seq res) (every? #(not= #{nil} %) res))
-                (->> res
-                     (map #(disj % nil))
-                     (set)
-                     (sort-by count)
-                     (reduce set/intersection)
-                     (#(do (info (:id vertex) :isec-result %) %))
-                     (map #(deref (vertex-for-id g %))))))))))
-
-;; TODO figure out way how to at to a running context
-(defn add-query
-  [g s p o]
-  (let [acc (add-vertex! g {::val {}  ::collect-fn collect-select})
-        res (add-vertex! g {::val nil ::collect-fn aggregate-select})]
-    (connect-to! s-idx acc signal-select [0 s])
-    (connect-to! p-idx acc signal-select [1 p])
-    (connect-to! o-idx acc signal-select [2 o])
-    (connect-to! acc res signal-forward nil)
-    ;;[acc res]
-    res))
-
-(defn select
-  [g s p o]
-  (let [acc (add-vertex! g {::val {} ::collect-fn collect-select})
-        ctx (async-context
-             {:graph     g
-              :processor eager-vertex-processor})]
-    (connect-to! s-idx acc signal-select [0 s])
-    (connect-to! p-idx acc signal-select [1 p])
-    (connect-to! o-idx acc signal-select [2 o])
-    (info @(execute! ctx))
-    (disconnect-vertex! s-idx acc)
-    (disconnect-vertex! p-idx acc)
-    (disconnect-vertex! o-idx acc)
-    (remove-vertex! g acc)
-    (let [res (vals @acc)]
-      (info :res res)
-      (when-not (some #(= #{:void} %) res)
-        (->> res
-             (map #(disj % :void))
-             (set)
-             (sort-by count)
-             (#(do (info :sorted %) %))
-             (reduce set/intersection)
-             (map #(deref (vertex-for-id g %))))))))
-
-(def ctx (async-context {:graph g :processor eager-vertex-processor :timeout nil}))
-(def toxi (add-query g 'toxi nil nil))
-(def types (add-query g nil 'type nil))
-(def projects (add-query g nil 'type 'project))
-(def all (add-query g nil nil nil))
-
-(def num-projects (add-counter g projects))
-(def num-types (add-counter g types))
-
-(defn add-inference
-  [g query triple-fn]
-  (let [q   (apply add-query g query)
-        inf (add-vertex!
-             g {::val #{}
-                ::collect-fn
-                (fn [vertex]
-                  (let [prev @vertex
-                        in   (reduce into #{} (::uncollected @(:state vertex)))
-                        adds (set/difference in prev)
-                        inferred (mapcat triple-fn adds)]
-                    (info :additions adds)
-                    (doseq [t inferred]
-                      (info :add-triple t)
-                      (add-triple g t))
-                    (swap! (:state vertex) update ::val set/union in (set inferred))))})]
-    (connect-to! q inf signal-forward nil)
-    inf))
-
-(def inf1 (add-inference g [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]])))
-
-(execute! ctx)
-
-(def triples
-  (mapv
-   #(add-triple g %)
-   '[[toxi author fabric]
-     [fabric type project]
-     [toxi type person]]))
-
-
-
-
 ;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
-
-;; TODO add TripleGraph w/ separate sets of triple, index, rule & query vertices
