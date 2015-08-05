@@ -33,13 +33,17 @@
    (fn [val incoming]
      (reduce (fn [acc [idx res]] (update acc idx (fnil into #{}) res)) val incoming))))
 
+(defn score-aggregate-select
+  [vertex]
+  (if (> 3 (count (vals (peek (::f/uncollected @(:state vertex)))))) 0 1))
+
 (defn aggregate-select
   [g]
   (f/simple-collect
    (fn [_ incoming]
      (let [res (vals (peek incoming))]
        (delay
-        (when (and (== (count res) 3) (every? #(not= #{nil} %) res))
+        (when (every? #(not= #{nil} %) res)
           (->> res
                (map #(disj % nil))
                (set)
@@ -102,8 +106,13 @@
     ;; TODO figure out way how to at to a running context
     ;; TODO remove vertices if query ID already exists
     (let [{:keys [subj pred obj]} indices
-          acc (f/add-vertex! g {:val {}          ::f/collect-fn collect-select})
-          res (f/add-vertex! g {:val (delay nil) ::f/collect-fn (aggregate-select g)})]
+          acc (f/add-vertex!
+               g {:val {}
+                  ::f/collect-fn collect-select})
+          res (f/add-vertex!
+               g {:val (delay nil)
+                  ::f/collect-fn (aggregate-select g)
+                  ::f/score-collect-fn score-aggregate-select})]
       (f/add-edge! g subj acc signal-select [0 s])
       (f/add-edge! g pred acc signal-select [1 p])
       (f/add-edge! g obj  acc signal-select [2 o])
@@ -119,7 +128,9 @@
     [_ id query production]
     (let [qid (keyword (str "inf-" (name id)))
           q   (add-query _ qid query)
-          inf (f/add-vertex! g {:val #{} ::f/collect-fn (collect-inference _ production)})]
+          inf (f/add-vertex!
+               g {:val #{}
+                  ::f/collect-fn (collect-inference _ production)})]
       (f/add-edge! g (:result q) inf f/signal-forward nil)
       {:query q :inf inf}))
   )
