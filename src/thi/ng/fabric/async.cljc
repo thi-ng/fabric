@@ -35,12 +35,12 @@
   (notify! [_ evt])
   (include-vertex! [_ v]))
 
-(defn simple-collect
+(defn collect-pure
   [collect-fn]
   (fn [vertex]
     (swap! (:state vertex) #(update % :val collect-fn (::uncollected %)))))
 
-(def default-collect (simple-collect into))
+(def default-collect (collect-pure into))
 
 (defn signal-forward
   [vertex _] @vertex)
@@ -274,7 +274,8 @@
         (when (should-signal? v s-thresh)
           (signal! v))
         _)
-      (execute! [_]
+      (execute!
+        [_]
         (if-not (realized? result)
           (let [t0 (System/nanoTime)]
             (go
@@ -335,7 +336,7 @@ overlap=scale;
   [vertex dist] (if-let [v @vertex] (+ dist v)))
 
 (def collect-sssp
-  (simple-collect
+  (collect-pure
    (fn [val uncollected]
      (if val (reduce min val uncollected) (reduce min uncollected)))))
 
@@ -412,7 +413,7 @@ overlap=scale;
       [tree fir]])
 
   (def rdfs-collect
-    (simple-collect
+    (collect-pure
      (fn [val incoming]
        (reduce into val incoming))))
 
