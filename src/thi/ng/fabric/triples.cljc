@@ -26,7 +26,7 @@
 
 (defn signal-select
   [vertex [idx sel]]
-  [idx (if sel (@vertex sel [nil]) (->> @vertex vals (eduction (mapcat identity))))])
+  [idx (if sel (@vertex sel [nil]) (->> @vertex vals (mapcat identity)))])
 
 (def collect-select
   (f/simple-collect
@@ -39,7 +39,7 @@
    (fn [_ incoming]
      (let [res (vals (peek incoming))]
        (delay
-        (when (and (seq res) (every? #(not= #{nil} %) res))
+        (when (and (== (count res) 3) (every? #(not= #{nil} %) res))
           (->> res
                (map #(disj % nil))
                (set)
@@ -121,7 +121,7 @@
           q   (add-query _ qid query)
           inf (f/add-vertex! g {:val #{} ::f/collect-fn (collect-inference _ production)})]
       (f/add-edge! g (:result q) inf f/signal-forward nil)
-      inf))
+      {:query q :inf inf}))
   )
 
 (defn triple-graph
@@ -141,53 +141,35 @@
            g {::f/collect-fn
               (f/simple-collect
                (fn [val in]
-                 ;;(debug :updated-result (pr-str @(peek in)))
+                 (debug :updated-result (pr-str @(peek in)))
                  (count @(peek in))))})]
     (f/add-edge! g src v f/signal-forward nil)
     v))
 
-#_(defn select
-  [g s p o]
-  (let [acc (f/add-vertex! g {:val {} ::f/collect-fn collect-select})
-        ctx (f/async-context
-             {:graph     g
-              :processor f/eager-vertex-processor})]
-    (f/add-edge! g s-idx acc f/signal-select [0 s])
-    (f/add-edge! g p-idx acc f/signal-select [1 p])
-    (f/add-edge! g o-idx acc f/signal-select [2 o])
-    (info @(f/execute! ctx))
-    (f/disconnect-vertex! s-idx acc)
-    (f/disconnect-vertex! p-idx acc)
-    (f/disconnect-vertex! o-idx acc)
-    (f/remove-vertex! g acc)
-    (let [res (vals @acc)]
-      (info :res res)
-      (when-not (some #(= #{:void} %) res)
-        (->> res
-             (map #(disj % :void))
-             (set)
-             (sort-by count)
-             (#(do (info :sorted %) %))
-             (reduce set/intersection)
-             (map #(deref (f/vertex-for-id g %))))))))
+(defn start
+  []
+  (let [g (triple-graph (f/compute-graph))
+        toxi (:result (add-query g :toxi ['toxi nil nil]))
+        types (:result (add-query g :types [nil 'type nil]))
+        projects (:result (add-query g :projects [nil 'type 'project]))
+        all (:result (add-query g :all [nil nil nil]))
+        num-projects (add-counter g projects)
+        num-types (add-counter g types)
+        inf1 (add-rule g :knows [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]]))
 
-(def g (triple-graph (f/compute-graph)))
-(def toxi (:result (add-query g :toxi ['toxi nil nil])))
-(def types (:result (add-query g :types [nil 'type nil])))
-(def projects (:result (add-query g :projects [nil 'type 'project])))
-(def all (:result (add-query g :all [nil nil nil])))
-
-;;(def num-projects (add-counter g projects))
-;;(def num-types (add-counter g types))
-
-(def inf1 (add-rule g :knows [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]])))
-
-(def ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil}))
-(f/execute! ctx)
-
-(def triples
-  (mapv
-   #(add-triple g %)
-   '[[toxi author fabric]
-     [fabric type project]
-     [toxi type person]]))
+        ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
+    (f/execute! ctx)
+    (mapv
+     #(add-triple g %)
+     '[[toxi author fabric]
+       [fabric type project]
+       [toxi type person]])
+    (info :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
+    {:g   g
+     :ctx ctx
+     :all all
+     :toxi toxi
+     :types types
+     :projects projects
+     :num-projects num-projects
+     :num-types num-types}))
