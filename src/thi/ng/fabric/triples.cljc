@@ -1,8 +1,11 @@
 (ns thi.ng.fabric.triples
+  #?(:cljs
+     (:require-macros
+      [cljs-log.core :refer [debug info warn]]))
   (:require
-   [thi.ng.fabric.async :as f]
+   [thi.ng.fabric.core :as f]
    [clojure.set :as set]
-   [taoensso.timbre :refer [debug info warn error]]))
+   #?(:clj [taoensso.timbre :refer [debug info warn]])))
 
 (defprotocol ITripleGraph
   (add-triple! [_ t])
@@ -309,6 +312,8 @@
     (f/add-edge! g src v f/signal-forward nil)
     v))
 
+#?(:clj (taoensso.timbre/set-level! :warn))
+
 (defn start
   []
   (let [g (triple-graph (f/compute-graph))
@@ -320,23 +325,24 @@
         num-projects (add-counter! g projects)
         num-types (add-counter! g types)
         _ (add-rule!
-              g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
-              (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
+           g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
+           (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
         _ (add-rule!
-              g :domain '[[?a ?prop nil] [?prop domain ?d]]
-              (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
+           g :domain '[[?a ?prop nil] [?prop domain ?d]]
+           (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
         _ (add-rule!
-              g :range '[[nil ?prop ?a] [?prop range ?r]]
-              (fn [{:syms [?a ?prop ?r]}] [[?a 'type ?r]]))
+           g :range '[[nil ?prop ?a] [?prop range ?r]]
+           (fn [{:syms [?a ?prop ?r]}] [[?a 'type ?r]]))
         _ (add-rule!
-              g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
-              (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
+           g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+           (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
         _ (add-rule!
-              g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
-              (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
+           g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+           (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
-        ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
+        tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))
+        ctx (f/execution-context {:graph g :timeout nil})]
     (f/execute! ctx)
     (mapv
      #(add-triple! g %)
@@ -361,6 +367,7 @@
      :projects projects
      :pq       pq
      :jq       jq
+     :tq       tq
      :num-projects num-projects
      :num-types num-types
      }))
