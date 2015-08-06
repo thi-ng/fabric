@@ -325,6 +325,12 @@
         inf2 (add-rule!
               g :domain '[[?a ?prop nil] [?prop domain ?d]]
               (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
+        inf3 (add-rule!
+              g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+              (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
+        inf3 (add-rule!
+              g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+              (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
@@ -336,6 +342,8 @@
        [knows type symmetric-prop]
        [knows domain person]
        [author domain person]
+       [parent sub-prop-of ancestor]
+       [ancestor type transitive-prop]
        ;;[noah knows toxi]
        ])
     ;;(debug :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
