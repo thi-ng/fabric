@@ -189,7 +189,7 @@
       v))
   (remove-vertex! [_ v]
     (when (remove-vertex! g v)
-      (go (>! log-chan [:remove-vertex (:id v)]))
+      (go (>! log-chan [:remove-vertex (:id v) @v]))
       true))
   (vertex-for-id
     [_ id] (vertex-for-id g id))
@@ -204,7 +204,8 @@
   [] (InMemoryGraph. (atom {:vertices {} :next-id 0})))
 
 (defn logged-compute-graph
-  [log-chan] (LoggedGraph. (compute-graph) log-chan))
+  ([log-chan] (LoggedGraph. (compute-graph) log-chan))
+  ([g log-chan] (LoggedGraph. g log-chan)))
 
 (defn eager-vertex-processor
   [{:keys [id] :as vertex} ctx]
