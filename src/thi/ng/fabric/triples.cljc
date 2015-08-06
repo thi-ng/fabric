@@ -183,6 +183,17 @@
      more)
     (add-param-query! g (keyword (gensym)) a)))
 
+(defn add-query-filter!
+  [g q-vertex flt]
+  (let [fv (f/add-vertex!
+            g {:val (delay nil)
+               ::f/collect-fn
+               (f/collect-pure
+                (fn [_ incoming]
+                  (delay (sequence (comp (mapcat deref) (filter flt)) incoming))))})]
+    (f/add-edge! g q-vertex fv f/signal-forward nil)
+    fv))
+
 (defn collect-inference
   [g production]
   (fn [vertex]
@@ -308,10 +319,12 @@
         all (:result (add-query! g :all [nil nil nil]))
         num-projects (add-counter! g projects)
         num-types (add-counter! g types)
-        inf1 (add-rule! g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
-                        (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
-        inf2 (add-rule! g :domain '[[?a ?prop nil] [?prop domain ?d]]
-                        (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
+        inf1 (add-rule!
+              g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
+              (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
+        inf2 (add-rule!
+              g :domain '[[?a ?prop nil] [?prop domain ?d]]
+              (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
