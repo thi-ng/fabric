@@ -173,13 +173,15 @@
 
 (defn add-join-query!
   [g [a b & more]]
-  (reduce
-   (fn [acc p]
-     (add-join! g acc (add-param-query! g (keyword (gensym)) p)))
-   (add-join! g
-             (add-param-query! g (keyword (gensym)) a)
-             (add-param-query! g (keyword (gensym)) b))
-   more))
+  (if b
+    (reduce
+     (fn [acc p]
+       (add-join! g acc (add-param-query! g (keyword (gensym)) p)))
+     (add-join! g
+                (add-param-query! g (keyword (gensym)) a)
+                (add-param-query! g (keyword (gensym)) b))
+     more)
+    (add-param-query! g (keyword (gensym)) a)))
 
 (defn collect-inference
   [g production]
@@ -266,12 +268,11 @@
     [_ id] (when-let [q (@queries id)] @@(:res q)))
   (add-rule!
     [_ id query production]
-    (let [qid (keyword (str "inf-" (name id)))
-          q   (add-query! _ qid query)
+    (let [q   (add-join-query! _ query)
           inf (f/add-vertex!
                g {:val #{}
                   ::f/collect-fn (collect-inference _ production)})]
-      (f/add-edge! g (:result q) inf f/signal-forward nil)
+      (f/add-edge! g (:qvar-result q) inf f/signal-forward nil)
       {:query q :inf inf}))
   )
 
@@ -307,7 +308,10 @@
         all (:result (add-query! g :all [nil nil nil]))
         num-projects (add-counter! g projects)
         num-types (add-counter! g types)
-        inf1 (add-rule! g :knows [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]]))
+        inf1 (add-rule! g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
+                        (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
+        inf2 (add-rule! g :domain '[[?a ?prop nil] [?prop domain ?d]]
+                        (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
@@ -316,7 +320,11 @@
      #(add-triple! g %)
      '[[toxi author fabric]
        [fabric type project]
-       [toxi type person]])
+       [knows type symmetric-prop]
+       [knows domain person]
+       [author domain person]
+       ;;[noah knows toxi]
+       ])
     ;;(debug :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
     {:g        g
      :ctx      ctx
