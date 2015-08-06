@@ -19,7 +19,7 @@
   [spo]
   (f/collect-pure
    (fn [val incoming]
-     ;;(info :update-index spo incoming)
+     ;;(debug :update-index spo incoming)
      (transduce
       (map (fn [[op id t]] [op id (nth t spo)]))
       (completing
@@ -43,7 +43,7 @@
   (f/collect-pure
    (fn [val incoming]
      (let [val (reduce (fn [acc [idx res]] (assoc acc idx res)) val incoming)]
-       ;;(info :coll-select val incoming)
+       ;;(debug :coll-select val incoming)
        val))))
 
 (defn score-collect-min-signal-vals
@@ -61,7 +61,7 @@
   (f/collect-pure
    (fn [_ incoming]
      (let [res (vals (peek incoming))]
-       ;;(info :agg-incoming res)
+       ;;(debug :agg-incoming res)
        (delay
         (when (every? #(not= [nil] %) res)
           (->> res
@@ -163,11 +163,10 @@
                  (let [state (:state vertex)
                        a @(get-in @state [::f/signal-map (:id (:qvar-result qa))])
                        b @(get-in @state [::f/signal-map (:id (:qvar-result qb))])]
-                   (info :join-sets a b)
+                   (debug :join-sets a b)
                    (swap! state assoc :val (delay (set/join a b)))))
                ::f/score-collect-fn
                score-collect-join})]
-    (info :add-join jv :a qa :b qb)
     (f/add-edge! g (:qvar-result qa) jv f/signal-forward nil)
     (f/add-edge! g (:qvar-result qb) jv f/signal-forward nil)
     {:a qa :b qb :qvar-result jv}))
@@ -195,7 +194,7 @@
           inferred (mapcat production adds)]
       (debug :additions adds)
       (doseq [t inferred]
-        (info :add-triple t)
+        (debug :add-triple t)
         (add-triple! g t))
       (swap! (:state vertex) update :val set/union in (set inferred)))))
 
@@ -318,7 +317,7 @@
      '[[toxi author fabric]
        [fabric type project]
        [toxi type person]])
-    ;;(info :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
+    ;;(debug :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
     {:g        g
      :ctx      ctx
      :all      all
