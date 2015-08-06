@@ -132,7 +132,7 @@
                            (fn [r] (not= (r 1) (r 2))))
     :else                (constantly true)))
 
-(defn param-query
+(defn add-param-query!
   [g id [s p o]]
   (let [vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
         vmap       (bind-translator vs? vp? vo? s p o)
@@ -154,7 +154,7 @@
 (defn score-collect-join
   [vertex] (if (== (count (::f/signal-map @(:state vertex))) 2) 1 0))
 
-(defn add-join
+(defn add-join!
   [g qa qb]
   (let [jv (f/add-vertex!
             g {:val (delay nil)
@@ -163,19 +163,24 @@
                  (let [state (:state vertex)
                        a @(get-in @state [::f/signal-map (:id (:qvar-result qa))])
                        b @(get-in @state [::f/signal-map (:id (:qvar-result qb))])]
-                   ;;(info :join-sets a b)
+                   (info :join-sets a b)
                    (swap! state assoc :val (delay (set/join a b)))))
                ::f/score-collect-fn
                score-collect-join})]
+    (info :add-join jv :a qa :b qb)
     (f/add-edge! g (:qvar-result qa) jv f/signal-forward nil)
     (f/add-edge! g (:qvar-result qb) jv f/signal-forward nil)
-    {:a qa :b qb :join jv}))
+    {:a qa :b qb :qvar-result jv}))
 
-(defn add-join-query
-  [g a b]
-  (add-join g
-            (param-query g (keyword (gensym)) a)
-            (param-query g (keyword (gensym)) b)))
+(defn add-join-query!
+  [g [a b & more]]
+  (reduce
+   (fn [acc p]
+     (add-join! g acc (add-param-query! g (keyword (gensym)) p)))
+   (add-join! g
+             (add-param-query! g (keyword (gensym)) a)
+             (add-param-query! g (keyword (gensym)) b))
+   more))
 
 (defn collect-inference
   [g production]
@@ -257,7 +262,7 @@
       (f/signal! pred)
       (f/signal! obj)
       (swap! queries assoc id {:acc acc :result res})
-      {:acc acc :result res}))
+      {:pattern [s p o] :acc acc :result res}))
   (query-result
     [_ id] (when-let [q (@queries id)] @@(:res q)))
   (add-rule!
@@ -304,8 +309,8 @@
         num-projects (add-counter! g projects)
         num-types (add-counter! g types)
         inf1 (add-rule! g :knows [nil 'knows nil] (fn [[s p o]] [[s 'type 'person] [o 'type 'person] [o 'knows s]]))
-        pq (:qvar-result (param-query g :pq '[?s knows ?o]))
-        jq (:join (add-join-query g '[?p author ?prj] '[?prj type project]))
+        pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
+        jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         ctx (f/async-context {:graph g :processor f/eager-vertex-processor :timeout nil})]
     (f/execute! ctx)
     (mapv
@@ -313,15 +318,16 @@
      '[[toxi author fabric]
        [fabric type project]
        [toxi type person]])
-    (info :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
-    {:g   g
-     :ctx ctx
-     :all all
-     :toxi toxi
-     :types types
-     :knows knows
+    ;;(info :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
+    {:g        g
+     :ctx      ctx
+     :all      all
+     :toxi     toxi
+     :types    types
+     :knows    knows
      :projects projects
-     :pq pq
-     :jq jq
+     :pq       pq
+     :jq       jq
      :num-projects num-projects
-     :num-types num-types}))
+     :num-types num-types
+     }))
