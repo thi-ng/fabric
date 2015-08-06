@@ -1,11 +1,16 @@
 (ns thi.ng.fabric.test.sssp
+  #?(:cljs
+     (:require-macros
+      [cljs.core.async.macros :refer [go go-loop]]))
   (:require
    [thi.ng.fabric.core :as f]
    [thi.ng.fabric.utils :as fu]
-   #?(:clj
-      [clojure.test :refer :all]
+   #?@(:clj
+       [[clojure.test :refer :all]
+        [clojure.core.async :refer [go go-loop chan close! <! <!! >!]]]
       :cljs
-      [cemerick.cljs.test :refer-macros [is deftest with-test testing]])))
+      [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
+       [cljs.core.async :refer [chan close! <! >! take!]]])))
 
 #?(:clj (taoensso.timbre/set-level! :warn))
 
@@ -55,22 +60,35 @@
            (doall)))
     g))
 
-(deftest test-sssp-simple
-  (let [g (sssp-test-graph (f/compute-graph) '[[a b] [b c] [c d] [a e] [d f] [e f]])]
+(deftest ^:async test-sssp-simple
+  (let [g (sssp-test-graph (f/compute-graph) '[[a b] [b c] [c d] [a e] [d f] [e f]])
+        notify (chan)]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/sorted-vertex-values (f/vertices g))))
-    (is (= :converged (:type @(f/execute! (f/execution-context {:graph g})))))
-    (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (fu/sorted-vertex-values (f/vertices g))))))
+    (go
+      (let [res (<! (f/execute! (f/execution-context {:graph g})))]
+        (is (= :converged (:type res)))
+        (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (fu/sorted-vertex-values (f/vertices g))))
+        (>! notify :ok)))
+    #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
-(deftest test-sssp-weighted
-  (let [g (sssp-test-graph (f/compute-graph) '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])]
+(deftest ^:async test-sssp-weighted
+  (let [g (sssp-test-graph (f/compute-graph) '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])
+        notify (chan)]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/sorted-vertex-values (f/vertices g))))
-    (is (= :converged (:type @(f/execute! (f/execution-context {:graph g})))))
-    (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (fu/sorted-vertex-values (f/vertices g))))))
+    (go
+      (let [res (<! (f/execute! (f/execution-context {:graph g})))]
+        (is (= :converged (:type res)))
+        (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (fu/sorted-vertex-values (f/vertices g))))
+        (>! notify :ok)))
+    #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
-(deftest test-sssp-random
-  (let [g (sssp-random-graph (f/compute-graph) 10000 20000 3)
-        ctx (f/execution-context {:graph g :bus-size 64 :timeout 100})
-        res @(f/execute! ctx)]
-    (prn res)
-    (is (= :converged (:type res)))
-    (is (< 12 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))))
+(deftest ^:async test-sssp-random
+  (let [g (sssp-random-graph (f/compute-graph) 1000 2000 3)
+        notify (chan)]
+    (go
+      (let [res (<! (f/execute! (f/execution-context {:graph g :bus-size 64 :timeout 100})))]
+        (prn res)
+        (is (= :converged (:type res)))
+        (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))
+        (>! notify :ok)))
+    #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))

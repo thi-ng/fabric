@@ -1,12 +1,18 @@
 (ns thi.ng.fabric.triples
-  #?(:cljs
-     (:require-macros
-      [cljs-log.core :refer [debug info warn]]))
-  (:require
-   [thi.ng.fabric.core :as f]
-   [clojure.set :as set]
-   [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
-   #?(:clj [taoensso.timbre :refer [debug info warn]])))
+  #?@(:clj
+      [(:require
+        [thi.ng.fabric.core :as f]
+        [clojure.set :as set]
+        [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
+        [taoensso.timbre :refer [debug info warn]])]
+      :cljs
+      [(:require-macros
+        [cljs.core.async.macros :refer [go go-loop]]
+        [cljs-log.core :refer [debug info warn]])
+       (:require
+        [thi.ng.fabric.core :as f]
+        [clojure.set :as set]
+        [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
 (defprotocol ITripleGraph
   (add-triple! [_ t])
@@ -97,24 +103,6 @@
       (if vo?
         (fn [r] {o (r 2)})
         (fn [_] {})))))
-
-(defn pattern-translator
-  [vs? vp? vo? [s p o]]
-  (if (qvar? vs? s)
-    (if (qvar? vp? p)
-      (if (qvar? vo? o)
-        (fn [p] [nil nil nil])
-        (fn [p] [nil nil (p 2)]))
-      (if (qvar? vo? o)
-        (fn [p] [nil (p 1) nil])
-        (fn [p] (assoc p 0 nil))))
-    (if (qvar? vp? p)
-      (if (qvar? vo? o)
-        (fn [p] [(p 0) nil nil])
-        (fn [p] (assoc p 1 nil)))
-      (if (qvar? vo? o)
-        (fn [p] (assoc p 2 nil))
-        identity))))
 
 (defn triple-verifier
   [ts tp to vars varp varo]
@@ -316,26 +304,28 @@
 
 #?(:clj (taoensso.timbre/set-level! :warn))
 
-(defn triple-logger
-  [path]
-  (let [ch (->> (comp
-                 (filter
-                  (fn [[op id val]]
-                    (and (#{:add-vertex :remove-vertex} op) (vector? val))))
-                 (map
-                  (fn [[op _ t]] [({:add-vertex :+ :remove-vertex :-} op) t])))
-                (chan 1024))]
-    (go-loop []
-      (let [t (<! ch)]
-        (when t
-          (spit path (str (pr-str t) "\n") :append true)
-          (recur))))
-    ch))
+#?(:clj
+   (defn triple-logger
+     [path]
+     (let [ch (->> (comp
+                    (filter
+                     (fn [[op id val]]
+                       (and (#{:add-vertex :remove-vertex} op) (vector? val))))
+                    (map
+                     (fn [[op _ t]] [({:add-vertex :+ :remove-vertex :-} op) t])))
+                   (chan 1024))]
+       (go-loop []
+         (let [t (<! ch)]
+           (when t
+             (spit path (str (pr-str t) "\n") :append true)
+             (recur))))
+       ch)))
 
-(defn start
+(defn ^:export start
   []
-  (let [log (triple-logger "triple-log.edn")
-        g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
+  (let [;;log (triple-logger "triple-log.edn")
+        ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
+        g (triple-graph (f/compute-graph))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
@@ -377,6 +367,7 @@
        [ancestor range person]
        ;;[noah knows toxi]
        ])
+    ;;(go (<! (timeout 500)) (warn @@all))
     {:g        g
      :ctx      ctx
      :all      all

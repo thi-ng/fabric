@@ -1,10 +1,14 @@
 (ns thi.ng.fabric.core
-  #?(:cljs
-     (:require-macros
-      [cljs-log.core :refer [debug info warn]]))
-  (:require
-   [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
-   #?(:clj [taoensso.timbre :refer [debug info warn]])))
+  #?@(:clj
+      [(:require
+        [taoensso.timbre :refer [debug info warn]]
+        [clojure.core.async :refer [go go-loop chan close! <! >! alts! timeout]])]
+      :cljs
+      [(:require-macros
+        [cljs.core.async.macros :refer [go go-loop]]
+        [cljs-log.core :refer [debug info warn]])
+       (:require
+        [cljs.core.async :as a :refer [chan close! <! >! alts! timeout]])]))
 
 ;; #?(:clj (taoensso.timbre/set-level! :warn))
 
@@ -74,9 +78,14 @@
    ::input-channel-fn chan})
 
 (defrecord Vertex [id state last-sig-state in outs]
-  clojure.lang.IDeref
-  (deref
-    [_] (:val @state))
+  #?@(:clj
+       [clojure.lang.IDeref
+        (deref
+         [_] (:val @state))]
+       :cljs
+       [IDeref
+        (-deref
+         [_] (:val @state))])
   IVertex
   (set-value!
     [_ val] (swap! state assoc :val val) (signal! _) _)
@@ -91,23 +100,23 @@
     [_] ((::score-collect-fn @state) _))
   (connect-to!
     [_ v sig-fn opts]
-    (debug (format "%d connecting to %d (%s)" id (:id v) (pr-str opts)))
+    (debug id "connecting to" (:id v) "(" (pr-str opts) ")")
     (swap! outs assoc v [sig-fn opts]) _)
   (connected-vertices
     [_] (keys @outs))
   (disconnect-vertex!
     [_ v]
-    (debug (format "%d disconnecting from %d" id (:id v)))
+    (debug id "disconnecting from" (:id v))
     (swap! outs dissoc v)
     _)
   (disconnect-all!
     [_] (run! #(disconnect-vertex! _ %) (keys @outs)) _)
   (close-input! [_]
     (if @in
-      (do #_(debug (str id " closing..."))
+      (do #_(debug id "closing...")
           (close! @in)
           (reset! in nil))
-      (warn (str id " already closed")))
+      (warn id "already closed"))
     _)
   (input-channel
     [_] (or @in (reset! in ((::input-channel-fn @state)))))
@@ -123,7 +132,7 @@
             (let [signal (f _ opts)]
               (if-not (nil? signal)
                 (>! (input-channel v) [id signal])
-                (warn (format "signal fn for %d returned nil, skipping..." (:id v)))))
+                (warn "signal fn for" (:id v) "returned nil, skipping...")))
             (recur (next outs)))))
       _))
   (receive-signal
@@ -214,27 +223,31 @@
     (go-loop []
       (let [[src-id sig] (<! in)]
         (if sig
-          (do (debug (format "%d receive from %d: %s" id src-id (pr-str sig)))
+          (do (debug id "receive from" src-id ":" (pr-str sig))
               (receive-signal vertex src-id sig)
               (when (should-collect? vertex collect-thresh)
                 (notify! ctx [:collect id])
                 (collect! vertex)
-                ;;(debug (format "%d post-collection: %s" id (pr-str @vertex)))
+                ;;(debug id "post-collection:" (pr-str @vertex))
                 (when (should-signal? vertex signal-thresh)
                   (notify! ctx [:signal id])
                   (signal! vertex)))
               (recur))
-          #_(debug (str id " stopped")))))
+          ;;(debug id " stopped")
+          )))
     vertex))
 
+(defn- now [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
+
 (defn execution-result
-  [type p colls sigs t0 & [opts]]
-  (->> {:collections colls
-        :signals     sigs
-        :type        type
-        :runtime     (* (- (System/nanoTime) t0) 1e-6)}
-       (merge opts)
-       (deliver p)))
+  [type out colls sigs t0 & [opts]]
+  (go
+    (>! out
+        (->> {:collections colls
+              :signals     sigs
+              :type        type
+              :runtime     #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0))}
+             (merge opts)))))
 
 (defn stop-execution
   [bus vertices]
@@ -253,16 +266,20 @@
   [opts]
   (let [ctx       (merge default-context-opts opts)
         bus       (vec (repeatedly (:bus-size ctx) chan))
-        ctx       (assoc ctx :bus bus)
+        ctx       (assoc ctx :bus bus :result (or (:result ctx) (chan)))
         processor (:processor ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
         max-ops   (:max-ops ctx)
         max-t     (:timeout ctx)
-        result    (promise)]
+        result    (:result ctx)]
     (reify
-      clojure.lang.IDeref
-      (deref [_] ctx)
+      #?@(:clj
+           [clojure.lang.IDeref
+            (deref [_] ctx)]
+           :cljs
+           [IDeref
+            (-deref [_] ctx)])
       IGraphExecutor
       (stop!
         [_]
@@ -280,34 +297,32 @@
         _)
       (execute!
         [_]
-        (if-not (realized? result)
-          (let [t0 (System/nanoTime)]
-            (go
-              (run! #(include-vertex! _ %) (vertices (:graph ctx)))
-              (loop [colls 0 sigs 0]
-                (if (<= (+ colls sigs) max-ops)
-                  (let [t (if max-t (timeout max-t))
-                        [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
-                    (if (= port t)
-                      (do (stop! _)
-                          (execution-result :converged result colls sigs t0))
-                      (case evt
-                        :collect (recur (inc colls) sigs)
-                        :signal  (recur colls (inc sigs))
-                        :error   (do (warn ex "@ vertex" v)
-                                     (stop! _)
-                                     (execution-result
-                                      :error result colls sigs t0
-                                      {:reason           :error
-                                       :reason-event     evt
-                                       :reason-exception ex
-                                       :reason-vertex    v}))
-                        (do (warn "execution interrupted")
-                            (execution-result
-                             :interrupted result colls sigs t0
-                             {:reason        :unknown
-                              :reason-event  evt
-                              :reason-vertex v})))))
-                  (execution-result :terminated result colls sigs t0))))
-            result)
-          (throw (IllegalStateException. "Context already executed once")))))))
+        (let [t0 (now)]
+          (go
+            (run! #(include-vertex! _ %) (vertices (:graph ctx)))
+            (loop [colls 0 sigs 0]
+              (if (<= (+ colls sigs) max-ops)
+                (let [t (if max-t (timeout max-t))
+                      [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
+                  (if (= port t)
+                    (do (stop! _)
+                        (execution-result :converged result colls sigs t0))
+                    (case evt
+                      :collect (recur (inc colls) sigs)
+                      :signal  (recur colls (inc sigs))
+                      :error   (do (warn ex "@ vertex" v)
+                                   (stop! _)
+                                   (execution-result
+                                    :error result colls sigs t0
+                                    {:reason           :error
+                                     :reason-event     evt
+                                     :reason-exception ex
+                                     :reason-vertex    v}))
+                      (do (warn "execution interrupted")
+                          (execution-result
+                           :interrupted result colls sigs t0
+                           {:reason        :terminated
+                            :reason-event  evt
+                            :reason-vertex v})))))
+                (execution-result :max-ops-reached result colls sigs t0))))
+          result)))))
