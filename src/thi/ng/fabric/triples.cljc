@@ -319,16 +319,19 @@
         all (:result (add-query! g :all [nil nil nil]))
         num-projects (add-counter! g projects)
         num-types (add-counter! g types)
-        inf1 (add-rule!
+        _ (add-rule!
               g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
               (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
-        inf2 (add-rule!
+        _ (add-rule!
               g :domain '[[?a ?prop nil] [?prop domain ?d]]
               (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
-        inf3 (add-rule!
+        _ (add-rule!
+              g :range '[[nil ?prop ?a] [?prop range ?r]]
+              (fn [{:syms [?a ?prop ?r]}] [[?a 'type ?r]]))
+        _ (add-rule!
               g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
               (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
-        inf3 (add-rule!
+        _ (add-rule!
               g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
               (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
@@ -338,15 +341,17 @@
     (mapv
      #(add-triple! g %)
      '[[toxi author fabric]
-       [fabric type project]
+       ;;[fabric type project]
        [knows type symmetric-prop]
        [knows domain person]
        [author domain person]
+       [author range creative-work]
        [parent sub-prop-of ancestor]
        [ancestor type transitive-prop]
+       [ancestor domain person]
+       [ancestor range person]
        ;;[noah knows toxi]
        ])
-    ;;(debug :inf-vertices (get-in inf1 [:query :result :id]) (get-in inf1 [:inf :id]))
     {:g        g
      :ctx      ctx
      :all      all
