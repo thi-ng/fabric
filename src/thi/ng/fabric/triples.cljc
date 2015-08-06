@@ -5,6 +5,7 @@
   (:require
    [thi.ng.fabric.core :as f]
    [clojure.set :as set]
+   [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
    #?(:clj [taoensso.timbre :refer [debug info warn]])))
 
 (defprotocol ITripleGraph
@@ -255,6 +256,7 @@
         (f/add-edge! g v obj  signal-triple :remove)
         (f/signal! v)
         (swap! triples dissoc t)
+        (f/remove-vertex! g v)
         v)
       (warn "attempting to remove unknown triple:" t)))
   (add-query!
@@ -314,9 +316,26 @@
 
 #?(:clj (taoensso.timbre/set-level! :warn))
 
+(defn triple-logger
+  [path]
+  (let [ch (->> (comp
+                 (filter
+                  (fn [[op id val]]
+                    (and (#{:add-vertex :remove-vertex} op) (vector? val))))
+                 (map
+                  (fn [[op _ t]] [({:add-vertex :+ :remove-vertex :-} op) t])))
+                (chan 1024))]
+    (go-loop []
+      (let [t (<! ch)]
+        (when t
+          (spit path (str (pr-str t) "\n") :append true)
+          (recur))))
+    ch))
+
 (defn start
   []
-  (let [g (triple-graph (f/compute-graph))
+  (let [log (triple-logger "triple-log.edn")
+        g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
