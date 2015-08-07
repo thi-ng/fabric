@@ -351,12 +351,33 @@
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))
-        ctx (f/execution-context {:graph g :timeout nil})]
-    (f/execute! ctx)
+        ctx (f/execution-context {:graph g :timeout 10})
+        ctx-chan (f/execute! ctx)]
+    (go []
+        (let [res (<! ctx-chan)]
+          (warn :result res)
+          (warn (sort @@all))
+          (add-triple! g '[toxi parent noah])
+          (add-triple! g '[ingo parent toxi])
+          (add-triple! g '[geom type project])
+          (add-triple! g '[toxi author geom])
+          (add-triple! g '[toxi knows noah])
+          (add-triple! g '[geom tag clojure])
+          (add-triple! g '[fabric tag clojure])
+          (loop []
+            (let [res (<! ctx-chan)]
+              (warn :result res)
+              (when (= :converged (:type res))
+                (warn (sort @@all))
+                (warn @@pq)
+                (warn @@jq)
+                (warn @@tq)
+                (f/stop! ctx)
+                (recur))))))
     (mapv
      #(add-triple! g %)
      '[[toxi author fabric]
-       ;;[fabric type project]
+       [fabric type project]
        [knows type symmetric-prop]
        [knows domain person]
        [author domain person]
@@ -367,7 +388,6 @@
        [ancestor range person]
        ;;[noah knows toxi]
        ])
-    ;;(go (<! (timeout 500)) (warn @@all))
     {:g        g
      :ctx      ctx
      :all      all
