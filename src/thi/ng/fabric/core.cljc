@@ -16,7 +16,7 @@
 
 ;; #?(:clj (taoensso.timbre/set-level! :warn))
 
-;;(warn :free-ram (.freeMemory (Runtime/getRuntime)))
+;; (warn :free-ram (.freeMemory (Runtime/getRuntime)))
 
 (defprotocol IVertex
   (connect-to! [_ v sig-fn edge-opts])
@@ -119,9 +119,9 @@
          [_] @value)])
   IVertex
   (set-value!
-    [_ val] (reset! value val) (signal! _) _)
+    [_ val] (reset! value val) #_(signal! _) _)
   (update-value!
-    [_ f] (swap! value f) (signal! _) _)
+    [_ f] (swap! value f) #_(signal! _) _)
   (collect!
     [_]
     ((::collect-fn @state) _)
@@ -261,7 +261,7 @@
                 ;;(debug id "post-collection:" (pr-str @vertex))
                 (when (should-signal? vertex signal-thresh)
                   (notify! ctx [:signal id])
-                  (signal! vertex)))
+                  (signal! vertex async-vertex-signal)))
               (recur))
           ;;(debug id " stopped")
           )))
@@ -326,7 +326,7 @@
         (when (should-collect? v c-thresh)
           (collect! v))
         (when (should-signal? v s-thresh)
-          (signal! v))
+          (signal! v async-vertex-signal))
         _)
       (execute!
         [_]
@@ -365,7 +365,8 @@
     (if verts
       (let [v (first verts)]
         (if (should-signal? v thresh)
-          (do (signal! v sync-vertex-signal)
+          (do (debug (:id v) "signaling")
+              (signal! v sync-vertex-signal)
               (recur (inc sigs) (next verts)))
           (recur sigs (next verts))))
       sigs)))
@@ -376,7 +377,8 @@
     (if verts
       (let [v (first verts)]
         (if (should-collect? v thresh)
-          (do (collect! v)
+          (do (debug (:id v) "collecting")
+              (collect! v)
               (recur (inc colls) (next verts)))
           (recur colls (next verts))))
       colls)))
@@ -427,11 +429,11 @@
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
-        (let [t0 (now)
-              verts (vertices (:graph ctx))]
+        (let [t0 (now)]
           (loop [i 0, colls 0, sigs 0]
             (if (<= i max-iter)
-              (let [sigs' (sig-fn verts s-thresh)
+              (let [verts (vertices (:graph ctx))
+                    sigs' (sig-fn verts s-thresh)
                     colls' (coll-fn verts c-thresh)]
                 (if (and (pos? sigs') (pos? colls'))
                   (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
