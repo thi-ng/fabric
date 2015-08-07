@@ -13,6 +13,7 @@
                  [org.clojure/clojurescript "1.7.48"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
                  [com.taoensso/timbre "4.0.2"]
+                 [thi.ng/xerror "0.1.0"]
                  [cljs-log "0.2.1"]]
 
   :profiles     {:dev {:dependencies [[criterium "0.4.3"]]

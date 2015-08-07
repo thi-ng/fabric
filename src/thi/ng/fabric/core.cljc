@@ -1,6 +1,7 @@
 (ns thi.ng.fabric.core
   #?@(:clj
       [(:require
+        [thi.ng.xerror.core :as err]
         [taoensso.timbre :refer [debug info warn]]
         [clojure.core.reducers :as r]
         [clojure.core.async :refer [go go-loop chan close! <! >! alts! timeout]])]
@@ -9,6 +10,7 @@
         [cljs.core.async.macros :refer [go go-loop]]
         [cljs-log.core :refer [debug info warn]])
        (:require
+        [thi.ng.xerror.core :as err]
         [clojure.core.reducers :as r]
         [cljs.core.async :as a :refer [chan close! <! >! alts! timeout]])]))
 
@@ -400,7 +402,7 @@
 (def default-sync-context-opts
   {:collect-thresh 0
    :signal-thresh  0
-   :max-ops        1e6
+   :max-iter       1e6
    :signal-fn      sync-signal-vertices
    :collect-fn     sync-collect-vertices})
 
@@ -411,7 +413,7 @@
         s-thresh  (:signal-thresh ctx)
         coll-fn   (:collect-fn ctx)
         sig-fn    (:signal-fn ctx)
-        max-ops   (:max-ops ctx)]
+        max-iter  (:max-iter ctx)]
     (reify
       #?@(:clj
            [clojure.lang.IDeref
@@ -420,18 +422,18 @@
            [IDeref
             (-deref [_] ctx)])
       IGraphExecutor
-      (stop! [_])
-      (notify! [_ evt])
-      (include-vertex! [_ v])
+      (stop! [_] (err/unsupported!))
+      (notify! [_ evt] (err/unsupported!))
+      (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
         (let [t0 (now)
               verts (vertices (:graph ctx))]
-          (loop [colls 0, sigs 0]
-            (if (<= (+ colls sigs) max-ops)
+          (loop [i 0, colls 0, sigs 0]
+            (if (<= i max-iter)
               (let [sigs' (sig-fn verts s-thresh)
                     colls' (coll-fn verts c-thresh)]
                 (if (and (pos? sigs') (pos? colls'))
-                  (recur (long (+ colls colls')) (long (+ sigs sigs')))
-                  (execution-result :converged colls sigs t0)))
-              (execution-result :max-ops-reached colls sigs t0))))))))
+                  (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
+                  (execution-result :converged colls sigs t0 {:iterations i})))
+              (execution-result :max-iter-reached colls sigs t0 {:iterations i}))))))))
