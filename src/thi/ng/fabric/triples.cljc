@@ -349,7 +349,7 @@
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))
-        ctx (f/execution-context {:graph g :timeout 10})
+        ctx (f/async-execution-context {:graph g :timeout 10})
         ctx-chan (f/execute! ctx)]
     (go []
         (let [res (<! ctx-chan)]

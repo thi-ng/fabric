@@ -23,7 +23,7 @@
   (connected-vertices [_])
   (collect! [_])
   (score-collect [_])
-  (signal! [_])
+  (signal! [_] [_ handler])
   (score-signal [_])
   (receive-signal [_ src sig])
   (set-value! [_ val])
@@ -79,6 +79,19 @@
           (let [signal (f vertex opts)]
             (if-not (nil? signal)
               (>! (input-channel v) [id signal])
+              (warn "signal fn for" (:id v) "returned nil, skipping...")))
+          (recur (next outs)))))))
+
+(defn sync-vertex-signal
+  [vertex]
+  (let [id   (:id vertex)
+        outs @(:outs vertex)]
+    (loop [outs outs]
+      (let [[v [f opts]] (first outs)]
+        (when v
+          (let [signal (f vertex opts)]
+            (if-not (nil? signal)
+              (receive-signal v id signal)
               (warn "signal fn for" (:id v) "returned nil, skipping...")))
           (recur (next outs)))))))
 
@@ -140,6 +153,11 @@
     [_]
     (reset! prev-val @value)
     ((::signal-fn @state) _)
+    _)
+  (signal!
+    [_ handler]
+    (reset! prev-val @value)
+    (handler _)
     _)
   (receive-signal
     [_ src sig]
@@ -224,7 +242,7 @@
   ([log-chan] (LoggedGraph. (compute-graph) log-chan))
   ([g log-chan] (LoggedGraph. g log-chan)))
 
-(defn eager-vertex-processor
+(defn eager-async-vertex-processor
   [{:keys [id] :as vertex} ctx]
   (let [{:keys [collect-thresh signal-thresh]} @ctx
         in (input-channel vertex)]
@@ -248,32 +266,34 @@
 (defn- now [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
 
 (defn execution-result
-  [type out colls sigs t0 & [opts]]
-  (go
-    (>! out
-        (->> {:collections colls
-              :signals     sigs
-              :type        type
-              :runtime     #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0))}
-             (merge opts)))))
+  [type colls sigs t0 & [opts]]
+  (->> {:collections colls
+        :signals     sigs
+        :type        type
+        :runtime     #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0))}
+       (merge opts)))
 
-(defn stop-execution
+(defn async-execution-result
+  [type out colls sigs t0 & [opts]]
+  (go (>! out (execution-result type colls sigs t0 opts))))
+
+(defn stop-async-execution
   [bus vertices]
   (info "stopping execution context...")
   (run! close! bus)
   (run! close-input! vertices))
 
-(def default-context-opts
+(def default-async-context-opts
   {:collect-thresh 0
    :signal-thresh  0
-   :processor      eager-vertex-processor
+   :processor      eager-async-vertex-processor
    :bus-size       16
    :timeout        25
    :max-ops        1e6})
 
-(defn execution-context
+(defn async-execution-context
   [opts]
-  (let [ctx       (merge default-context-opts opts)
+  (let [ctx       (merge default-async-context-opts opts)
         bus       (vec (repeatedly (:bus-size ctx) chan))
         ctx       (assoc ctx :bus bus :result (or (:result ctx) (chan)))
         processor (:processor ctx)
@@ -292,7 +312,7 @@
       IGraphExecutor
       (stop!
         [_]
-        (stop-execution bus (vertices (:graph ctx)))
+        (stop-async-execution bus (vertices (:graph ctx)))
         result)
       (notify! [_ evt]
         (go (>! (rand-nth bus) evt)))
@@ -309,28 +329,85 @@
         (let [t0 (now)]
           (go
             (run! #(include-vertex! _ %) (vertices (:graph ctx)))
-            (loop [colls 0 sigs 0]
+            (loop [colls 0, sigs 0]
               (if (<= (+ colls sigs) max-ops)
                 (let [t (if max-t (timeout max-t))
                       [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
                   (if (= port t)
                     (if (:auto-stop ctx)
                       (do (stop! _)
-                          (execution-result :converged result colls sigs t0))
-                      (do (execution-result :converged result colls sigs t0)
+                          (async-execution-result :converged result colls sigs t0))
+                      (do (async-execution-result :converged result colls sigs t0)
                           (recur colls sigs)))
                     (case evt
                       :collect (recur (inc colls) sigs)
                       :signal  (recur colls (inc sigs))
                       :error   (do (warn ex "@ vertex" v)
                                    (when (:auto-stop ctx) (stop! _))
-                                   (execution-result
+                                   (async-execution-result
                                     :error result colls sigs t0
                                     {:reason-event     evt
                                      :reason-exception ex
                                      :reason-vertex    v}))
                       (do (warn "execution interrupted")
-                          (execution-result
+                          (async-execution-result
                            :stopped result colls sigs t0)))))
-                (execution-result :max-ops-reached result colls sigs t0))))
+                (async-execution-result :max-ops-reached result colls sigs t0))))
           result)))))
+
+(defn sync-signal-vertices
+  [vertices thresh]
+  (loop [sigs 0, verts vertices]
+    (if verts
+      (let [v (first verts)]
+        (if (should-signal? v thresh)
+          (do (signal! v sync-vertex-signal)
+              (recur (inc sigs) (next verts)))
+          (recur sigs (next verts))))
+      sigs)))
+
+(defn sync-collect-vertices
+  [vertices thresh]
+  (loop [colls 0, verts vertices]
+    (if verts
+      (let [v (first verts)]
+        (if (should-collect? v thresh)
+          (do (collect! v)
+              (recur (inc colls) (next verts)))
+          (recur colls (next verts))))
+      colls)))
+
+(def default-sync-context-opts
+  {:collect-thresh 0
+   :signal-thresh  0
+   :max-ops        1e6})
+
+(defn sync-execution-context
+  [opts]
+  (let [ctx       (merge default-sync-context-opts opts)
+        c-thresh  (:collect-thresh ctx)
+        s-thresh  (:signal-thresh ctx)
+        max-ops   (:max-ops ctx)]
+    (reify
+      #?@(:clj
+           [clojure.lang.IDeref
+            (deref [_] ctx)]
+           :cljs
+           [IDeref
+            (-deref [_] ctx)])
+      IGraphExecutor
+      (stop! [_])
+      (notify! [_ evt])
+      (include-vertex! [_ v])
+      (execute!
+        [_]
+        (let [t0 (now)
+              verts (vertices (:graph ctx))]
+          (loop [colls 0, sigs 0]
+            (if (<= (+ colls sigs) max-ops)
+              (let [sigs' (sync-signal-vertices verts s-thresh)
+                    colls' (sync-collect-vertices verts c-thresh)]
+                (if (and (pos? sigs') (pos? colls'))
+                  (recur (long (+ colls colls')) (long (+ sigs sigs')))
+                  (execution-result :converged colls sigs t0)))
+              (execution-result :max-ops-reached colls sigs t0))))))))

@@ -39,14 +39,27 @@
       (f/add-edge! g (verts a) (verts b) f/signal-forward nil))
     g))
 
-(deftest ^:async test-rdfs-simple
-  (let [g (rdfs-test-graph types hierarchy)
-        notify (chan)]
+(deftest test-rdfs-simple
+  (let [g (rdfs-test-graph types hierarchy)]
     (is (= '[[0 #{animal}] [1 #{vertebrae}] [2 #{mammal}]
              [3 #{human}] [4 #{dog}] [5 #{fish}] [6 #{shark}]]
            (fu/sorted-vertex-values (f/vertices g))))
+    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+      (is (= :converged (:type res)))
+      (is (= '[[0 #{animal}]
+               [1 #{vertebrae animal}]
+               [2 #{vertebrae mammal animal}]
+               [3 #{vertebrae human mammal animal}]
+               [4 #{vertebrae dog mammal animal}]
+               [5 #{vertebrae fish animal}]
+               [6 #{vertebrae shark fish animal}]]
+             (fu/sorted-vertex-values (f/vertices g)))))))
+
+(deftest ^:async test-rdfs-simple-async
+  (let [g (rdfs-test-graph types hierarchy)
+        notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/execution-context {:graph g})))]
+      (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
         (is (= :converged (:type res)))
         (is (= '[[0 #{animal}]
                  [1 #{vertebrae animal}]

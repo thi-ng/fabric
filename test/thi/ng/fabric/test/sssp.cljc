@@ -24,8 +24,9 @@
 
 ;; a -> b -> c ; b -> d
 (defn sssp-test-graph
-  [g edges]
-  (let [vspec {::f/collect-fn collect-sssp}
+  [edges]
+  (let [g     (f/compute-graph)
+        vspec {::f/collect-fn collect-sssp}
         verts (reduce-kv
                (fn [acc k v] (assoc acc k (f/add-vertex! g v vspec)))
                {} {'a 0 'b nil 'c nil 'd nil 'e nil 'f nil})]
@@ -47,8 +48,9 @@
      [s] (range l))))
 
 (defn sssp-random-graph
-  [g num-verts num-edges e-length]
-  (let [vspec {::f/collect-fn collect-sssp}
+  [num-verts num-edges e-length]
+  (let [g     (f/compute-graph)
+        vspec {::f/collect-fn collect-sssp}
         verts (->> (range num-verts)
                    (map (fn [_] (f/add-vertex! g nil vspec)))
                    (cons (f/add-vertex! g 0 vspec))
@@ -60,34 +62,54 @@
            (doall)))
     g))
 
-(deftest ^:async test-sssp-simple
-  (let [g (sssp-test-graph (f/compute-graph) '[[a b] [b c] [c d] [a e] [d f] [e f]])
-        notify (chan)]
+(deftest test-sssp-simple
+  (let [g (sssp-test-graph '[[a b] [b c] [c d] [a e] [d f] [e f]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/sorted-vertex-values (f/vertices g))))
+    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+      (is (= :converged (:type res)))
+      (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (fu/sorted-vertex-values (f/vertices g)))))))
+
+(deftest ^:async test-sssp-simple-async
+  (let [g (sssp-test-graph '[[a b] [b c] [c d] [a e] [d f] [e f]])
+        notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/execution-context {:graph g})))]
+      (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
         (is (= :converged (:type res)))
         (is (= [[0 0] [1 1] [2 2] [3 3] [4 1] [5 2]] (fu/sorted-vertex-values (f/vertices g))))
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
-(deftest ^:async test-sssp-weighted
-  (let [g (sssp-test-graph (f/compute-graph) '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])
-        notify (chan)]
+(deftest test-sssp-weighted
+  (let [g (sssp-test-graph '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])]
     (is (= [[0 0] [1 nil] [2 nil] [3 nil] [4 nil] [5 nil]] (fu/sorted-vertex-values (f/vertices g))))
+    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+      (is (= :converged (:type res)))
+      (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (fu/sorted-vertex-values (f/vertices g)))))))
+
+(deftest ^:async test-sssp-weighted-async
+  (let [g (sssp-test-graph '[[a b 1] [b c 10] [c d 2] [a e 4] [d f 7] [e f 100]])
+        notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/execution-context {:graph g})))]
+      (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
         (is (= :converged (:type res)))
         (is (= [[0 0] [1 1] [2 11] [3 13] [4 4] [5 20]] (fu/sorted-vertex-values (f/vertices g))))
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
-(deftest ^:async test-sssp-random
-  (let [g (sssp-random-graph (f/compute-graph) 1000 2000 3)
+(deftest test-sssp-random
+  (let [g (sssp-random-graph 1000 5000 3)]
+    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+      (prn :sync res)
+      (is (= :converged (:type res)))
+      (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
+
+(deftest ^:async test-sssp-random-async
+  (let [g (sssp-random-graph 1000 5000 3)
         notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/execution-context {:graph g :bus-size 64 :timeout 100})))]
-        (prn res)
+      (let [res (<! (f/execute! (f/async-execution-context
+                                 {:graph g :bus-size 64 :timeout 10 :auto-stop true})))]
+        (prn :async res)
         (is (= :converged (:type res)))
         (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))
         (>! notify :ok)))
