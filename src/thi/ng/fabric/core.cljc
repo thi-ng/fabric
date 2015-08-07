@@ -251,6 +251,7 @@
 
 (defn stop-execution
   [bus vertices]
+  (info "stopping execution context...")
   (run! close! bus)
   (run! close-input! vertices))
 
@@ -305,24 +306,23 @@
                 (let [t (if max-t (timeout max-t))
                       [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
                   (if (= port t)
-                    (do (stop! _)
-                        (execution-result :converged result colls sigs t0))
+                    (if (:auto-stop ctx)
+                      (do (stop! _)
+                          (execution-result :converged result colls sigs t0))
+                      (do (execution-result :converged result colls sigs t0)
+                          (recur colls sigs)))
                     (case evt
                       :collect (recur (inc colls) sigs)
                       :signal  (recur colls (inc sigs))
                       :error   (do (warn ex "@ vertex" v)
-                                   (stop! _)
+                                   (when (:auto-stop ctx) (stop! _))
                                    (execution-result
                                     :error result colls sigs t0
-                                    {:reason           :error
-                                     :reason-event     evt
+                                    {:reason-event     evt
                                      :reason-exception ex
                                      :reason-vertex    v}))
                       (do (warn "execution interrupted")
                           (execution-result
-                           :interrupted result colls sigs t0
-                           {:reason        :terminated
-                            :reason-event  evt
-                            :reason-vertex v})))))
+                           :stopped result colls sigs t0)))))
                 (execution-result :max-ops-reached result colls sigs t0))))
           result)))))
