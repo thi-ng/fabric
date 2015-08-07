@@ -19,15 +19,15 @@
 
 (def collect-sssp
   (f/collect-pure
-   (fn [val uncollected]
-     (if val (reduce min val uncollected) (reduce min uncollected)))))
+   (fn [val incoming]
+     (if val (reduce min val incoming) (reduce min incoming)))))
 
 ;; a -> b -> c ; b -> d
 (defn sssp-test-graph
   [g edges]
   (let [vspec {::f/collect-fn collect-sssp}
         verts (reduce-kv
-               (fn [acc k v] (assoc acc k (f/add-vertex! g (assoc vspec :val v))))
+               (fn [acc k v] (assoc acc k (f/add-vertex! g v vspec)))
                {} {'a 0 'b nil 'c nil 'd nil 'e nil 'f nil})]
     (doseq [[a b w] edges]
       (f/add-edge! g (verts a) (verts b) signal-sssp (or w 1)))
@@ -50,8 +50,8 @@
   [g num-verts num-edges e-length]
   (let [vspec {::f/collect-fn collect-sssp}
         verts (->> (range num-verts)
-                   (map (fn [_] (f/add-vertex! g vspec)))
-                   (cons (f/add-vertex! g (assoc vspec :val 0)))
+                   (map (fn [_] (f/add-vertex! g nil vspec)))
+                   (cons (f/add-vertex! g 0 vspec))
                    vec)]
     (dotimes [i num-edges]
       (->> (make-strand verts e-length)

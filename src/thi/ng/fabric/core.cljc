@@ -30,7 +30,7 @@
   (update-value! [_ f]))
 
 (defprotocol IComputeGraph
-  (add-vertex! [_ vstate])
+  (add-vertex! [_ val vspec])
   (remove-vertex! [_ v])
   (vertex-for-id [_ id])
   (vertices [_])
@@ -45,18 +45,18 @@
 (defn collect-pure
   [collect-fn]
   (fn [vertex]
-    (swap! (:state vertex) #(update % :val collect-fn (::uncollected %)))))
+    (swap! (:value vertex) #(collect-fn % (::uncollected @(:state vertex))))))
 
-(def default-collect (collect-pure into))
+(def collect-into (collect-pure into))
 
 (defn signal-forward
   [vertex _] @vertex)
 
 (defn default-score-signal
-  "Computes vertex signal score. Returns 0 if state's :val
-  equals :last-sig-state, else returns 1."
-  [{:keys [state last-sig-state]}]
-  (if (= (:val @state) @last-sig-state) 0 1))
+  "Computes vertex signal score. Returns 0 if value equals prev-val,
+  else returns 1."
+  [vertex]
+  (if (= @vertex @(:prev-val vertex)) 0 1))
 
 (defn default-score-collect
   "Computes vertex collect score, here simply the number
@@ -69,28 +69,42 @@
 (defn should-collect?
   [vertex thresh] (> (score-collect vertex) thresh))
 
+(defn async-vertex-signal
+  [vertex]
+  (let [id   (:id vertex)
+        outs @(:outs vertex)]
+    (go-loop [outs outs]
+      (let [[v [f opts]] (first outs)]
+        (when v
+          (let [signal (f vertex opts)]
+            (if-not (nil? signal)
+              (>! (input-channel v) [id signal])
+              (warn "signal fn for" (:id v) "returned nil, skipping...")))
+          (recur (next outs)))))))
+
 (def default-vertex-state
   {::uncollected      []
    ::signal-map       {}
    ::score-collect-fn default-score-collect
    ::score-signal-fn  default-score-signal
-   ::collect-fn       default-collect
+   ::collect-fn       collect-into
+   ::signal-fn        async-vertex-signal
    ::input-channel-fn chan})
 
-(defrecord Vertex [id state last-sig-state in outs]
+(defrecord Vertex [id value state prev-val in outs]
   #?@(:clj
        [clojure.lang.IDeref
         (deref
-         [_] (:val @state))]
+         [_] @value)]
        :cljs
        [IDeref
         (-deref
-         [_] (:val @state))])
+         [_] @value)])
   IVertex
   (set-value!
-    [_ val] (swap! state assoc :val val) (signal! _) _)
+    [_ val] (reset! value val) (signal! _) _)
   (update-value!
-    [_ f] (swap! state update :val f) (signal! _) _)
+    [_ f] (swap! value f) (signal! _) _)
   (collect!
     [_]
     ((::collect-fn @state) _)
@@ -124,17 +138,9 @@
     [_] ((::score-signal-fn @state) _))
   (signal!
     [_]
-    (let [state @state]
-      (reset! last-sig-state (:val state))
-      (go-loop [outs @outs]
-        (let [[v [f opts]] (first outs)]
-          (when v
-            (let [signal (f _ opts)]
-              (if-not (nil? signal)
-                (>! (input-channel v) [id signal])
-                (warn "signal fn for" (:id v) "returned nil, skipping...")))
-            (recur (next outs)))))
-      _))
+    (reset! prev-val @value)
+    ((::signal-fn @state) _)
+    _)
   (receive-signal
     [_ src sig]
     (let [sig-map (::signal-map @state)]
@@ -154,23 +160,24 @@
      [^Vertex o ^java.io.Writer w] (.write w (.toString (into {} o)))))
 
 (defn vertex
-  [id state]
+  [id val state]
   (map->Vertex
-   {:id             id
-    :state          (atom (merge default-vertex-state state))
-    :last-sig-state (atom nil)
-    :in             (atom nil)
-    :outs           (atom {})}))
+   {:id       id
+    :value    (atom val)
+    :state    (atom (merge default-vertex-state state))
+    :prev-val (atom nil)
+    :in       (atom nil)
+    :outs     (atom {})}))
 
 (defrecord InMemoryGraph [state]
   IComputeGraph
   (add-vertex!
-    [_ vstate]
+    [_ val vspec]
     (-> state
         (swap!
          (fn [state]
            (let [id (:next-id state)
-                 v  (vertex id vstate)]
+                 v  (vertex id val vspec)]
              (-> state
                  (update :next-id inc)
                  (update :vertices assoc id v)
@@ -192,9 +199,10 @@
 
 (defrecord LoggedGraph [g log-chan]
   IComputeGraph
-  (add-vertex! [_ v]
-    (let [v (add-vertex! g v)]
-      (go (>! log-chan [:add-vertex (:id v) @v]))
+  (add-vertex!
+    [_ val vspec]
+    (let [v (add-vertex! g val vspec)]
+      (go (>! log-chan [:add-vertex (:id v) val]))
       v))
   (remove-vertex! [_ v]
     (when (remove-vertex! g v)

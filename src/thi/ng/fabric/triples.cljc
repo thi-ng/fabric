@@ -139,7 +139,7 @@
                                @res)))))
         q-pattern  [(if vs? nil s) (if vp? nil p) (if vo? nil o)]
         q-spec     (add-query! g id q-pattern)
-        resv       (f/add-vertex! g {:val (delay nil) ::f/collect-fn collect-fn})]
+        resv       (f/add-vertex! g (delay nil) {::f/collect-fn collect-fn})]
     (f/add-edge! g (:result q-spec) resv f/signal-forward nil)
     (assoc q-spec :qvar-result resv)))
 
@@ -149,16 +149,16 @@
 (defn add-join!
   [g qa qb]
   (let [jv (f/add-vertex!
-            g {:val (delay nil)
-               ::f/collect-fn
-               (fn [vertex]
-                 (let [state (:state vertex)
-                       a @(get-in @state [::f/signal-map (:id (:qvar-result qa))])
-                       b @(get-in @state [::f/signal-map (:id (:qvar-result qb))])]
-                   (debug :join-sets a b)
-                   (swap! state assoc :val (delay (set/join a b)))))
-               ::f/score-collect-fn
-               score-collect-join})]
+            g (delay nil)
+            {::f/collect-fn
+             (fn [vertex]
+               (let [state (:state vertex)
+                     a @(get-in @state [::f/signal-map (:id (:qvar-result qa))])
+                     b @(get-in @state [::f/signal-map (:id (:qvar-result qb))])]
+                 (debug :join-sets a b)
+                 (reset! (:value vertex) (delay (set/join a b)))))
+             ::f/score-collect-fn
+             score-collect-join})]
     (f/add-edge! g (:qvar-result qa) jv f/signal-forward nil)
     (f/add-edge! g (:qvar-result qb) jv f/signal-forward nil)
     {:a qa :b qb :qvar-result jv}))
@@ -178,11 +178,11 @@
 (defn add-query-filter!
   [g q-vertex flt]
   (let [fv (f/add-vertex!
-            g {:val (delay nil)
-               ::f/collect-fn
-               (f/collect-pure
-                (fn [_ incoming]
-                  (delay (sequence (comp (mapcat deref) (filter flt)) incoming))))})]
+            g (delay nil)
+            {::f/collect-fn
+             (f/collect-pure
+              (fn [_ incoming]
+                (delay (sequence (comp (mapcat deref) (filter flt)) incoming))))})]
     (f/add-edge! g q-vertex fv f/signal-forward nil)
     fv))
 
@@ -201,20 +201,19 @@
       (doseq [t inferred]
         (debug :add-triple t)
         (add-triple! g t))
-      (swap! (:state vertex) update :val set/union in (set inferred)))))
+      (swap! (:value vertex) set/union in (set inferred)))))
 
 (defn- index-vertex
   [g spo]
   (f/add-vertex!
-   g {:val                {}
-      ::f/collect-fn      (collect-index spo)
-      ::f/score-signal-fn (constantly 1)}))
+   g {} {::f/collect-fn      (collect-index spo)
+         ::f/score-signal-fn (constantly 1)}))
 
 (defrecord TripleGraph
     [g indices triples queries rules]
   f/IComputeGraph
   (add-vertex!
-    [_ v] (f/add-vertex! g v))
+    [_ val vspec] (f/add-vertex! g val vspec))
   (remove-vertex!
     [_ v] (f/remove-vertex! g v))
   (vertex-for-id
@@ -228,7 +227,7 @@
     [_ t]
     (or (@triples t)
         (let [{:keys [subj pred obj]} indices
-              v (f/add-vertex! g {:val t})]
+              v (f/add-vertex! g t nil)]
           (f/add-edge! g v subj signal-triple :add)
           (f/add-edge! g v pred signal-triple :add)
           (f/add-edge! g v obj  signal-triple :add)
@@ -253,12 +252,11 @@
     ;; TODO remove vertices if query ID already exists
     (let [{:keys [subj pred obj]} indices
           acc (f/add-vertex!
-               g {:val {}
-                  ::f/collect-fn collect-select})
+               g {} {::f/collect-fn collect-select})
           res (f/add-vertex!
-               g {:val (delay nil)
-                  ::f/collect-fn (aggregate-select g)
-                  ::f/score-collect-fn (score-collect-min-signal-vals 3)})]
+               g (delay nil)
+               {::f/collect-fn (aggregate-select g)
+                ::f/score-collect-fn (score-collect-min-signal-vals 3)})]
       (f/add-edge! g subj acc signal-select [0 s])
       (f/add-edge! g pred acc signal-select [1 p])
       (f/add-edge! g obj  acc signal-select [2 o])
@@ -274,8 +272,7 @@
     [_ id query production]
     (let [q   (add-join-query! _ query)
           inf (f/add-vertex!
-               g {:val #{}
-                  ::f/collect-fn (collect-inference _ production)})]
+               g #{} {::f/collect-fn (collect-inference _ production)})]
       (f/add-edge! g (:qvar-result q) inf f/signal-forward nil)
       {:query q :inf inf}))
   )
@@ -294,11 +291,12 @@
 (defn add-counter!
   [g src]
   (let [v (f/add-vertex!
-           g {::f/collect-fn
-              (f/collect-pure
-               (fn [val in]
-                 (debug :updated-result (pr-str @(peek in)))
-                 (count @(peek in))))})]
+           g nil
+           {::f/collect-fn
+            (f/collect-pure
+             (fn [val in]
+               (debug :updated-result (pr-str @(peek in)))
+               (count @(peek in))))})]
     (f/add-edge! g src v f/signal-forward nil)
     v))
 

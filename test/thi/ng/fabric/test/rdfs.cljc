@@ -33,7 +33,7 @@
   (let [g (f/compute-graph)
         vspec {::f/collect-fn rdfs-collect}
         verts (reduce
-               (fn [acc v] (assoc acc v (f/add-vertex! g (assoc vspec :val #{v}))))
+               (fn [acc v] (assoc acc v (f/add-vertex! g #{v} vspec)))
                {} types)]
     (doseq [[a b] hierarchy]
       (f/add-edge! g (verts a) (verts b) f/signal-forward nil))

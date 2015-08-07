@@ -19,7 +19,7 @@
            (fn [v]
              (if-let [outs @(:outs v)]
                (let [val @v
-                     val (if (satisfies? clojure.lang.IDeref val) @val val)]
+                     val (if (instance? clojure.lang.IDeref val) @val val)]
                  (->> outs
                       (map
                        (fn [[k [_ opts]]]
