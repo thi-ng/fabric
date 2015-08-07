@@ -12,6 +12,8 @@
        [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
         [cljs.core.async :refer [chan close! <! >! take!]]])))
 
+#?(:clj (taoensso.timbre/set-level! :warn))
+
 (def types
   '[animal vertebrae mammal human dog fish shark])
 
@@ -45,6 +47,7 @@
              [3 #{human}] [4 #{dog}] [5 #{fish}] [6 #{shark}]]
            (fu/sorted-vertex-values (f/vertices g))))
     (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+      (prn res)
       (is (= :converged (:type res)))
       (is (= '[[0 #{animal}]
                [1 #{vertebrae animal}]
