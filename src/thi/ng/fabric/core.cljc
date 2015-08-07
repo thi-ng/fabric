@@ -2,12 +2,14 @@
   #?@(:clj
       [(:require
         [taoensso.timbre :refer [debug info warn]]
+        [clojure.core.reducers :as r]
         [clojure.core.async :refer [go go-loop chan close! <! >! alts! timeout]])]
       :cljs
       [(:require-macros
         [cljs.core.async.macros :refer [go go-loop]]
         [cljs-log.core :refer [debug info warn]])
        (:require
+        [clojure.core.reducers :as r]
         [cljs.core.async :as a :refer [chan close! <! >! alts! timeout]])]))
 
 ;; #?(:clj (taoensso.timbre/set-level! :warn))
@@ -377,16 +379,38 @@
           (recur colls (next verts))))
       colls)))
 
+(defn parallel-sync-signal-vertices
+  [vertices thresh]
+  (r/fold
+   +
+   (fn
+     ([] 0)
+     ([acc v] (if (should-signal? v thresh) (do (signal! v sync-vertex-signal) (inc acc)) acc)))
+   vertices))
+
+(defn parallel-sync-collect-vertices
+  [vertices thresh]
+  (r/fold
+   +
+   (fn
+     ([] 0)
+     ([acc v] (if (should-collect? v thresh) (do (collect! v) (inc acc)) acc)))
+   vertices))
+
 (def default-sync-context-opts
   {:collect-thresh 0
    :signal-thresh  0
-   :max-ops        1e6})
+   :max-ops        1e6
+   :signal-fn      sync-signal-vertices
+   :collect-fn     sync-collect-vertices})
 
 (defn sync-execution-context
   [opts]
   (let [ctx       (merge default-sync-context-opts opts)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
+        coll-fn   (:collect-fn ctx)
+        sig-fn    (:signal-fn ctx)
         max-ops   (:max-ops ctx)]
     (reify
       #?@(:clj
@@ -405,8 +429,8 @@
               verts (vertices (:graph ctx))]
           (loop [colls 0, sigs 0]
             (if (<= (+ colls sigs) max-ops)
-              (let [sigs' (sync-signal-vertices verts s-thresh)
-                    colls' (sync-collect-vertices verts c-thresh)]
+              (let [sigs' (sig-fn verts s-thresh)
+                    colls' (coll-fn verts c-thresh)]
                 (if (and (pos? sigs') (pos? colls'))
                   (recur (long (+ colls colls')) (long (+ sigs sigs')))
                   (execution-result :converged colls sigs t0)))
