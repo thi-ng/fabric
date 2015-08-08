@@ -32,20 +32,23 @@
   (f/collect-pure
    (fn [val incoming]
      (debug :update-index spo incoming)
-     (transduce
-      (map (fn [[op id t]] [op id (nth t spo)]))
-      (completing
-       (fn [acc [op id x]]
-         (case op
-           :add    (update acc x (fnil conj #{}) id)
-           :remove (if-let [idx (acc x)]
-                     (if (= #{id} idx)
-                       (dissoc acc x)
-                       (update acc x disj id))
-                     acc)
-           (do (warn "ignoring unknown index signal op:" op)
-               acc))))
-      val incoming))))
+     (debug :old-index val)
+     (let [val (transduce
+                (map (fn [[op id t]] [op id (nth t spo)]))
+                (completing
+                 (fn [acc [op id x]]
+                   (case op
+                     :add    (update acc x (fnil conj #{}) id)
+                     :remove (if-let [idx (acc x)]
+                               (if (= #{id} idx)
+                                 (dissoc acc x)
+                                 (update acc x disj id))
+                               acc)
+                     (do (warn "ignoring unknown index signal op:" op)
+                         acc))))
+                val incoming)]
+       (debug :new-index val)
+       val))))
 
 (defn signal-index-select
   [vertex [idx sel]]
@@ -148,7 +151,9 @@
     (assoc q-spec :qvar-result resv)))
 
 (defn score-collect-join
-  [vertex] (if (== (count (::f/signal-map @(:state vertex))) 2) 1 0))
+  [vertex]
+  (let [state @(:state vertex)]
+    (if (and (seq (::f/uncollected state)) (== (count (::f/signal-map @(:state vertex))) 2)) 1 0)))
 
 (defn add-join!
   [g qa qb]
@@ -215,10 +220,14 @@
   [g spo]
   (f/add-vertex!
    g {} {::f/collect-fn      (collect-index spo)
-         ::f/score-signal-fn f/score-signal-with-new-edges
+         ::f/score-signal-fn (fn [v] (let [score (f/score-signal-with-new-edges v)]
+                                      (info (:id v) :index-score score)
+                                      score))
          }))
 
-(def triple-vertex-spec {::f/score-collect-fn (constantly 0)})
+(def triple-vertex-spec
+  {::f/score-collect-fn (constantly 0)
+   ::f/score-signal-fn f/score-signal-with-new-edges})
 
 (defrecord TripleGraph
     [g indices triples queries rules]
@@ -313,30 +322,38 @@
     (f/add-edge! g src v f/signal-forward nil)
     v))
 
-;; #?(:clj (taoensso.timbre/set-level! :warn))
+(def triple-log-transducer
+  (comp
+   (filter
+    (fn [[op v]]
+      (and (#{:add-vertex :remove-vertex} op) (vector? @v))))
+   (map
+    (fn [[op v]] [({:add-vertex :+ :remove-vertex :-} op) @v]))))
 
-#?(:clj
-   (defn triple-logger
-     [path]
-     (let [ch (->> (comp
-                    (filter
-                     (fn [[op id val]]
-                       (and (#{:add-vertex :remove-vertex} op) (vector? val))))
-                    (map
-                     (fn [[op _ t]] [({:add-vertex :+ :remove-vertex :-} op) t])))
-                   (chan 1024))]
-       (go-loop []
-         (let [t (<! ch)]
-           (when t
-             (spit path (str (pr-str t) "\n") :append true)
-             (recur))))
-       ch)))
+(defn add-triple-graph-logger
+  [g log-fn]
+  (let [ch        (chan 1024 triple-log-transducer)
+        log->chan #(go (>! ch %))
+        watch-id  (keyword (gensym))]
+    (go-loop []
+      (let [t (<! ch)]
+        (when t
+          (log-fn t)
+          (recur))))
+    (f/add-watch! g :add-vertex watch-id log->chan)
+    (f/add-watch! g :remove-vertex watch-id log->chan)
+    {:graph g :chan ch :watch-id watch-id}))
+
+(defn remove-triple-graph-logger
+  [{:keys [graph watch-id chan]}]
+  (f/remove-watch! graph :add-vertex watch-id)
+  (f/remove-watch! graph :remove-vertex watch-id)
+  (close! chan))
 
 (defn ^:export start-async
   []
-  (let [;;log (triple-logger "triple-log.edn")
-        ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
-        g (triple-graph (f/compute-graph))
+  (let [g (triple-graph (f/compute-graph))
+        log (add-triple-graph-logger g #(spit "triple-log.edn" (str (pr-str %) "\n") :append true))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
@@ -392,16 +409,20 @@
              [toxi knows noah]
              [geom tag clojure]
              [fabric tag clojure]])
-          (loop []
-            (let [res (<! ctx-chan)]
-              (warn :result res)
-              (when (= :converged (:type res))
-                (warn :all (sort @all))
-                (warn :pq @pq)
-                (warn :jq @jq)
-                (warn :tq @tq)
-                (f/stop! ctx)
-                (recur))))))
+          (<! ctx-chan)
+          ;;(warn :result res)
+          (warn :all (sort @all))
+          (warn :pq @pq)
+          (warn :jq @jq)
+          (warn :tq @tq)
+          (remove-triple! g '[geom tag clojure])
+          (remove-triple! g '[fabric type project])
+          (<! ctx-chan)
+          (warn :jq @jq)
+          (warn :tq @tq)
+          (f/stop! ctx)
+          (do (remove-triple-graph-logger log)
+              (warn :done))))
 
     {:g        g
      :ctx      ctx
@@ -420,9 +441,10 @@
 
 (defn ^:export start-sync
   []
-  (let [;;log (triple-logger "triple-log.edn")
+  (let [;;log (add-triple-graph-logger "triple-log.edn")
         ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
         g (triple-graph (f/compute-graph))
+        log (add-triple-graph-logger g #(spit "triple-log.edn" (str (pr-str %) "\n") :append true))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
@@ -480,6 +502,11 @@
     (warn @pq)
     (warn @jq)
     (warn @tq)
+    (f/signal! (remove-triple! g '[fabric tag clojure]) f/sync-vertex-signal)
+    (warn :result3 (f/execute! ctx))
+    (warn @all)
+    (warn @tq)
+    (remove-triple-graph-logger log)
     {:g        g
      :ctx      ctx
      :all      all
