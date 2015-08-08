@@ -62,6 +62,13 @@
   [vertex]
   (if (= @vertex @(:prev-val vertex)) 0 1))
 
+(defn score-signal-with-new-edges
+  "Computes vertex signal score. Returns number of *new* outgoing
+  edges plus 1 if value not equals prev-val. New edge counter is reset
+  each time signal! is called."
+  [vertex]
+  (+ (::new-edges @(:state vertex)) (if (= @vertex @(:prev-val vertex)) 0 1)))
+
 (defn default-score-collect
   "Computes vertex collect score, here simply the number
   of ::uncollected signal values."
@@ -83,7 +90,7 @@
           (let [signal (f vertex opts)]
             (if-not (nil? signal)
               (>! (input-channel v) [id signal])
-              (warn "signal fn for" (:id v) "returned nil, skipping...")))
+              (debug "signal fn for" (:id v) "returned nil, skipping...")))
           (recur (next outs)))))))
 
 (defn sync-vertex-signal
@@ -96,7 +103,7 @@
           (let [signal (f vertex opts)]
             (if-not (nil? signal)
               (receive-signal v id signal)
-              (warn "signal fn for" (:id v) "returned nil, skipping...")))
+              (debug "signal fn for" (:id v) "returned nil, skipping...")))
           (recur (next outs)))))))
 
 (def default-vertex-state
@@ -106,7 +113,8 @@
    ::score-signal-fn  default-score-signal
    ::collect-fn       collect-into
    ::signal-fn        async-vertex-signal
-   ::input-channel-fn chan})
+   ::input-channel-fn chan
+   ::new-edges        0})
 
 (defrecord Vertex [id value state prev-val in outs]
   #?@(:clj
@@ -131,13 +139,15 @@
     [_] ((::score-collect-fn @state) _))
   (connect-to!
     [_ v sig-fn opts]
-    (debug id "connecting to" (:id v) "(" (pr-str opts) ")")
-    (swap! outs assoc v [sig-fn opts]) _)
+    (swap! outs assoc v [sig-fn opts])
+    (swap! state update ::new-edges inc)
+    (debug id "edge to" (:id v) "(" (pr-str opts) ") new:" (::new-edges @state))
+    _)
   (connected-vertices
     [_] (keys @outs))
   (disconnect-vertex!
     [_ v]
-    (debug id "disconnecting from" (:id v))
+    (debug id "disconnect from" (:id v))
     (swap! outs dissoc v)
     _)
   (disconnect-all!
@@ -156,11 +166,13 @@
   (signal!
     [_]
     (reset! prev-val @value)
+    (swap! state assoc ::new-edges 0)
     ((::signal-fn @state) _)
     _)
   (signal!
     [_ handler]
     (reset! prev-val @value)
+    (swap! state assoc ::new-edges 0)
     (handler _)
     _)
   (receive-signal
@@ -182,11 +194,11 @@
      [^Vertex o ^java.io.Writer w] (.write w (.toString (into {} o)))))
 
 (defn vertex
-  [id val state]
+  [id val opts]
   (map->Vertex
    {:id       id
     :value    (atom val)
-    :state    (atom (merge default-vertex-state state))
+    :state    (atom (merge default-vertex-state opts))
     :prev-val (atom nil)
     :in       (atom nil)
     :outs     (atom {})}))
