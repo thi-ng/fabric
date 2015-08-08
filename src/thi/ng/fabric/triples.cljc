@@ -82,12 +82,13 @@
        ;; FIXME delay
        (when (every? #(not= [nil] %) res)
          (->> res
-              (map #(disj % nil))
-              (set)
+              (into #{} (map #(disj % nil)))
               (sort-by count)
               (reduce set/intersection)
-              (map #(deref (f/vertex-for-id g %)))
-              (set)))))))
+              (into #{}
+               (comp (map #(f/vertex-for-id g %))
+                     (filter identity)
+                     (map deref)))))))))
 
 (defn qvar?
   "Returns true, if x is a qvar (a symbol prefixed with '?')"
