@@ -14,6 +14,11 @@
 
 #?(:clj (taoensso.timbre/set-level! :warn))
 
+(def colors
+  ["#ff0000" "#00ff00" "#0000ff" "#ffff00" "#00ffff" "#ff00ff"
+   "#c00000" "#00c000" "#0000c0" "#c0c000" "#00c0c0" "#c000c0"
+   "#800000" "#008000" "#000080" "#808000" "#008080" "#800080"])
+
 (defn rand-col-except
   [c numc]
   (loop [c' c]
@@ -39,9 +44,16 @@
         (let [vi (f/vertex-for-id g i)
               vj (f/vertex-for-id g j)]
           (f/add-edge! g vi vj f/signal-forward nil)
-          (f/add-edge! g vj vi f/signal-forward nil)
-          )))
+          (f/add-edge! g vj vi f/signal-forward nil))))
     g))
+
+(defn export-graph
+  [path g]
+  (fu/vertices->dot
+   path (f/vertices g) identity
+   (fn [v val]
+     (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
+             (:id v) (:id v) val (colors @v)))))
 
 (deftest test-vertex-coloring
   (let [g   (test-graph 100 15 0.05)
@@ -49,7 +61,7 @@
         res (f/execute! (f/sync-execution-context {:graph g :max-iter 5000}))]
     (prn :sync res)
     (prn (fu/sorted-vertex-values (f/vertices g)))
-    (fu/vertices->dot "vcolor.dot" (f/vertices g) identity)
+    (export-graph "vcolor.dot" g)
     (is (= :converged (:type res)))))
 
 (deftest ^:async test-vertex-coloring-async
@@ -58,8 +70,8 @@
     (go
       (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
         (prn :async res)
-        ;;(prn (fu/sorted-vertex-values (f/vertices g)))
-        ;;(fu/vertices->dot "vcolor-async.dot" (f/vertices g) identity)
+        ;; (prn (fu/sorted-vertex-values (f/vertices g)))
+        ;; (export-graph "vcolor-async.dot" g)
         (is (= :converged (:type res)))
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
