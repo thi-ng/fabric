@@ -436,7 +436,7 @@
         (processor v _)
         (when (should-signal? v s-thresh)
           (signal! v async-vertex-signal))
-        (when (should-collect? v c-thresh)
+        #_(when (should-collect? v c-thresh)
           (collect! v))
         _)
       (execute!
