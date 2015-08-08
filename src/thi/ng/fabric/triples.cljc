@@ -72,15 +72,15 @@
    (fn [_ incoming]
      (let [res (vals (peek incoming))]
        ;;(debug :agg-incoming res)
-       (delay
-        (when (every? #(not= [nil] %) res)
-          (->> res
-               (map #(disj % nil))
-               (set)
-               (sort-by count)
-               (reduce set/intersection)
-               (map #(deref (f/vertex-for-id g %)))
-               (set))))))))
+       ;; FIXME delay
+       (when (every? #(not= [nil] %) res)
+         (->> res
+              (map #(disj % nil))
+              (set)
+              (sort-by count)
+              (reduce set/intersection)
+              (map #(deref (f/vertex-for-id g %)))
+              (set)))))))
 
 (defn qvar?
   "Returns true, if x is a qvar (a symbol prefixed with '?')"
@@ -131,15 +131,15 @@
         verify     (triple-verifier s p o vs? vp? vo?)
         collect-fn (f/collect-pure
                     (fn [_ incoming]
-                      (delay
-                       (when-let [res (peek incoming)]
-                         (into #{}
-                               (comp (map #(if (verify %) (vmap %)))
-                                     (filter identity))
-                               @res)))))
+                      ;; FIXME delay
+                      (when-let [res (peek incoming)]
+                        (into #{}
+                              (comp (map #(if (verify %) (vmap %)))
+                                    (filter identity))
+                              res)))) ;; FIXME delay @
         q-pattern  [(if vs? nil s) (if vp? nil p) (if vo? nil o)]
         q-spec     (add-query! g id q-pattern)
-        resv       (f/add-vertex! g (delay nil) {::f/collect-fn collect-fn})]
+        resv       (f/add-vertex! g nil {::f/collect-fn collect-fn})] ;; FIXME delay
     (f/add-edge! g (:result q-spec) resv f/signal-forward nil)
     (assoc q-spec :qvar-result resv)))
 
@@ -149,14 +149,14 @@
 (defn add-join!
   [g qa qb]
   (let [jv (f/add-vertex!
-            g (delay nil)
+            g nil ;; FIXME delay
             {::f/collect-fn
              (fn [vertex]
                (let [state (:state vertex)
-                     a @(get-in @state [::f/signal-map (:id (:qvar-result qa))])
-                     b @(get-in @state [::f/signal-map (:id (:qvar-result qb))])]
+                     a (get-in @state [::f/signal-map (:id (:qvar-result qa))]) ;; FIXME delay @
+                     b (get-in @state [::f/signal-map (:id (:qvar-result qb))])] ;; FIXME delay @
                  (debug :join-sets a b)
-                 (reset! (:value vertex) (delay (set/join a b)))))
+                 (reset! (:value vertex) (set/join a b)))) ;; FIXME delay
              ::f/score-collect-fn
              score-collect-join})]
     (f/add-edge! g (:qvar-result qa) jv f/signal-forward nil)
@@ -178,11 +178,14 @@
 (defn add-query-filter!
   [g q-vertex flt]
   (let [fv (f/add-vertex!
-            g (delay nil)
+            g nil ;; FIXME delay
             {::f/collect-fn
              (f/collect-pure
               (fn [_ incoming]
-                (delay (sequence (comp (mapcat deref) (filter flt)) incoming))))})]
+                ;; FIXME delay
+                ;;(delay (sequence (comp (mapcat deref) (filter flt)) incoming))
+                (sequence (comp (mapcat identity) (filter flt)) incoming)
+                ))})]
     (f/add-edge! g q-vertex fv f/signal-forward nil)
     fv))
 
@@ -191,7 +194,7 @@
   (fn [vertex]
     (let [prev @vertex
           in   (transduce
-                (map deref)
+                (map identity) ;;(map deref) ;; FIXME delay
                 (completing into)
                 #{}
                 (::f/uncollected @(:state vertex)))
@@ -200,14 +203,19 @@
       (debug :additions adds)
       (doseq [t inferred]
         (debug :add-triple t)
-        (add-triple! g t))
+        ;; (f/signal! (add-triple! g t) f/async-vertex-signal) ;; FIXME
+        (add-triple! g t)
+        )
       (swap! (:value vertex) set/union in (set inferred)))))
 
 (defn- index-vertex
   [g spo]
   (f/add-vertex!
    g {} {::f/collect-fn      (collect-index spo)
-         ::f/score-signal-fn (constantly 1)}))
+         ::f/score-signal-fn f/score-signal-with-new-edges
+         }))
+
+(def triple-vertex-spec {::f/score-collect-fn (constantly 0)})
 
 (defrecord TripleGraph
     [g indices triples queries rules]
@@ -227,11 +235,10 @@
     [_ t]
     (or (@triples t)
         (let [{:keys [subj pred obj]} indices
-              v (f/add-vertex! g t nil)]
+              v (f/add-vertex! g t triple-vertex-spec)]
           (f/add-edge! g v subj signal-triple :add)
           (f/add-edge! g v pred signal-triple :add)
           (f/add-edge! g v obj  signal-triple :add)
-          (f/signal! v)
           (swap! triples assoc t v)
           v)))
   (remove-triple!
@@ -241,7 +248,6 @@
         (f/add-edge! g v subj signal-triple :remove)
         (f/add-edge! g v pred signal-triple :remove)
         (f/add-edge! g v obj  signal-triple :remove)
-        (f/signal! v)
         (swap! triples dissoc t)
         (f/remove-vertex! g v)
         v)
@@ -250,24 +256,23 @@
     [_ id [s p o]]
     ;; TODO figure out way how to at to a running context
     ;; TODO remove vertices if query ID already exists
+    ;; TODO add default [nil nil nil] query & re-use
     (let [{:keys [subj pred obj]} indices
           acc (f/add-vertex!
                g {} {::f/collect-fn collect-select})
           res (f/add-vertex!
-               g (delay nil)
+               g nil ;; FIXME delay
                {::f/collect-fn (aggregate-select g)
-                ::f/score-collect-fn (score-collect-min-signal-vals 3)})]
+                ::f/score-collect-fn (score-collect-min-signal-vals 3)})
+          spec {:pattern [s p o] :acc acc :result res}]
       (f/add-edge! g subj acc signal-select [0 s])
       (f/add-edge! g pred acc signal-select [1 p])
       (f/add-edge! g obj  acc signal-select [2 o])
       (f/add-edge! g acc  res f/signal-forward nil)
-      (f/signal! subj)
-      (f/signal! pred)
-      (f/signal! obj)
-      (swap! queries assoc id {:acc acc :result res})
-      {:pattern [s p o] :acc acc :result res}))
+      (swap! queries assoc id spec)
+      spec))
   (query-result
-    [_ id] (when-let [q (@queries id)] @@(:res q)))
+    [_ id] (when-let [q (@queries id)] @(:result q))) ;; FIXME delay @@
   (add-rule!
     [_ id query production]
     (let [q   (add-join-query! _ query)
@@ -295,12 +300,12 @@
            {::f/collect-fn
             (f/collect-pure
              (fn [val in]
-               (debug :updated-result (pr-str @(peek in)))
-               (count @(peek in))))})]
+               (debug :updated-result (pr-str (peek in))) ;; FIXME delay @
+               (count (peek in))))})]
     (f/add-edge! g src v f/signal-forward nil)
     v))
 
-#?(:clj (taoensso.timbre/set-level! :warn))
+;; #?(:clj (taoensso.timbre/set-level! :warn))
 
 #?(:clj
    (defn triple-logger
@@ -319,7 +324,7 @@
              (recur))))
        ch)))
 
-(defn ^:export start
+(defn ^:export start-async
   []
   (let [;;log (triple-logger "triple-log.edn")
         ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
@@ -349,43 +354,123 @@
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))
-        ctx (f/async-execution-context {:graph g :timeout 10})
+        _ (run!
+           #(add-triple! g %)
+           '[[toxi author fabric]
+             [fabric type project]
+             [knows type symmetric-prop]
+             [knows domain person]
+             [author domain person]
+             [author range creative-work]
+             [parent sub-prop-of ancestor]
+             [ancestor type transitive-prop]
+             [ancestor domain person]
+             [ancestor range person]
+             ;;[noah knows toxi]
+             ])
+        ctx (f/async-execution-context {:graph g :timeout 100})
         ctx-chan (f/execute! ctx)]
     (go []
         (let [res (<! ctx-chan)]
           (warn :result res)
-          (warn (sort @@all))
-          (add-triple! g '[toxi parent noah])
-          (add-triple! g '[ingo parent toxi])
-          (add-triple! g '[geom type project])
-          (add-triple! g '[toxi author geom])
-          (add-triple! g '[toxi knows noah])
-          (add-triple! g '[geom tag clojure])
-          (add-triple! g '[fabric tag clojure])
+          (warn (sort @all))
+          (run!
+           #(f/signal! (add-triple! g %) f/async-vertex-signal)
+           '[[toxi parent noah]
+             [ingo parent toxi]
+             [geom type project]
+             [toxi author geom]
+             [toxi knows noah]
+             [geom tag clojure]
+             [fabric tag clojure]])
           (loop []
             (let [res (<! ctx-chan)]
               (warn :result res)
               (when (= :converged (:type res))
-                (warn (sort @@all))
-                (warn @@pq)
-                (warn @@jq)
-                (warn @@tq)
+                (warn (sort @all))
+                (warn @pq)
+                (warn @jq)
+                (warn @tq)
                 (f/stop! ctx)
                 (recur))))))
-    (mapv
+
+    {:g        g
+     :ctx      ctx
+     :all      all
+     :toxi     toxi
+     :types    types
+     :knows    knows
+     :projects projects
+     :pq       pq
+     :jq       jq
+     :tq       tq
+     :num-projects num-projects
+     :num-types num-types
+     }))
+
+
+(defn ^:export start-sync
+  []
+  (let [;;log (triple-logger "triple-log.edn")
+        ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
+        g (triple-graph (f/compute-graph))
+        toxi (:result (add-query! g :toxi ['toxi nil nil]))
+        types (:result (add-query! g :types [nil 'type nil]))
+        projects (:result (add-query! g :projects [nil 'type 'project]))
+        knows (:result (add-query! g :projects [nil 'knows nil]))
+        all (:result (add-query! g :all [nil nil nil]))
+        num-projects (add-counter! g projects)
+        num-types (add-counter! g types)
+        _ (add-rule!
+           g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
+           (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
+        _ (add-rule!
+           g :domain '[[?a ?prop nil] [?prop domain ?d]]
+           (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
+        _ (add-rule!
+           g :range '[[nil ?prop ?a] [?prop range ?r]]
+           (fn [{:syms [?a ?prop ?r]}] [[?a 'type ?r]]))
+        _ (add-rule!
+           g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+           (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
+        _ (add-rule!
+           g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+           (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
+        pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
+        jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
+        tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))
+        _ (run!
+           #(add-triple! g %)
+           '[[toxi author fabric]
+             [fabric type project]
+             [knows type symmetric-prop]
+             [knows domain person]
+             [author domain person]
+             [author range creative-work]
+             [parent sub-prop-of ancestor]
+             [ancestor type transitive-prop]
+             [ancestor domain person]
+             [ancestor range person]
+             ;;[noah knows toxi]
+             ])
+        ctx (f/sync-execution-context {:graph g})
+        res (f/execute! ctx)]
+    (warn :result res)
+    (warn (sort @all))
+    (run!
      #(add-triple! g %)
-     '[[toxi author fabric]
-       [fabric type project]
-       [knows type symmetric-prop]
-       [knows domain person]
-       [author domain person]
-       [author range creative-work]
-       [parent sub-prop-of ancestor]
-       [ancestor type transitive-prop]
-       [ancestor domain person]
-       [ancestor range person]
-       ;;[noah knows toxi]
-       ])
+     '[[toxi parent noah]
+       [ingo parent toxi]
+       [geom type project]
+       [toxi author geom]
+       [toxi knows noah]
+       [geom tag clojure]
+       [fabric tag clojure]])
+    (warn :result2 (f/execute! ctx))
+    (warn (sort @all))
+    (warn @pq)
+    (warn @jq)
+    (warn @tq)
     {:g        g
      :ctx      ctx
      :all      all
