@@ -131,9 +131,9 @@
          [_] @value)])
   IVertex
   (set-value!
-    [_ val] (reset! value val) #_(signal! _) _)
+    [_ val] (reset! value val) _)
   (update-value!
-    [_ f] (swap! value f) #_(signal! _) _)
+    [_ f] (swap! value f) _)
   (collect!
     [_]
     ((::collect-fn @state) _)
@@ -475,5 +475,6 @@
                       (do (warn "execution interrupted")
                           (async-execution-result
                            :stopped result colls sigs t0)))))
-                (async-execution-result :max-ops-reached result colls sigs t0))))
+                (do (stop! _)
+                    (async-execution-result :max-ops-reached result colls sigs t0)))))
           result)))))
