@@ -15,6 +15,7 @@
      [path vertices flt]
      (->> vertices
           (filter flt)
+          (sort-by :id)
           (mapcat
            (fn [v]
              (if-let [outs @(:outs v)]
