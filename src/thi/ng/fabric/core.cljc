@@ -14,7 +14,7 @@
         [clojure.core.reducers :as r]
         [cljs.core.async :as a :refer [chan close! <! >! alts! timeout]])]))
 
-#?(:clj (taoensso.timbre/set-level! :warn))
+;;#?(:clj (taoensso.timbre/set-level! :warn))
 
 ;; (warn :free-ram (.freeMemory (Runtime/getRuntime)))
 
@@ -233,9 +233,9 @@
   (remove-vertex!
     [_ v]
     (when (get-in @state [:vertices (:id v)])
-      (swap! state update :vertices dissoc (:id v))
-      (disconnect-all! v)
       (notify-watches @watches [:remove-vertex v])
+      (swap! state update :vertices dissoc (:id v))
+      ;;(disconnect-all! v)
       true))
   (vertex-for-id
     [_ id] (get-in @state [:vertices id]))
@@ -260,10 +260,6 @@
 
 (defn compute-graph
   [] (InMemoryGraph. (atom {:vertices {} :next-id 0}) (atom {})))
-
-#_(defn logged-compute-graph
-    ([log-chan] (LoggedGraph. (compute-graph) log-chan))
-    ([g log-chan] (LoggedGraph. g log-chan)))
 
 (defn eager-async-vertex-processor
   [{:keys [id] :as vertex} ctx]
@@ -372,14 +368,14 @@
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
-        (add-watch! g :remove-vertex watch-id (fn [evt] (signal! (peek evt) sync-vertex-signal)))
+        (add-watch! g :remove-vertex watch-id (fn [[__ v]] (signal! v sync-vertex-signal)))
         (let [t0 (now)]
           (loop [i 0, colls 0, sigs 0]
             (if (<= i max-iter)
               (let [verts (vertices g)
                     sigs' (sig-fn verts s-thresh)
                     colls' (coll-fn verts c-thresh)]
-                (if (and (pos? sigs') (pos? colls'))
+                (if (or (pos? sigs') (pos? colls'))
                   (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
                   (do (remove-watch! g :remove-vertex watch-id)
                       (execution-result :converged colls sigs t0 {:iterations i}))))
@@ -437,7 +433,7 @@
         (when (should-signal? v s-thresh)
           (signal! v async-vertex-signal))
         #_(when (should-collect? v c-thresh)
-          (collect! v))
+            (collect! v))
         _)
       (execute!
         [_]
