@@ -23,13 +23,15 @@
 
 (defn signal-triple
   [vertex op]
-  [op (:id vertex) @vertex])
+  (let [sig [op (:id vertex) @vertex]]
+    (debug :signal-triple sig)
+    sig))
 
 (defn collect-index
   [spo]
   (f/collect-pure
    (fn [val incoming]
-     ;;(debug :update-index spo incoming)
+     (debug :update-index spo incoming)
      (transduce
       (map (fn [[op id t]] [op id (nth t spo)]))
       (completing
@@ -45,9 +47,11 @@
                acc))))
       val incoming))))
 
-(defn signal-select
+(defn signal-index-select
   [vertex [idx sel]]
-  [idx (if sel (@vertex sel [nil]) (->> @vertex vals (mapcat identity) (set)))])
+  (let [sig [idx (if sel (@vertex sel [nil]) (->> @vertex vals (mapcat identity) (set)))]]
+    (debug :signal-index sig)
+    sig))
 
 (def collect-select
   (f/collect-pure
@@ -203,7 +207,6 @@
       (debug :additions adds)
       (doseq [t inferred]
         (debug :add-triple t)
-        ;; (f/signal! (add-triple! g t) f/async-vertex-signal) ;; FIXME
         (add-triple! g t)
         )
       (swap! (:value vertex) set/union in (set inferred)))))
@@ -230,6 +233,11 @@
     [_] (f/vertices g))
   (add-edge!
     [_ src dest sig opts] (f/add-edge! g src dest sig opts))
+  f/IWatchable
+  (add-watch!
+    [_ type id f] (f/add-watch! g type id f) _)
+  (remove-watch!
+    [_ type id] (f/remove-watch! g type id) _)
   ITripleGraph
   (add-triple!
     [_ t]
@@ -265,9 +273,9 @@
                {::f/collect-fn (aggregate-select g)
                 ::f/score-collect-fn (score-collect-min-signal-vals 3)})
           spec {:pattern [s p o] :acc acc :result res}]
-      (f/add-edge! g subj acc signal-select [0 s])
-      (f/add-edge! g pred acc signal-select [1 p])
-      (f/add-edge! g obj  acc signal-select [2 o])
+      (f/add-edge! g subj acc signal-index-select [0 s])
+      (f/add-edge! g pred acc signal-index-select [1 p])
+      (f/add-edge! g obj  acc signal-index-select [2 o])
       (f/add-edge! g acc  res f/signal-forward nil)
       (swap! queries assoc id spec)
       spec))
@@ -368,6 +376,7 @@
              [ancestor range person]
              ;;[noah knows toxi]
              ])
+        _ (prn :next-id (-> g :g :state deref :next-id))
         ctx (f/async-execution-context {:graph g :timeout 100})
         ctx-chan (f/execute! ctx)]
     (go []
@@ -375,7 +384,7 @@
           (warn :result res)
           (warn (sort @all))
           (run!
-           #(f/signal! (add-triple! g %) f/async-vertex-signal)
+           #(add-triple! g %)
            '[[toxi parent noah]
              [ingo parent toxi]
              [geom type project]
@@ -387,10 +396,10 @@
             (let [res (<! ctx-chan)]
               (warn :result res)
               (when (= :converged (:type res))
-                (warn (sort @all))
-                (warn @pq)
-                (warn @jq)
-                (warn @tq)
+                (warn :all (sort @all))
+                (warn :pq @pq)
+                (warn :jq @jq)
+                (warn :tq @tq)
                 (f/stop! ctx)
                 (recur))))))
 
