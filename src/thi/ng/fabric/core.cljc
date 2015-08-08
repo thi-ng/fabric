@@ -155,7 +155,9 @@
     (swap! outs dissoc v)
     _)
   (disconnect-all!
-    [_] (run! #(disconnect-vertex! _ %) (keys @outs)) _)
+    [_]
+    (run! #(disconnect-vertex! _ %) (keys @outs))
+    (close-input! _))
   (close-input! [_]
     (if @in
       (do #_(debug id "closing...")
