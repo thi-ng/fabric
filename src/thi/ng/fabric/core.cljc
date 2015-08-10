@@ -86,14 +86,16 @@
   [vertex]
   (let [id   (:id vertex)
         outs @(:outs vertex)]
-    (loop [outs outs]
+    (loop [active (transient []), outs outs]
       (let [[v [f opts]] (first outs)]
-        (when v
+        (if v
           (let [signal (f vertex opts)]
             (if-not (nil? signal)
-              (receive-signal v id signal)
-              (debug "signal fn for" (:id v) "returned nil, skipping...")))
-          (recur (next outs)))))))
+              (do (receive-signal v id signal)
+                  (recur (conj! active v) (next outs)))
+              (do (debug "signal fn for" (:id v) "returned nil, skipping...")
+                  (recur active (next outs)))))
+          (persistent! active))))))
 
 (def default-vertex-state
   {::uncollected      []
@@ -147,8 +149,7 @@
     [_ handler]
     (reset! prev-val @value)
     (swap! state assoc ::new-edges 0)
-    (handler _)
-    _)
+    (handler _))
   (receive-signal
     [_ src sig]
     (if-not (= sig ((::signal-map @state) src))
@@ -232,7 +233,7 @@
 (defn- now [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
 
 (defn execution-result
-  [type colls sigs t0 & [opts]]
+  [type sigs colls t0 & [opts]]
   (->> {:collections colls
         :signals     sigs
         :type        type
@@ -250,8 +251,7 @@
       (let [v (first verts)]
         (if (should-signal? v thresh)
           (do (debug (:id v) "signaling")
-              (signal! v sync-vertex-signal)
-              (recur (inc sigs) (next verts)))
+              (recur (long (+ sigs (signal! v sync-vertex-signal))) (next verts)))
           (recur sigs (next verts))))
       sigs)))
 
@@ -297,9 +297,9 @@
         sig-fn    (:signal-fn ctx)
         max-iter  (:max-iter ctx)
         watch-id  (keyword (gensym))
-        ->result  (fn [type iter colls sigs t0]
+        ->result  (fn [type iter sigs colls t0]
                     (remove-watch! g :remove-vertex watch-id)
-                    (execution-result type colls sigs t0 {:iterations iter}))]
+                    (execution-result type sigs colls t0 {:iterations iter}))]
     (reify
       #?@(:clj
            [clojure.lang.IDeref
@@ -323,42 +323,44 @@
                     colls' (coll-fn verts c-thresh)]
                 (if (or (pos? sigs') (pos? colls'))
                   (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
-                  (->result :converged colls sigs t0 i)))
-              (->result :max-iter-reached colls sigs t0 i))))))))
+                  (->result :converged sigs colls t0 i)))
+              (->result :max-iter-reached sigs colls t0 i))))))))
 
 (defn default-async-vertex-processor
   [s-thresh c-thresh]
-  (fn [[sigs colls :as acc] v]
-    (if (< (rand) 0.5)
-      (if (should-signal? v s-thresh)
-        (do (signal! v sync-vertex-signal)
-            [(inc sigs) colls])
-        acc)
-      (if (should-collect? v c-thresh)
-        (do (collect! v)
-            [sigs (inc colls)])
-        acc))))
+  (fn [[active sigs colls] v]
+    (let [active (conj active v)]
+      (if (< (rand) 0.5)
+        (if (should-signal? v s-thresh)
+          (let [vsigs (signal! v sync-vertex-signal)]
+            [(into active vsigs) (+ sigs vsigs) colls])
+          [active sigs colls])
+        (if (should-collect? v c-thresh)
+          (do (collect! v)
+              [active sigs (inc colls)])
+          [active sigs colls])))))
 
 (defn eager-async-vertex-processor
   [s-thresh c-thresh]
-  (fn [[sigs colls :as acc] v]
-    (if (< (rand) 0.5)
-      (if (should-signal? v s-thresh)
-        (do (signal! v sync-vertex-signal)
-            [(inc sigs) colls])
-        acc)
-      (if (should-collect? v c-thresh)
-        (do (collect! v)
-            (if (should-signal? v s-thresh)
-              (do (signal! v sync-vertex-signal)
-                  [(inc sigs) (inc colls)])
-              [sigs (inc colls)]))
-        acc))))
+  (fn [[active sigs colls] v]
+    (let [active (conj active v)]
+      (if (< (rand) 0.5)
+        (if (should-signal? v s-thresh)
+          (let [vsigs (signal! v sync-vertex-signal)]
+            [(into active vsigs) (+ sigs (count vsigs)) colls])
+          [active sigs colls])
+        (if (should-collect? v c-thresh)
+          (do (collect! v)
+              (if (should-signal? v s-thresh)
+                (let [vsigs (signal! v sync-vertex-signal)]
+                  [(into active vsigs) (+ sigs (count vsigs)) (inc colls)])
+                [active sigs (inc colls)]))
+          [active sigs colls])))))
 
 (defn combine-stats
-  ([] [0 0])
+  ([] [#{} 0 0])
   ([acc] acc)
-  ([[as ac] [s c]] [(+ as s) (+ ac c)]))
+  ([[act as ac] [act' s c]] [(into act act') (+ as s) (+ ac c)]))
 
 (defn default-async-context-opts
   []
@@ -377,7 +379,13 @@
         max-ops   (:max-ops ctx)
         processor ((:processor ctx) s-thresh c-thresh)
         threads   (:threads ctx)
-        watch-id  (keyword (gensym))]
+        watch-id  (keyword (gensym))
+        v-filter  (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
+        ->result  (fn [type sigs colls t0]
+                    (remove-watch! g :add-vertex watch-id)
+                    (remove-watch! g :remove-vertex watch-id)
+                    (remove-watch! g :add-edge watch-id)
+                    (execution-result type sigs colls t0))]
     (reify
       #?@(:clj
            [clojure.lang.IDeref
@@ -391,17 +399,27 @@
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
-        (let [t0 (now)]
+        (let [t0 (now)
+              active (atom (sequence v-filter (vertices g)))
+              enable (atom #{})]
+          (add-watch! g :add-vertex watch-id
+                      (fn [[__ v]] (swap! enable into (signal! v sync-vertex-signal))))
+          (add-watch! g :remove-vertex watch-id
+                      (fn [[__ v]] (swap! enable into (signal! v sync-vertex-signal))))
+          (add-watch! g :add-edge watch-id
+                      (fn [[__ src dest]] (swap! enable into [src dest])))
           (loop [colls 0, sigs 0]
-            (let [active (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh))
-                                 (vertices g))]
-              ;;(warn :active-count (count active))
-              (if (seq active)
-                (if (<= (+ colls sigs) max-ops)
-                  (let [[sigs' colls'] (r/fold
-                                        (max 512 (long (/ (count active) threads)))
-                                        combine-stats
-                                        processor active)]
-                    (recur (long (+ colls colls')) (long (+ sigs sigs'))))
-                  (execution-result :max-ops-reached colls sigs t0))
-                (execution-result :converged colls sigs t0)))))))))
+            ;;(warn :active-count (count @active))
+            (if (seq @active)
+              (if (<= (+ colls sigs) max-ops)
+                (let [[act' sigs' colls']
+                      (r/fold
+                       (max 512 (long (/ (count @active) threads)))
+                       combine-stats
+                       processor @active)]
+                  ;;(warn :auto (count @enable))
+                  (reset! active (into (into #{} v-filter act') @enable))
+                  (reset! enable #{})
+                  (recur (long (+ colls colls')) (long (+ sigs sigs'))))
+                (->result :max-ops-reached sigs colls t0))
+              (->result :converged sigs colls t0))))))))
