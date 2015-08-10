@@ -251,7 +251,7 @@
       (let [v (first verts)]
         (if (should-signal? v thresh)
           (do (debug (:id v) "signaling")
-              (recur (long (+ sigs (signal! v sync-vertex-signal))) (next verts)))
+              (recur (long (+ sigs (count (signal! v sync-vertex-signal)))) (next verts)))
           (recur sigs (next verts))))
       sigs)))
 
@@ -270,13 +270,19 @@
 (defn parallel-sync-signal-vertices
   [vertices thresh]
   (r/fold
-   + (fn [sigs v] (if (should-signal? v thresh) (do (signal! v sync-vertex-signal) (inc sigs)) sigs))
+   + (fn [sigs v]
+       (if (should-signal? v thresh)
+         (+ sigs (count (signal! v sync-vertex-signal)))
+         sigs))
    vertices))
 
 (defn parallel-sync-collect-vertices
   [vertices thresh]
   (r/fold
-   + (fn [colls v] (if (should-collect? v thresh) (do (collect! v) (inc colls)) colls))
+   + (fn [colls v]
+       (if (should-collect? v thresh)
+         (do (collect! v) (inc colls))
+         colls))
    vertices))
 
 (defn default-sync-context-opts
@@ -323,8 +329,8 @@
                     colls' (coll-fn verts c-thresh)]
                 (if (or (pos? sigs') (pos? colls'))
                   (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
-                  (->result :converged sigs colls t0 i)))
-              (->result :max-iter-reached sigs colls t0 i))))))))
+                  (->result :converged i sigs colls t0)))
+              (->result :max-iter-reached i sigs colls t0))))))))
 
 (defn default-async-vertex-processor
   [s-thresh c-thresh]
