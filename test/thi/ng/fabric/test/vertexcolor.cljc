@@ -55,23 +55,31 @@
      (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
              (:id v) (:id v) val (colors @v)))))
 
+(defn valid-vertex?
+  [v] (let [val @v] (every? #(not= val @%) (keys @(:outs v)))))
+
+(defn valid-graph?
+  [g] (every? valid-vertex? (f/vertices g)))
+
 (deftest test-vertex-coloring
   (let [g   (test-graph 100 15 0.05)
         _   (prn :graph-ready)
         res (f/execute! (f/sync-execution-context {:graph g :max-iter 5000}))]
     (prn :sync res)
-    (prn (fu/sorted-vertex-values (f/vertices g)))
-    (export-graph "vcolor.dot" g)
-    (is (= :converged (:type res)))))
+    ;;(prn (fu/sorted-vertex-values (f/vertices g)))
+    ;;(export-graph "vcolor.dot" g)
+    (is (= :converged (:type res)))
+    (is (valid-graph? g))))
 
 (deftest ^:async test-vertex-coloring-async
-  (let [g (test-graph 100 15 0.05)
+  (let [g (test-graph 100 10 0.05)
         notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
+      (let [res (<! (f/execute! (f/async-execution-context {:graph g :timeout 10 :auto-stop true})))]
         (prn :async res)
         ;; (prn (fu/sorted-vertex-values (f/vertices g)))
         ;; (export-graph "vcolor-async.dot" g)
         (is (= :converged (:type res)))
+        (is (valid-graph? g))
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))

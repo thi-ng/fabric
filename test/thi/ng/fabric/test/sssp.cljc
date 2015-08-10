@@ -8,9 +8,9 @@
    #?@(:clj
        [[clojure.test :refer :all]
         [clojure.core.async :refer [go go-loop chan close! <! <!! >!]]]
-      :cljs
-      [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
-       [cljs.core.async :refer [chan close! <! >! take!]]])))
+       :cljs
+       [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
+        [cljs.core.async :refer [chan close! <! >! take!]]])))
 
 #?(:clj (taoensso.timbre/set-level! :warn))
 
@@ -47,19 +47,24 @@
            (reduced acc))))
      [s] (range l))))
 
-(defn sssp-random-graph
+(defn sssp-random-graph-spec
   [num-verts num-edges e-length]
+  (let [verts (vec (range (inc num-verts)))]
+    {:num-verts num-verts
+     :edges (mapcat
+             (fn [_] (->> (make-strand verts e-length) (partition 2 1)))
+             (range num-edges))}))
+
+(defn sssp-random-graph
+  [{:keys [num-verts edges]}]
   (let [g     (f/compute-graph)
         vspec {::f/collect-fn collect-sssp}
         verts (->> (range num-verts)
                    (map (fn [_] (f/add-vertex! g nil vspec)))
                    (cons (f/add-vertex! g 0 vspec))
                    vec)]
-    (dotimes [i num-edges]
-      (->> (make-strand verts e-length)
-           (partition 2 1)
-           (map (fn [[a b]] (f/add-edge! g (verts a) (verts b) signal-sssp 1)))
-           (doall)))
+    (doseq [[a b] edges]
+      (f/add-edge! g (verts a) (verts b) signal-sssp 1))
     g))
 
 (deftest test-sssp-simple
@@ -96,20 +101,34 @@
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
+(def spec (sssp-random-graph-spec 100 300 3))
+
 (deftest test-sssp-random
-  (let [g (sssp-random-graph 1000 5000 3)]
+  (let [g (sssp-random-graph spec)]
     (let [res (f/execute! (f/sync-execution-context {:graph g}))]
       (prn :sync res)
       (is (= :converged (:type res)))
       (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
 
 (deftest ^:async test-sssp-random-async
-  (let [g (sssp-random-graph 1000 5000 3)
+  (let [g (sssp-random-graph spec)
         notify (chan)]
     (go
       (let [res (<! (f/execute! (f/async-execution-context
                                  {:graph g :bus-size 64 :timeout 10 :auto-stop true})))]
         (prn :async res)
+        (is (= :converged (:type res)))
+        (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))
+        (>! notify :ok)))
+    #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
+
+#_(deftest ^:async test-sssp-random-async2
+  (let [g (sssp-random-graph spec)
+        notify (chan)]
+    (go
+      (let [res (<! (f/execute! (f/async-execution-context2*
+                                 {:graph g :bus-size 64 :timeout 10 :auto-stop true})))]
+        (prn :async2 res)
         (is (= :converged (:type res)))
         (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))
         (>! notify :ok)))
