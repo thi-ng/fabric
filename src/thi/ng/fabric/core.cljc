@@ -242,66 +242,148 @@
        (merge opts)))
 
 (defn async-execution-result
-  [type out colls sigs t0 & [opts]]
+  [type out sigs colls t0 & [opts]]
   (go (>! out (execution-result type colls sigs t0 opts))))
 
-(defn sync-signal-vertices
-  [vertices thresh]
-  (loop [sigs 0, verts vertices]
-    (if verts
-      (let [v (first verts)]
-        (if (should-signal? v thresh)
-          (do (debug (:id v) "signaling")
-              (recur (long (+ sigs (count (signal! v sync-vertex-signal)))) (next verts)))
-          (recur sigs (next verts))))
-      sigs)))
+(defn sub-pass-combine
+  ([] [#{} 0])
+  ([acc] acc)
+  ([[active ax] [active' x]] [(into active active') (+ ax x)]))
 
-(defn sync-collect-vertices
-  [vertices thresh]
-  (loop [colls 0, verts vertices]
-    (if verts
-      (let [v (first verts)]
-        (if (should-collect? v thresh)
-          (do (debug (:id v) "collecting")
-              (collect! v)
-              (recur (inc colls) (next verts)))
-          (recur colls (next verts))))
-      colls)))
+(defn single-pass-combine
+  ([] [#{} 0 0])
+  ([acc] acc)
+  ([[act as ac] [act' s c]] [(into act act') (+ as s) (+ ac c)]))
 
-(defn parallel-sync-signal-vertices
-  [vertices thresh]
-  (r/fold
-   + (fn [sigs v]
+(defn sync-signal-pass-simple
+  [thresh]
+  (fn [vertices]
+    (loop [sigs 0, verts vertices]
+      (if verts
+        (let [v (first verts)]
+          (if (should-signal? v thresh)
+            (do (debug (:id v) "signaling")
+                (recur (long (+ sigs (count (signal! v sync-vertex-signal)))) (next verts)))
+            (recur sigs (next verts))))
+        sigs))))
+
+(defn sync-collect-pass-simple
+  [thresh]
+  (fn [vertices]
+    (loop [colls 0, verts vertices]
+      (if verts
+        (let [v (first verts)]
+          (if (should-collect? v thresh)
+            (do (debug (:id v) "collecting")
+                (collect! v)
+                (recur (inc colls) (next verts)))
+            (recur colls (next verts))))
+        colls))))
+
+(defn parallel-signal-pass-simple
+  [thresh]
+  (fn [vertices]
+    (r/fold
+     + (fn [sigs v]
+         (if (should-signal? v thresh)
+           (+ sigs (count (signal! v sync-vertex-signal)))
+           sigs))
+     vertices)))
+
+(defn parallel-collect-pass-simple
+  [thresh]
+  (fn [vertices]
+    (r/fold
+     + (fn [colls v]
+         (if (should-collect? v thresh)
+           (do (collect! v) (inc colls))
+           colls))
+     vertices)))
+
+(defn parallel-signal-pass
+  [thresh]
+  (fn [vertices]
+    (r/fold
+     sub-pass-combine
+     (fn [acc v]
        (if (should-signal? v thresh)
-         (+ sigs (count (signal! v sync-vertex-signal)))
-         sigs))
-   vertices))
+         (let [vsigs (signal! v sync-vertex-signal)]
+           [(into (acc 0) vsigs) (+ (acc 1) (count vsigs))])
+         acc))
+     vertices)))
 
-(defn parallel-sync-collect-vertices
-  [vertices thresh]
-  (r/fold
-   + (fn [colls v]
+(defn parallel-collect-pass
+  [thresh]
+  (fn [vertices]
+    (r/fold
+     sub-pass-combine
+     (fn [acc v]
        (if (should-collect? v thresh)
-         (do (collect! v) (inc colls))
-         colls))
-   vertices))
+         (do (collect! v)
+             [(conj (acc 0) v) (inc (acc 1))])
+         acc))
+     vertices)))
+
+(defn probabilistic-vertex-processor
+  [s-thresh c-thresh]
+  (fn [[active sigs colls] v]
+    (let [active (conj active v)]
+      (if (< (rand) 0.5)
+        (if (should-signal? v s-thresh)
+          (let [vsigs (signal! v sync-vertex-signal)]
+            [(into active vsigs) (+ sigs (count vsigs)) colls])
+          [active sigs colls])
+        (if (should-collect? v c-thresh)
+          (do (collect! v)
+              [active sigs (inc colls)])
+          [active sigs colls])))))
+
+(defn eager-probabilistic-vertex-processor
+  [s-thresh c-thresh]
+  (fn [[active sigs colls] v]
+    (let [active (conj active v)]
+      (if (< (rand) 0.5)
+        (if (should-signal? v s-thresh)
+          (let [vsigs (signal! v sync-vertex-signal)]
+            [(into active vsigs) (+ sigs (count vsigs)) colls])
+          [active sigs colls])
+        (if (should-collect? v c-thresh)
+          (do (collect! v)
+              (if (should-signal? v s-thresh)
+                (let [vsigs (signal! v sync-vertex-signal)]
+                  [(into active vsigs) (+ sigs (count vsigs)) (inc colls)])
+                [active sigs (inc colls)]))
+          [active sigs colls])))))
+
+(defn single-pass-scheduler
+  [ctx]
+  (let [processor ((:processor ctx) (:signal-thresh ctx) (:collect-thresh ctx))]
+    (fn [workgroup-size vertices]
+      (r/fold workgroup-size single-pass-combine processor vertices))))
+
+(defn two-pass-scheduler
+  [ctx]
+  (let [sig-fn  ((:signal-fn ctx) (:signal-thresh ctx))
+        coll-fn ((:collect-fn ctx) (:collect-thresh ctx))]
+    (fn [_ vertices]
+      (let [[s-act sigs]  (sig-fn vertices)
+            [c-act colls] (coll-fn vertices)]
+        [(into s-act c-act) sigs colls]))))
 
 (defn default-sync-context-opts
   []
   {:collect-thresh 0
    :signal-thresh  0
    :max-iter       1e6
-   :signal-fn      parallel-sync-signal-vertices
-   :collect-fn     parallel-sync-collect-vertices})
+   :signal-fn      parallel-signal-pass-simple
+   :collect-fn     parallel-collect-pass-simple})
 
 (defn sync-execution-context
   [opts]
   (let [ctx       (merge (default-sync-context-opts) opts)
         g         (:graph ctx)
-        c-thresh  (:collect-thresh ctx)
-        s-thresh  (:signal-thresh ctx)
-        coll-fn   (:collect-fn ctx)
-        sig-fn    (:signal-fn ctx)
+        coll-fn   ((:collect-fn ctx) (:collect-thresh ctx))
+        sig-fn    ((:signal-fn ctx) (:signal-thresh ctx))
         max-iter  (:max-iter ctx)
         watch-id  (keyword (gensym))
         ->result  (fn [type iter sigs colls t0]
@@ -326,75 +408,31 @@
           (loop [i 0, colls 0, sigs 0]
             (if (<= i max-iter)
               (let [verts  (vertices g)
-                    sigs'  (sig-fn verts s-thresh)
-                    colls' (coll-fn verts c-thresh)]
+                    sigs'  (sig-fn verts)
+                    colls' (coll-fn verts)]
                 (if (or (pos? sigs') (pos? colls'))
                   (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
                   (->result :converged i sigs colls t0)))
               (->result :max-iter-reached i sigs colls t0))))))))
 
-(defn probabilistic-vertex-processor
-  [s-thresh c-thresh]
-  (fn [[active sigs colls] v]
-    (let [active (conj active v)]
-      (if (< (rand) 0.5)
-        (if (should-signal? v s-thresh)
-          (let [vsigs (signal! v sync-vertex-signal)]
-            [(into active vsigs) (+ sigs vsigs) colls])
-          [active sigs colls])
-        (if (should-collect? v c-thresh)
-          (do (collect! v)
-              [active sigs (inc colls)])
-          [active sigs colls])))))
-
-(defn eager-probabilistic-vertex-processor
-  [s-thresh c-thresh]
-  (fn [[active sigs colls] v]
-    (let [active (conj active v)]
-      (if (< (rand) 0.5)
-        (if (should-signal? v s-thresh)
-          (let [vsigs (signal! v sync-vertex-signal)]
-            [(into active vsigs) (+ sigs (count vsigs)) colls])
-          [active sigs colls])
-        (if (should-collect? v c-thresh)
-          (do (collect! v)
-              (if (should-signal? v s-thresh)
-                (let [vsigs (signal! v sync-vertex-signal)]
-                  [(into active vsigs) (+ sigs (count vsigs)) (inc colls)])
-                [active sigs (inc colls)]))
-          [active sigs colls])))))
-
-(defn combine-stats
-  ([] [#{} 0 0])
-  ([acc] acc)
-  ([[act as ac] [act' s c]] [(into act act') (+ as s) (+ ac c)]))
-
-(defn single-pass-scheduler
-  [workgroup-size processor vertices]
-  (r/fold workgroup-size combine-stats processor vertices))
-
-(defn two-pass-scheduler
-  [workgroup-size processor vertices]
-  )
-
-(defn default-async-context-opts
+(defn default-context-opts
   []
   {:collect-thresh 0
    :signal-thresh  0
-   :processor      eager-probabilistic-vertex-processor
-   :scheduler      single-pass-scheduler
+   :signal-fn      parallel-signal-pass
+   :collect-fn     parallel-collect-pass
+   :scheduler      two-pass-scheduler
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
 (defn execution-context
   [opts]
-  (let [ctx       (merge (default-async-context-opts) opts)
+  (let [ctx       (merge (default-context-opts) opts)
         g         (:graph ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
         max-ops   (:max-ops ctx)
-        processor ((:processor ctx) s-thresh c-thresh)
-        scheduler (:scheduler ctx)
+        scheduler ((:scheduler ctx) ctx)
         threads   (:threads ctx)
         watch-id  (keyword (gensym))
         v-filter  (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
@@ -430,13 +468,22 @@
             (if (seq @active)
               (if (<= (+ colls sigs) max-ops)
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
-                      [act' sigs' colls'] (scheduler grp-size processor @active)]
+                      [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @enable))
                   (reset! active (into (into #{} v-filter act') @enable))
                   (reset! enable #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (->result :max-ops-reached sigs colls t0))
               (->result :converged sigs colls t0))))))))
+
+(defn default-async-context-opts
+  []
+  {:collect-thresh 0
+   :signal-thresh  0
+   :processor      eager-probabilistic-vertex-processor
+   :scheduler      single-pass-scheduler
+   :max-ops        1e6
+   :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
 (defn async-execution-context
   [opts]
@@ -445,7 +492,7 @@
         c-thresh    (:collect-thresh ctx)
         s-thresh    (:signal-thresh ctx)
         max-ops     (:max-ops ctx)
-        processor   ((:processor ctx) s-thresh c-thresh)
+        scheduler   ((:scheduler ctx) ctx)
         threads     (:threads ctx)
         res-chan    (or (:result ctx) (async/chan))
         notify-chan (async/chan (async/dropping-buffer 1))
@@ -488,11 +535,8 @@
             ;;(warn :active-count (count @active))
             (if (seq @active)
               (if (<= (+ colls sigs) max-ops)
-                (let [[act' sigs' colls']
-                      (r/fold
-                       (max 512 (long (/ (count @active) threads)))
-                       combine-stats
-                       processor @active)]
+                (let [grp-size            (max 512 (long (/ (count @active) threads)))
+                      [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @enable))
                   (reset! active (into (into #{} v-filter act') @enable))
                   (reset! enable #{})
