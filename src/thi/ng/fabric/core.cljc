@@ -45,7 +45,7 @@
 (defprotocol IGraphExecutor
   (execute! [_])
   (stop! [_])
-  (notify! [_ evt])
+  (notify! [_])
   (include-vertex! [_ v]))
 
 (defn collect-pure
@@ -316,7 +316,7 @@
             (-deref [_] ctx)])
       IGraphExecutor
       (stop! [_] (err/unsupported!))
-      (notify! [_ evt] (err/unsupported!))
+      (notify! [_] (err/unsupported!))
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
@@ -402,7 +402,7 @@
             (-deref [_] ctx)])
       IGraphExecutor
       (stop! [_] (err/unsupported!))
-      (notify! [_ evt] (err/unsupported!))
+      (notify! [_] (err/unsupported!))
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
@@ -430,3 +430,75 @@
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (->result :max-ops-reached sigs colls t0))
               (->result :converged sigs colls t0))))))))
+
+(defn async-execution-context2
+  [opts]
+  (let [ctx         (merge (default-async-context-opts) opts)
+        g           (:graph ctx)
+        c-thresh    (:collect-thresh ctx)
+        s-thresh    (:signal-thresh ctx)
+        max-ops     (:max-ops ctx)
+        processor   ((:processor ctx) s-thresh c-thresh)
+        threads     (:threads ctx)
+        res-chan    (or (:result ctx) (async/chan))
+        notify-chan (async/chan (async/dropping-buffer 1))
+        watch-id    (keyword (gensym))
+        v-filter    (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
+        ->result    (fn [type sigs colls t0]
+                      (warn :send-result type)
+                      (go (>! res-chan (execution-result type sigs colls t0))))]
+    (reify
+      #?@(:clj
+           [clojure.lang.IDeref
+            (deref [_] ctx)]
+           :cljs
+           [IDeref
+            (-deref [_] ctx)])
+      IGraphExecutor
+      (stop!
+        [_]
+        (remove-watch! g :add-vertex watch-id)
+        (remove-watch! g :remove-vertex watch-id)
+        (remove-watch! g :add-edge watch-id)
+        (async/close! notify-chan))
+      (notify!
+        [_] (go (>! notify-chan true)) nil)
+      (execute!
+        [_]
+        (let [t0     (atom (now))
+              active (atom (sequence v-filter (vertices g)))
+              enable (atom #{})]
+          (add-watch! g :add-vertex watch-id
+                      (fn [[__ v]]
+                        (swap! enable into (signal! v sync-vertex-signal))))
+          (add-watch! g :remove-vertex watch-id
+                      (fn [[__ v]]
+                        (swap! enable into (signal! v sync-vertex-signal))))
+          (add-watch! g :add-edge watch-id
+                      (fn [[__ src dest]]
+                        (swap! enable into [src dest])))
+          (go-loop [colls 0, sigs 0]
+            ;;(warn :active-count (count @active))
+            (if (seq @active)
+              (if (<= (+ colls sigs) max-ops)
+                (let [[act' sigs' colls']
+                      (r/fold
+                       (max 512 (long (/ (count @active) threads)))
+                       combine-stats
+                       processor @active)]
+                  ;;(warn :auto (count @enable))
+                  (reset! active (into (into #{} v-filter act') @enable))
+                  (reset! enable #{})
+                  (recur (long (+ colls colls')) (long (+ sigs sigs'))))
+                (do (stop! _)
+                    (->result :max-ops-reached sigs colls @t0)))
+              (do (->result :converged sigs colls @t0)
+                  (if (:auto-stop ctx)
+                    (stop! _)
+                    (when (<! notify-chan)
+                      (reset! t0 (now))
+                      (reset! active (sequence v-filter (vertices g)))
+                      (reset! enable #{})
+                      ;;(warn :rerun (count @active))
+                      (recur 0 0))))))
+          res-chan)))))
