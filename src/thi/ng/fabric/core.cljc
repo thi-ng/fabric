@@ -4,7 +4,7 @@
         [thi.ng.xerror.core :as err]
         [taoensso.timbre :refer [debug info warn]]
         [clojure.core.reducers :as r]
-        [clojure.core.async :refer [go go-loop chan close! <! >! alts! timeout]])]
+        [clojure.core.async :as async :refer [go go-loop <! >!]])]
       :cljs
       [(:require-macros
         [cljs.core.async.macros :refer [go go-loop]]
@@ -12,7 +12,7 @@
        (:require
         [thi.ng.xerror.core :as err]
         [clojure.core.reducers :as r]
-        [cljs.core.async :as a :refer [chan close! <! >! alts! timeout]])]))
+        [cljs.core.async :as async :refer [<! >!]])]))
 
 ;;#?(:clj (taoensso.timbre/set-level! :warn))
 
@@ -27,7 +27,7 @@
   (connected-vertices [_])
   (collect! [_])
   (score-collect [_])
-  (signal! [_] [_ handler])
+  (signal! [_ handler])
   (score-signal [_])
   (receive-signal [_ src sig])
   (set-value! [_ val])
@@ -116,8 +116,7 @@
    ::score-collect-fn default-score-collect
    ::score-signal-fn  default-score-signal
    ::collect-fn       collect-into
-   ::signal-fn        async-vertex-signal
-   ::input-channel-fn chan
+   ::input-channel-fn async/chan
    ::new-edges        0})
 
 (defrecord Vertex [id value state prev-val in outs]
@@ -161,7 +160,7 @@
   (close-input! [_]
     (if @in
       (do #_(debug id "closing...")
-          (close! @in)
+          (async/close! @in)
           (reset! in nil))
       (warn id "already closed"))
     _)
@@ -170,12 +169,6 @@
   (score-signal
     [_] ((::score-signal-fn @state) _))
   (signal!
-    [_]
-    (reset! prev-val @value)
-    (swap! state assoc ::new-edges 0)
-    ((::signal-fn @state) _)
-    _)
-  (signal!
     [_ handler]
     (reset! prev-val @value)
     (swap! state assoc ::new-edges 0)
@@ -183,13 +176,12 @@
     _)
   (receive-signal
     [_ src sig]
-    (let [sig-map (::signal-map @state)]
-      (if-not (= sig (sig-map src))
-        (swap! state
-               #(-> %
-                    (update ::uncollected conj sig)
-                    (assoc-in [::signal-map src] sig)))
-        (debug id " ignoring unchanged signal: " (pr-str sig))))
+    (if-not (= sig ((::signal-map @state) src))
+      (swap! state
+             #(-> %
+                  (update ::uncollected conj sig)
+                  (assoc-in [::signal-map src] sig)))
+      (debug id " ignoring unchanged signal: " (pr-str sig)))
     _))
 
 #?(:clj
@@ -344,8 +336,8 @@
   {:collect-thresh 0
    :signal-thresh  0
    :max-iter       1e6
-   :signal-fn      sync-signal-vertices
-   :collect-fn     sync-collect-vertices})
+   :signal-fn      parallel-sync-signal-vertices
+   :collect-fn     parallel-sync-collect-vertices})
 
 (defn sync-execution-context
   [opts]
@@ -386,9 +378,9 @@
 
 (defn stop-async-execution
   [bus vertices]
-  (info "stopping execution context...")
-  (run! close! bus)
-  (run! close-input! vertices))
+  (warn "stopping execution context...")
+  (run! close-input! vertices)
+  (run! async/close! bus))
 
 (def default-async-context-opts
   {:collect-thresh 0
@@ -396,20 +388,21 @@
    :processor      eager-async-vertex-processor
    :bus-size       16
    :timeout        25
-   :max-ops        1e6})
+   :max-ops        1e6
+   :parallel       #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
 (defn async-execution-context
   [opts]
   (let [ctx       (merge default-async-context-opts opts)
-        bus       (vec (repeatedly (:bus-size ctx) chan))
-        ctx       (assoc ctx :bus bus :result (or (:result ctx) (chan)))
+        bus       (vec (repeatedly (:bus-size ctx) async/chan))
+        ctx       (assoc ctx :bus bus :result (or (:result ctx) (async/chan)))
         g         (:graph ctx)
         processor (:processor ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
         max-ops   (:max-ops ctx)
         max-t     (:timeout ctx)
-        result    (:result ctx)
+        res-chan  (:result ctx)
         watch-id  (keyword (gensym))]
     (reify
       #?@(:clj
@@ -425,7 +418,7 @@
         (remove-watch! g :add-vertex watch-id)
         (remove-watch! g :remove-vertex watch-id)
         (remove-watch! g :add-edge watch-id)
-        result)
+        res-chan)
       (notify! [_ evt]
         (go (>! (rand-nth bus) evt)))
       (include-vertex!
@@ -454,13 +447,13 @@
             (run! #(include-vertex! _ %) (vertices g))
             (loop [colls 0, sigs 0]
               (if (<= (+ colls sigs) max-ops)
-                (let [t (if max-t (timeout max-t))
-                      [[evt v ex] port] (alts! (if max-t (conj bus t) bus))]
+                (let [t (if max-t (async/timeout max-t))
+                      [[evt v ex] port] (async/alts! (if max-t (conj bus t) bus))]
                   (if (= port t)
                     (if (:auto-stop ctx)
                       (do (stop! _)
-                          (async-execution-result :converged result colls sigs t0))
-                      (do (async-execution-result :converged result colls sigs t0)
+                          (async-execution-result :converged res-chan colls sigs t0))
+                      (do (async-execution-result :converged res-chan colls sigs t0)
                           (recur colls sigs)))
                     (case evt
                       :collect (recur (inc colls) sigs)
@@ -468,13 +461,143 @@
                       :error   (do (warn ex "@ vertex" v)
                                    (when (:auto-stop ctx) (stop! _))
                                    (async-execution-result
-                                    :error result colls sigs t0
+                                    :error res-chan colls sigs t0
                                     {:reason-event     evt
                                      :reason-exception ex
                                      :reason-vertex    v}))
                       (do (warn "execution interrupted")
                           (async-execution-result
-                           :stopped result colls sigs t0)))))
+                           :stopped res-chan colls sigs t0)))))
                 (do (stop! _)
-                    (async-execution-result :max-ops-reached result colls sigs t0)))))
-          result)))))
+                    (async-execution-result :max-ops-reached res-chan colls sigs t0)))))
+          res-chan)))))
+
+(defn ^java.util.TimerTask timer-task [f]
+  (proxy [java.util.TimerTask] []
+    (run [] (f))))
+
+(defn dynamic-timeout
+  [interval]
+  (let [ctrl    (async/chan (async/sliding-buffer 1))
+        out     (async/chan)
+        timer   (volatile! nil)
+        trigger #(go (warn :trigger-timeout) (>! out [:timeout]))]
+    (go-loop []
+      (if (<! ctrl)
+        (do (when @timer (.cancel ^java.util.Timer @timer))
+            (vreset! timer (doto (java.util.Timer.) (.schedule (timer-task trigger) (long interval))))
+            (recur))
+        (do (when @timer (.cancel ^java.util.Timer @timer))
+            #_(async/close! out))))
+    [ctrl out]))
+
+(defn channel-mix
+  [inputs out]
+  (go-loop []
+    (let [[x] (async/alts! inputs)]
+      (warn :mix x)
+      (if x
+        (do (>! out x)
+            (recur))
+        (do (run! async/close! inputs)
+            (async/close! out)
+            (warn :mix-closed)))))
+  out)
+
+(defn async-execution-context2*
+  [opts]
+  (let [ctx       (merge default-async-context-opts opts)
+        bus       (vec (repeatedly (:bus-size ctx) async/chan))
+        ctx       (assoc ctx :bus bus :result (or (:result ctx) (async/chan (async/dropping-buffer 1))))
+        g         (:graph ctx)
+        processor (:processor ctx)
+        c-thresh  (:collect-thresh ctx)
+        s-thresh  (:signal-thresh ctx)
+        max-ops   (:max-ops ctx)
+        res-chan  (:result ctx)
+        watch-id  (keyword (gensym))
+        [t-ctrl t-out] (dynamic-timeout (:timeout ctx))]
+    (reify
+      #?@(:clj
+           [clojure.lang.IDeref
+            (deref [_] ctx)]
+           :cljs
+           [IDeref
+            (-deref [_] ctx)])
+      IGraphExecutor
+      (stop!
+        [_]
+        (stop-async-execution bus (vertices g))
+        (async/close! t-ctrl)
+        (remove-watch! g :add-vertex watch-id)
+        (remove-watch! g :remove-vertex watch-id)
+        (remove-watch! g :add-edge watch-id)
+        res-chan)
+      (notify! [_ evt]
+        (warn :notify evt)
+        (go (>! (rand-nth bus) evt)))
+      (include-vertex!
+        [_ v]
+        (info "including vertex into async context" (:id v) @v)
+        (processor v _)
+        (when (should-signal? v s-thresh)
+          (signal! v async-vertex-signal))
+        _)
+      (execute!
+        [_]
+        (let [t0      (now)
+              sigs    (atom 0)
+              colls   (atom 0)
+              result? (atom false)]
+          (add-watch!
+           g :add-vertex watch-id
+           (fn [[__ v]]
+             (debug :ctx-add-vertex (:id v) @v)
+             (processor v _)))
+          (add-watch!
+           g :remove-vertex watch-id
+           (fn [[__ v]]
+             (signal! v async-vertex-signal)))
+          (add-watch!
+           g :add-edge watch-id
+           (fn [[__ src dest]]
+             (debug :ctx-add-edge (:id src) (:id dest))
+             (signal! src async-vertex-signal)))
+          (dotimes [i (:parallel ctx)]
+            (let [mix (channel-mix (conj bus t-out) (async/chan))]
+              (go-loop []
+                (prn :sc @sigs @colls)
+                (if (<= (+ @sigs @colls) max-ops)
+                  (let [[evt v ex] (<! mix)]
+                    (prn (str "thread " i "event: " evt ": " v))
+                    (case evt
+                      :timeout (if (:auto-stop ctx)
+                                 (when-not @result?
+                                   (reset! result? true)
+                                   (stop! _)
+                                   (async-execution-result :converged res-chan @colls @sigs t0))
+                                 (do (>! t-ctrl :reset)
+                                     (async-execution-result :converged res-chan @colls @sigs t0)
+                                     (recur)))
+                      :signal  (do (>! t-ctrl :reset) (swap! sigs inc) (recur))
+                      :collect (do (>! t-ctrl :reset) (swap! colls inc) (recur))
+                      :error   (do (warn ex "@ vertex" v)
+                                   (reset! result? true)
+                                   (stop! _)
+                                   (async-execution-result
+                                    :error res-chan @colls @sigs t0
+                                    {:reason-event     evt
+                                     :reason-exception ex
+                                     :reason-vertex    v}))
+                      (when-not @result?
+                        (reset! result? true)
+                        (warn "execution interrupted")
+                        (async-execution-result
+                         :stopped res-chan @colls @sigs t0))))
+                  (when-not @result?
+                    (reset! result? true)
+                    (stop! _)
+                    (async-execution-result :max-ops-reached res-chan @colls @sigs t0))))))
+          (run! #(include-vertex! _ %) (vertices g))
+          (async/put! t-ctrl :start)
+          res-chan)))))
