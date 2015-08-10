@@ -91,8 +91,9 @@
         (if v
           (let [signal (f vertex opts)]
             (if-not (nil? signal)
-              (do (receive-signal v id signal)
-                  (recur (conj! active v) (next outs)))
+              (if (receive-signal v id signal)
+                (recur (conj! active v) (next outs))
+                (recur active (next outs)))
               (do (debug "signal fn for" (:id v) "returned nil, skipping...")
                   (recur active (next outs)))))
           (persistent! active))))))
@@ -153,12 +154,12 @@
   (receive-signal
     [_ src sig]
     (if-not (= sig ((::signal-map @state) src))
-      (swap! state
-             #(-> %
-                  (update ::uncollected conj sig)
-                  (assoc-in [::signal-map src] sig)))
-      (debug id " ignoring unchanged signal: " (pr-str sig)))
-    _))
+      (do (swap! state
+                 #(-> %
+                      (update ::uncollected conj sig)
+                      (assoc-in [::signal-map src] sig)))
+          true)
+      (debug id " ignoring unchanged signal: " (pr-str sig)))))
 
 #?(:clj
    (defmethod clojure.pprint/simple-dispatch Vertex
