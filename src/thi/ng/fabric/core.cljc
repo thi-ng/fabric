@@ -333,7 +333,7 @@
                   (->result :converged i sigs colls t0)))
               (->result :max-iter-reached i sigs colls t0))))))))
 
-(defn default-async-vertex-processor
+(defn probabilistic-vertex-processor
   [s-thresh c-thresh]
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
@@ -347,7 +347,7 @@
               [active sigs (inc colls)])
           [active sigs colls])))))
 
-(defn eager-async-vertex-processor
+(defn eager-probabilistic-vertex-processor
   [s-thresh c-thresh]
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
@@ -369,15 +369,24 @@
   ([acc] acc)
   ([[act as ac] [act' s c]] [(into act act') (+ as s) (+ ac c)]))
 
+(defn single-pass-scheduler
+  [workgroup-size processor vertices]
+  (r/fold workgroup-size combine-stats processor vertices))
+
+(defn two-pass-scheduler
+  [workgroup-size processor vertices]
+  )
+
 (defn default-async-context-opts
   []
   {:collect-thresh 0
    :signal-thresh  0
-   :processor      eager-async-vertex-processor
+   :processor      eager-probabilistic-vertex-processor
+   :scheduler      single-pass-scheduler
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
-(defn async-execution-context
+(defn execution-context
   [opts]
   (let [ctx       (merge (default-async-context-opts) opts)
         g         (:graph ctx)
@@ -385,6 +394,7 @@
         s-thresh  (:signal-thresh ctx)
         max-ops   (:max-ops ctx)
         processor ((:processor ctx) s-thresh c-thresh)
+        scheduler (:scheduler ctx)
         threads   (:threads ctx)
         watch-id  (keyword (gensym))
         v-filter  (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
@@ -419,11 +429,8 @@
             ;;(warn :active-count (count @active))
             (if (seq @active)
               (if (<= (+ colls sigs) max-ops)
-                (let [[act' sigs' colls']
-                      (r/fold
-                       (max 512 (long (/ (count @active) threads)))
-                       combine-stats
-                       processor @active)]
+                (let [grp-size            (max 512 (long (/ (count @active) threads)))
+                      [act' sigs' colls'] (scheduler grp-size processor @active)]
                   ;;(warn :auto (count @enable))
                   (reset! active (into (into #{} v-filter act') @enable))
                   (reset! enable #{})
@@ -431,7 +438,7 @@
                 (->result :max-ops-reached sigs colls t0))
               (->result :converged sigs colls t0))))))))
 
-(defn async-execution-context2
+(defn async-execution-context
   [opts]
   (let [ctx         (merge (default-async-context-opts) opts)
         g           (:graph ctx)
