@@ -14,6 +14,28 @@
         [clojure.core.reducers :as r]
         [cljs.core.async :as async :refer [<! >!]])]))
 
+#?(:cljs
+   (when-not (satisfies? IReduce LazyTransformer)
+     (defn- seq-reduce*
+       ([f coll]
+        (if-let [s (seq coll)]
+          (reduce f (first s) (next s))
+          (f)))
+       ([f val coll]
+        (loop [val val, coll (seq coll)]
+          (if coll
+            (let [nval (f val (first coll))]
+              (if (reduced? nval)
+                @nval
+                (recur nval (next coll))))
+            val))))
+
+     (extend-type LazyTransformer
+       IReduce
+       (-reduce
+         ([coll f] (seq-reduce* f coll))
+         ([coll f start] (seq-reduce* f start coll))))))
+
 ;;#?(:clj (taoensso.timbre/set-level! :warn))
 
 ;; (warn :free-ram (.freeMemory (Runtime/getRuntime)))
@@ -61,15 +83,13 @@
 (defn default-score-signal
   "Computes vertex signal score. Returns 0 if value equals prev-val,
   else returns 1."
-  [vertex]
-  (if (= @vertex @(:prev-val vertex)) 0 1))
+  [vertex] (if (= @vertex @(:prev-val vertex)) 0 1))
 
 (defn score-signal-with-new-edges
   "Computes vertex signal score. Returns number of *new* outgoing
   edges plus 1 if value not equals prev-val. New edge counter is reset
   each time signal! is called."
-  [vertex]
-  (+ (::new-edges @(:state vertex)) (if (= @vertex @(:prev-val vertex)) 0 1)))
+  [vertex] (+ (::new-edges @(:state vertex)) (if (= @vertex @(:prev-val vertex)) 0 1)))
 
 (defn default-score-collect
   "Computes vertex collect score, here simply the number
@@ -359,14 +379,15 @@
   [ctx]
   (let [processor ((:processor ctx) (:signal-thresh ctx) (:collect-thresh ctx))]
     (fn [workgroup-size vertices]
-      (r/fold workgroup-size single-pass-combine processor vertices))))
+      (r/fold workgroup-size single-pass-combine processor #?(:clj vertices :cljs (seq vertices))))))
 
 (defn two-pass-scheduler
   [ctx]
   (let [sig-fn  ((:signal-fn ctx) (:signal-thresh ctx))
         coll-fn ((:collect-fn ctx) (:collect-thresh ctx))]
     (fn [_ vertices]
-      (let [[s-act sigs]  (sig-fn vertices)
+      (let [#?@(:cljs [vertices (seq vertices)])
+            [s-act sigs]  (sig-fn vertices)
             [c-act colls] (coll-fn vertices)]
         [(into s-act c-act) sigs colls]))))
 
@@ -470,7 +491,7 @@
       (execute!
         [_]
         (let [t0     (now)
-              active (atom #?(:clj (sequence v-filter (vertices g)) :cljs (into [] v-filter (vertices g))))
+              active (atom (sequence v-filter (vertices g)))
               queue  (atom #{})]
           (add-context-watches g watch-id queue)
           (loop [colls 0, sigs 0]
@@ -480,11 +501,7 @@
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @queue))
-                  (reset! active
-                          #?(:clj
-                             (into (into #{} v-filter act') @queue)
-                             :cljs ;; FIXME CLJS doesn't support reducers on sets
-                             (vec (into (into #{} v-filter act') @queue))))
+                  (reset! active (into (into #{} v-filter act') @queue))
                   (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (->result :max-ops-reached sigs colls t0))
@@ -530,7 +547,7 @@
       (execute!
         [_]
         (let [t0     (atom (now))
-              active (atom #?(:clj (sequence v-filter (vertices g)) :cljs (into [] v-filter (vertices g))))
+              active (atom (sequence v-filter (vertices g)))
               queue  (atom #{})]
           (add-context-watches g watch-id queue)
           (go-loop [colls 0, sigs 0]
@@ -540,11 +557,7 @@
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @queue))
-                  (reset! active
-                          #?(:clj
-                             (into (into #{} v-filter act') @queue)
-                             :cljs ;; FIXME CLJS doesn't support reducers on sets
-                             (vec (into (into #{} v-filter act') @queue))))
+                  (reset! active (into (into #{} v-filter act') @queue))
                   (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (do (stop! _)
@@ -554,7 +567,7 @@
                     (stop! _)
                     (when (<! notify-chan)
                       (reset! t0 (now))
-                      (reset! active (into [] v-filter (vertices g)))
+                      (reset! active (sequence v-filter (vertices g)))
                       (reset! queue #{})
                       ;;(warn :rerun (count @active))
                       (recur 0 0))))))
