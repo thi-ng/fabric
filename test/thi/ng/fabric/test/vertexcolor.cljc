@@ -33,18 +33,26 @@
       (if (neighbors @vertex)
         (f/update-value! vertex #(rand-col-except % numc))))))
 
-(defn test-graph
+(defn graph-spec
   [numv numc prob]
+  {:colors   numc
+   :vertices (repeatedly numv #(rand-int numc))
+   :edges    (for [a (range numv)
+                   b (range numv)
+                   :when (and (not= a b) (< (rand) prob))]
+               [a b])})
+
+(defn graph-from-spec
+  [{:keys [colors vertices edges]}]
   (let [g (f/compute-graph)
-        vspec {::f/collect-fn (collect-color-vertex numc)}]
-    (doseq [i (range numv)]
-      (f/add-vertex! g (rand-int numc) vspec))
-    (doseq [i (range numv) j (range numv)]
-      (when (and (not= i j) (< (rand) prob))
-        (let [vi (f/vertex-for-id g i)
-              vj (f/vertex-for-id g j)]
-          (f/add-edge! g vi vj f/signal-forward nil)
-          (f/add-edge! g vj vi f/signal-forward nil))))
+        vspec {::f/collect-fn (collect-color-vertex colors)}]
+    (doseq [v vertices]
+      (f/add-vertex! g v vspec))
+    (doseq [[a b] edges
+            :let  [va (f/vertex-for-id g a)
+                   vb (f/vertex-for-id g b)]]
+      (f/add-edge! g va vb f/signal-forward nil)
+      (f/add-edge! g vb va f/signal-forward nil))
     g))
 
 (defn export-graph
@@ -56,29 +64,35 @@
              (:id v) (:id v) val (colors @v)))))
 
 (defn valid-vertex?
-  [v] (let [val @v] (every? #(not= val @%) (keys @(:outs v)))))
+  [v] (let [val @v] (every? #(not= val @%) (f/connected-vertices v))))
 
 (defn valid-graph?
   [g] (every? valid-vertex? (f/vertices g)))
 
+(def spec (graph-spec 1000 180 0.05))
+
 (deftest test-vertex-coloring
-  (let [g   (test-graph 100 15 0.05)
-        _   (prn :graph-ready)
-        res (f/execute! (f/sync-execution-context {:graph g :max-iter 5000}))]
-    (prn :sync res)
+  (let [g   (graph-from-spec spec)
+        res (f/execute! (f/scheduled-execution-context {:graph g}))]
+    (prn :scheduler res)
     ;;(prn (fu/sorted-vertex-values (f/vertices g)))
     ;;(export-graph "vcolor.dot" g)
     (is (= :converged (:type res)))
     (is (valid-graph? g))))
 
+(deftest test-vertex-coloring-sync
+  (let [g   (graph-from-spec spec)
+        res (f/execute! (f/sync-execution-context {:graph g :max-iter 5000}))]
+    (prn :sync res)
+    (is (= :converged (:type res)))
+    (is (valid-graph? g))))
+
 (deftest ^:async test-vertex-coloring-async
-  (let [g (test-graph 100 10 0.05)
+  (let [g (graph-from-spec spec)
         notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/async-execution-context {:graph g :timeout 10 :auto-stop true})))]
+      (let [res (<! (f/execute! (f/async-execution-context {:graph g})))]
         (prn :async res)
-        ;; (prn (fu/sorted-vertex-values (f/vertices g)))
-        ;; (export-graph "vcolor-async.dot" g)
         (is (= :converged (:type res)))
         (is (valid-graph? g))
         (>! notify :ok)))

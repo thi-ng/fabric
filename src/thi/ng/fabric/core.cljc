@@ -442,7 +442,7 @@
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
-(defn execution-context
+(defn scheduled-execution-context
   [opts]
   (let [ctx       (merge (default-context-opts) opts)
         g         (:graph ctx)
