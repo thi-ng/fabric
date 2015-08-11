@@ -395,7 +395,7 @@
              ;;[noah knows toxi]
              ])
         _ (prn :next-id (-> g :g :state deref :next-id))
-        ctx (f/async-execution-context {:graph g :timeout 100})
+        ctx (f/async-execution-context {:graph g})
         ctx-chan (f/execute! ctx)]
     (go []
         (let [res (<! ctx-chan)]
@@ -410,20 +410,20 @@
              [toxi knows noah]
              [geom tag clojure]
              [fabric tag clojure]])
-          (<! ctx-chan)
-          ;;(warn :result res)
-          (warn :all (sort @all))
-          (warn :pq @pq)
-          (warn :jq @jq)
-          (warn :tq @tq)
-          (remove-triple! g '[geom tag clojure])
-          (remove-triple! g '[fabric type project])
-          (<! ctx-chan)
-          (warn :jq @jq)
-          (warn :tq @tq)
-          (f/stop! ctx)
-          (do (remove-triple-graph-logger log)
-              (warn :done))))
+          (let [res (<! ctx-chan)]
+            (warn :result res)
+            (warn :all (sort @all))
+            (warn :pq @pq)
+            (warn :jq @jq)
+            (warn :tq @tq)
+            (remove-triple! g '[geom tag clojure])
+            (remove-triple! g '[fabric type project])
+            (let [res (<! ctx-chan)]
+              (warn :jq @jq)
+              (warn :tq @tq)
+              (f/stop! ctx)
+              (do (remove-triple-graph-logger log)
+                  (warn :done))))))
 
     {:g        g
      :ctx      ctx

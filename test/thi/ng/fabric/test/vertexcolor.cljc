@@ -55,13 +55,14 @@
       (f/add-edge! g vb va f/signal-forward nil))
     g))
 
-(defn export-graph
-  [path g]
-  (fu/vertices->dot
-   path (f/vertices g) identity
-   (fn [v val]
-     (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
-             (:id v) (:id v) val (colors @v)))))
+#?(:clj
+   (defn export-graph
+     [path g]
+     (fu/vertices->dot
+      path (f/vertices g) identity
+      (fn [v val]
+        (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
+                (:id v) (:id v) val (colors @v))))))
 
 (defn valid-vertex?
   [v] (let [val @v] (every? #(not= val @%) (f/connected-vertices v))))
