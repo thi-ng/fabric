@@ -196,9 +196,13 @@
           adds (set/difference in prev)
           inferred (mapcat production adds)]
       (debug :additions adds)
-      (doseq [t inferred]
-        (debug :add-triple t)
-        (add-triple! g t))
+      (doseq [[op t :as inf] inferred]
+        (case op
+          :+ (do (debug :add-triple t)
+                 (add-triple! g t))
+          :- (do (debug :remove-triple t)
+                 (remove-triple! g t))
+          (warn "invalid inference:" inf)))
       (swap! (:value vertex) set/union in (set inferred)))))
 
 (defn- index-vertex
@@ -273,12 +277,13 @@
     [_ id] (when-let [q (@queries id)] @(:result q)))
   (add-rule!
     [_ id query production]
-    (let [q   (add-join-query! _ query)
-          inf (f/add-vertex!
-               g #{} {::f/collect-fn (collect-inference _ production)})]
+    (let [q    (add-join-query! _ query)
+          inf  (f/add-vertex!
+                g #{} {::f/collect-fn (collect-inference _ production)})
+          spec {:query q :inf inf}]
       (f/add-edge! g (:qvar-result q) inf f/signal-forward nil)
-      {:query q :inf inf}))
-  )
+      (swap! rules assoc id spec)
+      spec)))
 
 (defn triple-graph
   [g]
@@ -341,19 +346,22 @@
         num-types (add-counter! g types)
         _ (add-rule!
            g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
-           (fn [{:syms [?a ?prop ?b]}] [[?b ?prop ?a]]))
+           (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]]))
         _ (add-rule!
            g :domain '[[?a ?prop nil] [?prop domain ?d]]
-           (fn [{:syms [?a ?prop ?d]}] [[?a 'type ?d]]))
+           (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]]))
         _ (add-rule!
            g :range '[[nil ?prop ?a] [?prop range ?r]]
-           (fn [{:syms [?a ?prop ?r]}] [[?a 'type ?r]]))
+           (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]]))
         _ (add-rule!
            g :transitive '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
-           (fn [{:syms [?a ?prop ?c]}] [[?a ?prop ?c]]))
+           (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]]))
         _ (add-rule!
            g :sub-prop '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
-           (fn [{:syms [?a ?super ?b]}] [[?a ?super ?b]]))
+           (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]]))
+        _ (add-rule!
+           g :modified '[[?a modified ?t1] [?a modified ?t2]]
+           (fn [{:syms [?a ?t1 ?t2]}] (if (not= ?t1 ?t2) [[:- [?a 'modified (min ?t1 ?t2)]]])))
         pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
         jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
         tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))]
@@ -368,7 +376,9 @@
        [parent sub-prop-of ancestor]
        [ancestor type transitive-prop]
        [ancestor domain person]
-       [ancestor range person]])
+       [ancestor range person]
+       [toxi modified 23]
+       [toxi modified 42]])
     {:g            g
      :log          log
      :all          all
@@ -402,7 +412,7 @@
            [geom tag clojure]
            [fabric tag clojure]])
         (let [res (<! ctx-chan)]
-          (warn :result res)
+          (warn :result2 res)
           (warn :all (sort @all))
           (warn :pq @pq)
           (warn :jq @jq)
@@ -410,6 +420,7 @@
           (remove-triple! g '[geom tag clojure])
           (remove-triple! g '[fabric tag clojure])
           (let [res (<! ctx-chan)]
+            (warn :result3 res)
             (warn :jq @jq)
             (warn :tq @tq)
             (f/stop! ctx)
