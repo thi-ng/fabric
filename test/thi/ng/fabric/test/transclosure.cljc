@@ -88,16 +88,24 @@
              [12 #{polypodiopsida}] [13 #{conifers}] [14 #{unikonts}] [15 #{opisthokonts}]
              [16 #{animals}] [17 #{fungi}] [18 #{amoebozoa}])
            (fu/sorted-vertex-values (f/vertices g))))
-    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
-      (prn res)
+    (let [res (f/execute! (f/scheduled-execution-context {:graph g}))]
+      (prn :scheduler res)
       (is (= :converged (:type res)))
       (is (= expected-closure (fu/sorted-vertex-values (f/vertices g)))))))
+
+(deftest test-transitive-closure-sync
+  (let [g (test-graph types hierarchy)
+        res (f/execute! (f/sync-execution-context {:graph g}))]
+    (prn :sync res)
+    (is (= :converged (:type res)))
+    (is (= expected-closure (fu/sorted-vertex-values (f/vertices g))))))
 
 (deftest ^:async test-transitive-closure-async
   (let [g (test-graph types hierarchy)
         notify (chan)]
     (go
       (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
+        (prn :async res)
         (is (= :converged (:type res)))
         (is (= expected-closure (fu/sorted-vertex-values (f/vertices g))))
         (>! notify :ok)))
