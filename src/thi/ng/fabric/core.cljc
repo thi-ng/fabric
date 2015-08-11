@@ -370,6 +370,21 @@
             [c-act colls] (coll-fn vertices)]
         [(into s-act c-act) sigs colls]))))
 
+(defn add-context-watches
+  [g watch-id queue]
+  (add-watch! g :add-vertex watch-id
+              (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
+  (add-watch! g :remove-vertex watch-id
+              (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
+  (add-watch! g :add-edge watch-id
+              (fn [[__ src dest]] (swap! queue into [src dest]))))
+
+(defn remove-context-watches
+  [g watch-id]
+  (remove-watch! g :add-vertex watch-id)
+  (remove-watch! g :remove-vertex watch-id)
+  (remove-watch! g :add-edge watch-id))
+
 (defn default-sync-context-opts
   []
   {:collect-thresh 0
@@ -419,9 +434,11 @@
   []
   {:collect-thresh 0
    :signal-thresh  0
-   :signal-fn      parallel-signal-pass
-   :collect-fn     parallel-collect-pass
-   :scheduler      two-pass-scheduler
+   ;;:signal-fn      parallel-signal-pass
+   ;;:collect-fn     parallel-collect-pass
+   ;;:scheduler      two-pass-scheduler
+   :processor      eager-probabilistic-vertex-processor
+   :scheduler      single-pass-scheduler
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
@@ -437,9 +454,7 @@
         watch-id  (keyword (gensym))
         v-filter  (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
         ->result  (fn [type sigs colls t0]
-                    (remove-watch! g :add-vertex watch-id)
-                    (remove-watch! g :remove-vertex watch-id)
-                    (remove-watch! g :add-edge watch-id)
+                    (remove-context-watches g watch-id)
                     (execution-result type sigs colls t0))]
     (reify
       #?@(:clj
@@ -456,22 +471,17 @@
         [_]
         (let [t0 (now)
               active (atom (sequence v-filter (vertices g)))
-              enable (atom #{})]
-          (add-watch! g :add-vertex watch-id
-                      (fn [[__ v]] (swap! enable into (signal! v sync-vertex-signal))))
-          (add-watch! g :remove-vertex watch-id
-                      (fn [[__ v]] (swap! enable into (signal! v sync-vertex-signal))))
-          (add-watch! g :add-edge watch-id
-                      (fn [[__ src dest]] (swap! enable into [src dest])))
+              queue  (atom #{})]
+          (add-context-watches g watch-id queue)
           (loop [colls 0, sigs 0]
             ;;(warn :active-count (count @active))
             (if (seq @active)
               (if (<= (+ colls sigs) max-ops)
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
-                  ;;(warn :auto (count @enable))
-                  (reset! active (into (into #{} v-filter act') @enable))
-                  (reset! enable #{})
+                  ;;(warn :auto (count @queue))
+                  (reset! active (into (into #{} v-filter act') @queue))
+                  (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (->result :max-ops-reached sigs colls t0))
               (->result :converged sigs colls t0))))))))
@@ -498,9 +508,7 @@
         notify-chan (async/chan (async/dropping-buffer 1))
         watch-id    (keyword (gensym))
         v-filter    (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
-        ->result    (fn [type sigs colls t0]
-                      (warn :send-result type)
-                      (go (>! res-chan (execution-result type sigs colls t0))))]
+        ->result    (fn [type sigs colls t0] (go (>! res-chan (execution-result type sigs colls t0))))]
     (reify
       #?@(:clj
            [clojure.lang.IDeref
@@ -511,9 +519,7 @@
       IGraphExecutor
       (stop!
         [_]
-        (remove-watch! g :add-vertex watch-id)
-        (remove-watch! g :remove-vertex watch-id)
-        (remove-watch! g :add-edge watch-id)
+        (remove-context-watches g watch-id)
         (async/close! notify-chan))
       (notify!
         [_] (go (>! notify-chan true)) nil)
@@ -521,25 +527,17 @@
         [_]
         (let [t0     (atom (now))
               active (atom (sequence v-filter (vertices g)))
-              enable (atom #{})]
-          (add-watch! g :add-vertex watch-id
-                      (fn [[__ v]]
-                        (swap! enable into (signal! v sync-vertex-signal))))
-          (add-watch! g :remove-vertex watch-id
-                      (fn [[__ v]]
-                        (swap! enable into (signal! v sync-vertex-signal))))
-          (add-watch! g :add-edge watch-id
-                      (fn [[__ src dest]]
-                        (swap! enable into [src dest])))
+              queue (atom #{})]
+          (add-context-watches g watch-id queue)
           (go-loop [colls 0, sigs 0]
             ;;(warn :active-count (count @active))
             (if (seq @active)
               (if (<= (+ colls sigs) max-ops)
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
-                  ;;(warn :auto (count @enable))
-                  (reset! active (into (into #{} v-filter act') @enable))
-                  (reset! enable #{})
+                  ;;(warn :auto (count @queue))
+                  (reset! active (into (into #{} v-filter act') @queue))
+                  (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (do (stop! _)
                     (->result :max-ops-reached sigs colls @t0)))
@@ -549,7 +547,7 @@
                     (when (<! notify-chan)
                       (reset! t0 (now))
                       (reset! active (sequence v-filter (vertices g)))
-                      (reset! enable #{})
+                      (reset! queue #{})
                       ;;(warn :rerun (count @active))
                       (recur 0 0))))))
           res-chan)))))
