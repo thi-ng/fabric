@@ -38,7 +38,7 @@
   (vertices [_])
   (add-edge! [_ src dest f opts]))
 
-(defprotocol IWatchable
+(defprotocol IWatch
   (add-watch! [_ type id f])
   (remove-watch! [_ type id]))
 
@@ -216,7 +216,7 @@
     (connect-to! src dest sig-fn opts)
     (notify-watches @watches [:add-edge src dest sig-fn opts])
     _)
-  IWatchable
+  IWatch
   (add-watch!
     [_ type id f]
     (info "adding watch" type id f)
@@ -469,8 +469,8 @@
       (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
-        (let [t0 (now)
-              active (atom (sequence v-filter (vertices g)))
+        (let [t0     (now)
+              active (atom #?(:clj (sequence v-filter (vertices g)) :cljs (into [] v-filter (vertices g))))
               queue  (atom #{})]
           (add-context-watches g watch-id queue)
           (loop [colls 0, sigs 0]
@@ -480,7 +480,11 @@
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @queue))
-                  (reset! active (into (into #{} v-filter act') @queue))
+                  (reset! active
+                          #?(:clj
+                             (into (into #{} v-filter act') @queue)
+                             :cljs ;; FIXME CLJS doesn't support reducers on sets
+                             (vec (into (into #{} v-filter act') @queue))))
                   (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (->result :max-ops-reached sigs colls t0))
@@ -526,8 +530,8 @@
       (execute!
         [_]
         (let [t0     (atom (now))
-              active (atom (sequence v-filter (vertices g)))
-              queue (atom #{})]
+              active (atom #?(:clj (sequence v-filter (vertices g)) :cljs (into [] v-filter (vertices g))))
+              queue  (atom #{})]
           (add-context-watches g watch-id queue)
           (go-loop [colls 0, sigs 0]
             ;;(warn :active-count (count @active))
@@ -536,7 +540,11 @@
                 (let [grp-size            (max 512 (long (/ (count @active) threads)))
                       [act' sigs' colls'] (scheduler grp-size @active)]
                   ;;(warn :auto (count @queue))
-                  (reset! active (into (into #{} v-filter act') @queue))
+                  (reset! active
+                          #?(:clj
+                             (into (into #{} v-filter act') @queue)
+                             :cljs ;; FIXME CLJS doesn't support reducers on sets
+                             (vec (into (into #{} v-filter act') @queue))))
                   (reset! queue #{})
                   (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                 (do (stop! _)
@@ -546,7 +554,7 @@
                     (stop! _)
                     (when (<! notify-chan)
                       (reset! t0 (now))
-                      (reset! active (sequence v-filter (vertices g)))
+                      (reset! active (into [] v-filter (vertices g)))
                       (reset! queue #{})
                       ;;(warn :rerun (count @active))
                       (recur 0 0))))))

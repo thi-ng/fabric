@@ -86,9 +86,9 @@
               (sort-by count)
               (reduce set/intersection)
               (into #{}
-               (comp (map #(f/vertex-for-id g %))
-                     (filter identity)
-                     (map deref)))))))))
+                    (comp (map #(f/vertex-for-id g %))
+                          (filter identity)
+                          (map deref)))))))))
 
 (defn qvar?
   "Returns true, if x is a qvar (a symbol prefixed with '?')"
@@ -243,7 +243,7 @@
     [_] (f/vertices g))
   (add-edge!
     [_ src dest sig opts] (f/add-edge! g src dest sig opts))
-  f/IWatchable
+  f/IWatch
   (add-watch!
     [_ type id f] (f/add-watch! g type id f) _)
   (remove-watch!
@@ -354,7 +354,11 @@
 (defn ^:export start-async
   []
   (let [g (triple-graph (f/compute-graph))
-        log (add-triple-graph-logger g #(spit "triple-log.edn" (str (pr-str %) "\n") :append true))
+        log (add-triple-graph-logger
+             g #?(:clj
+                  #(spit "triple-log.edn" (str (pr-str %) "\n") :append true)
+                  :cljs
+                  #(.log js/console (pr-str %))))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
@@ -391,10 +395,8 @@
              [parent sub-prop-of ancestor]
              [ancestor type transitive-prop]
              [ancestor domain person]
-             [ancestor range person]
-             ;;[noah knows toxi]
-             ])
-        _ (prn :next-id (-> g :g :state deref :next-id))
+             [ancestor range person]])
+        ;;_ (prn :next-id (-> g :g :state deref :next-id))
         ctx (f/async-execution-context {:graph g})
         ctx-chan (f/execute! ctx)]
     (go []
@@ -445,7 +447,11 @@
   (let [;;log (add-triple-graph-logger "triple-log.edn")
         ;;g (triple-graph (f/logged-compute-graph (f/compute-graph) log))
         g (triple-graph (f/compute-graph))
-        log (add-triple-graph-logger g #(spit "triple-log.edn" (str (pr-str %) "\n") :append true))
+        log (add-triple-graph-logger
+             g #?(:clj
+                  #(spit "triple-log.edn" (str (pr-str %) "\n") :append true)
+                  :cljs
+                  #(.log js/console (pr-str %))))
         toxi (:result (add-query! g :toxi ['toxi nil nil]))
         types (:result (add-query! g :types [nil 'type nil]))
         projects (:result (add-query! g :projects [nil 'type 'project]))
