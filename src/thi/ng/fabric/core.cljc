@@ -44,7 +44,7 @@
   (connect-to! [_ v sig-fn edge-opts])
   (disconnect-vertex! [_ v])
   (disconnect-all! [_])
-  (connected-vertices [_])
+  (neighbors [_])
   (collect! [_])
   (score-collect [_])
   (signal! [_ handler])
@@ -153,7 +153,7 @@
     (swap! state update ::new-edges inc)
     (debug id "edge to" (:id v) "(" (pr-str opts) ") new:" (::new-edges @state))
     _)
-  (connected-vertices
+  (neighbors
     [_] (keys @outs))
   (disconnect-vertex!
     [_ v]

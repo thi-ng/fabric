@@ -65,7 +65,7 @@
                 (:id v) (:id v) val (colors @v))))))
 
 (defn valid-vertex?
-  [v] (let [val @v] (every? #(not= val @%) (f/connected-vertices v))))
+  [v] (let [val @v] (every? #(not= val @%) (f/neighbors v))))
 
 (defn valid-graph?
   [g] (every? valid-vertex? (f/vertices g)))
