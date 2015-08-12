@@ -99,12 +99,6 @@
   of ::uncollected signal values."
   [vertex] (-> vertex :state deref ::uncollected count))
 
-(defn should-signal?
-  [vertex thresh] (> (score-signal vertex) thresh))
-
-(defn should-collect?
-  [vertex thresh] (> (score-collect vertex) thresh))
-
 (defn sync-vertex-signal
   [vertex]
   (let [id   (:id vertex)
@@ -284,7 +278,7 @@
     (loop [sigs 0, verts vertices]
       (if verts
         (let [v (first verts)]
-          (if (should-signal? v thresh)
+          (if (> (score-signal v) thresh)
             (do (debug (:id v) "signaling")
                 (recur (long (+ sigs (count (signal! v sync-vertex-signal)))) (next verts)))
             (recur sigs (next verts))))
@@ -296,7 +290,7 @@
     (loop [colls 0, verts vertices]
       (if verts
         (let [v (first verts)]
-          (if (should-collect? v thresh)
+          (if (> (score-collect v) thresh)
             (do (debug (:id v) "collecting")
                 (collect! v)
                 (recur (inc colls) (next verts)))
@@ -308,7 +302,7 @@
   (fn [vertices]
     (r/fold
      + (fn [sigs v]
-         (if (should-signal? v thresh)
+         (if (> (score-signal v) thresh)
            (+ sigs (count (signal! v sync-vertex-signal)))
            sigs))
      vertices)))
@@ -318,7 +312,7 @@
   (fn [vertices]
     (r/fold
      + (fn [colls v]
-         (if (should-collect? v thresh)
+         (if (> (score-collect v) thresh)
            (do (collect! v) (inc colls))
            colls))
      vertices)))
@@ -330,7 +324,7 @@
      workgroup-size
      sub-pass-combine
      (fn [acc v]
-       (if (should-signal? v thresh)
+       (if (> (score-signal v) thresh)
          (let [vsigs (signal! v sync-vertex-signal)]
            [(into (acc 0) vsigs) (+ (acc 1) (count vsigs))])
          acc))
@@ -343,7 +337,7 @@
      workgroup-size
      sub-pass-combine
      (fn [acc v]
-       (if (should-collect? v thresh)
+       (if (> (score-collect v) thresh)
          (do (collect! v)
              [(conj (acc 0) v) (inc (acc 1))])
          acc))
@@ -364,11 +358,11 @@
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
       (if (< (rand) 0.5)
-        (if (should-signal? v s-thresh)
+        (if (> (score-signal v) s-thresh)
           (let [vsigs (signal! v sync-vertex-signal)]
             [(into active vsigs) (+ sigs (count vsigs)) colls])
           [active sigs colls])
-        (if (should-collect? v c-thresh)
+        (if (> (score-collect v) c-thresh)
           (do (collect! v)
               [active sigs (inc colls)])
           [active sigs colls])))))
@@ -378,13 +372,13 @@
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
       (if (< (rand) 0.5)
-        (if (should-signal? v s-thresh)
+        (if (> (score-signal v) s-thresh)
           (let [vsigs (signal! v sync-vertex-signal)]
             [(into active vsigs) (+ sigs (count vsigs)) colls])
           [active sigs colls])
-        (if (should-collect? v c-thresh)
+        (if (> (score-collect v) c-thresh)
           (do (collect! v)
-              (if (should-signal? v s-thresh)
+              (if (> (score-signal v) s-thresh)
                 (let [vsigs (signal! v sync-vertex-signal)]
                   [(into active vsigs) (+ sigs (count vsigs)) (inc colls)])
                 [active sigs (inc colls)]))
@@ -480,7 +474,7 @@
         scheduler ((:scheduler ctx) ctx)
         threads   (:threads ctx)
         watch-id  (keyword (gensym))
-        v-filter  (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
+        v-filter  (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
         ->result  (fn [type sigs colls t0]
                     (remove-context-watches g watch-id)
                     (execution-result type sigs colls t0))]
@@ -536,7 +530,7 @@
         res-chan    (or (:result ctx) (async/chan))
         notify-chan (async/chan (async/dropping-buffer 1))
         watch-id    (keyword (gensym))
-        v-filter    (filter #(or (should-signal? % s-thresh) (should-collect? % c-thresh)))
+        v-filter    (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
         ->result    (fn [type sigs colls t0] (go (>! res-chan (execution-result type sigs colls t0))))]
     (reify
       #?@(:clj
