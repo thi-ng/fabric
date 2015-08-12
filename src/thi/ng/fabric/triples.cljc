@@ -19,6 +19,7 @@
   (add-triple! [_ t])
   (remove-triple! [_ t])
   (register-query! [_ q])
+  (unregister-query! [_ q])
   (query-for-pattern [_ pattern]))
 
 (defprotocol ITripleQuery
@@ -219,6 +220,8 @@
       (warn "attempting to remove unknown triple:" t)))
   (register-query!
     [_ q] (swap! queries assoc (raw-pattern q) q) q)
+  (unregister-query!
+    [_ q] (swap! queries dissoc (raw-pattern q) nil))
   (query-for-pattern
     [_ pattern] (@queries pattern)))
 
@@ -244,6 +247,7 @@
                  ::f/score-collect-fn (score-collect-min-signal-vals 3)})
           [s p o] pattern
           this (assoc _ :acc acc :result res)]
+      ;; TODO add index selection vertices, use existing if possible
       (f/add-edge! g subj acc signal-index-select [0 s])
       (f/add-edge! g pred acc signal-index-select [1 p])
       (f/add-edge! g obj  acc signal-index-select [2 o])
@@ -251,6 +255,7 @@
       (register-query! g this)))
   (remove-from-graph!
     [_ g]
+    (unregister-query! g _)
     (f/remove-vertex! g result)
     (f/remove-vertex! g acc)
     (assoc _ :acc nil :result nil)))
