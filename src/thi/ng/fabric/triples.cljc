@@ -508,6 +508,7 @@
            [toxi knows noah]
            [geom tag clojure]
            [fabric tag clojure]])
+        (f/notify! ctx)
         (let [res (<! ctx-chan)]
           (warn :result2 res)
           (warn :all (sort @all))
@@ -516,6 +517,7 @@
           (warn :tq @tq)
           (remove-triple! g '[geom tag clojure])
           (remove-triple! g '[fabric tag clojure])
+          (f/notify! ctx)
           (let [res (<! ctx-chan)]
             (warn :result3 res)
             (warn :jq @jq)
