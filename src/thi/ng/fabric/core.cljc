@@ -70,9 +70,8 @@
 
 (defprotocol IGraphExecutor
   (execute! [_])
-  (stop! [_])
   (notify! [_])
-  (include-vertex! [_ v]))
+  (stop! [_]))
 
 (defn collect-pure
   [collect-fn]
@@ -439,7 +438,6 @@
       IGraphExecutor
       (stop! [_] (err/unsupported!))
       (notify! [_] (err/unsupported!))
-      (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
         (add-watch! g :remove-vertex watch-id
@@ -491,7 +489,6 @@
       IGraphExecutor
       (stop! [_] (err/unsupported!))
       (notify! [_] (err/unsupported!))
-      (include-vertex! [_ v] (err/unsupported!))
       (execute!
         [_]
         (let [t0     (now)
