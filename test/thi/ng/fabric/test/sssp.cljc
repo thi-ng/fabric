@@ -119,18 +119,43 @@
         (>! notify :ok)))
     #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))))
 
-(def spec (random-graph-spec 1000 3000 3))
+(def spec (random-graph-spec 10000 30000 3))
 
-(deftest test-sssp-random
+(deftest test-sssp-random-two-pass
   (let [g (random-graph-from-spec spec)]
-    (let [res (f/execute! (f/scheduled-execution-context {:graph g}))]
-      (prn :random-scheduler res)
+    (let [res (f/execute! (f/scheduled-execution-context
+                           {:graph g
+                            :processor f/parallel-two-pass-processor
+                            :scheduler f/two-pass-scheduler}))]
+      (prn :random-two-pass res)
+      (is (= :converged (:type res)))
+      (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
+
+(deftest test-sssp-random-prob
+  (let [g (random-graph-from-spec spec)]
+    (let [res (f/execute! (f/scheduled-execution-context
+                           {:graph g
+                            :processor f/probabilistic-single-pass-processor
+                            :scheduler f/single-pass-scheduler}))]
+      (prn :random-prob res)
+      (is (= :converged (:type res)))
+      (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
+
+(deftest test-sssp-random-eager
+  (let [g (random-graph-from-spec spec)]
+    (let [res (f/execute! (f/scheduled-execution-context
+                           {:graph g
+                            :processor f/eager-probabilistic-single-pass-processor
+                            :scheduler f/single-pass-scheduler}))]
+      (prn :random-eager res)
       (is (= :converged (:type res)))
       (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
 
 (deftest test-sssp-random-sync
   (let [g (random-graph-from-spec spec)]
-    (let [res (f/execute! (f/sync-execution-context {:graph g}))]
+    (let [res (f/execute! (f/sync-execution-context
+                           {:graph g
+                            :max-iter 10000}))]
       (prn :random-sync res)
       (is (= :converged (:type res)))
       (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g)))))))
@@ -139,7 +164,8 @@
   (let [g (random-graph-from-spec spec)
         notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/async-execution-context {:graph g :auto-stop true})))]
+      (let [res (<! (f/execute! (f/async-execution-context
+                                 {:graph g :auto-stop true})))]
         (prn :random-async res)
         (is (= :converged (:type res)))
         (is (< 5 (transduce (comp (map deref) (filter identity)) max 0 (f/vertices g))))

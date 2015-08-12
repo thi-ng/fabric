@@ -72,10 +72,37 @@
 
 (def spec (graph-spec 1000 180 0.05))
 
-(deftest test-vertex-coloring
+(deftest test-vertex-coloring-two-pass
   (let [g   (graph-from-spec spec)
-        res (f/execute! (f/scheduled-execution-context {:graph g}))]
-    (prn :scheduler res)
+        res (f/execute! (f/scheduled-execution-context
+                         {:graph g
+                          :processor f/parallel-two-pass-processor
+                          :scheduler f/two-pass-scheduler}))]
+    (prn :scheduler-two-pass res)
+    ;;(prn (fu/sorted-vertex-values (f/vertices g)))
+    ;;(export-graph "vcolor.dot" g)
+    (is (= :converged (:type res)))
+    (is (valid-graph? g))))
+
+(deftest test-vertex-coloring-prob
+  (let [g   (graph-from-spec spec)
+        res (f/execute! (f/scheduled-execution-context
+                         {:graph g
+                          :processor f/probabilistic-single-pass-processor
+                          :scheduler f/single-pass-scheduler}))]
+    (prn :scheduler-prob res)
+    ;;(prn (fu/sorted-vertex-values (f/vertices g)))
+    ;;(export-graph "vcolor.dot" g)
+    (is (= :converged (:type res)))
+    (is (valid-graph? g))))
+
+(deftest test-vertex-coloring-eager
+  (let [g   (graph-from-spec spec)
+        res (f/execute! (f/scheduled-execution-context
+                         {:graph g
+                          :processor f/eager-probabilistic-single-pass-processor
+                          :scheduler f/single-pass-scheduler}))]
+    (prn :scheduler-eager res)
     ;;(prn (fu/sorted-vertex-values (f/vertices g)))
     ;;(export-graph "vcolor.dot" g)
     (is (= :converged (:type res)))
@@ -83,7 +110,9 @@
 
 (deftest test-vertex-coloring-sync
   (let [g   (graph-from-spec spec)
-        res (f/execute! (f/sync-execution-context {:graph g :max-iter 5000}))]
+        res (f/execute! (f/sync-execution-context
+                         {:graph g
+                          :max-iter 5000}))]
     (prn :sync res)
     (is (= :converged (:type res)))
     (is (valid-graph? g))))
@@ -92,7 +121,10 @@
   (let [g (graph-from-spec spec)
         notify (chan)]
     (go
-      (let [res (<! (f/execute! (f/async-execution-context {:graph g})))]
+      (let [res (<! (f/execute! (f/async-execution-context
+                                 {:graph g
+                                  :processor f/eager-probabilistic-single-pass-processor
+                                  :scheduler f/single-pass-scheduler})))]
         (prn :async res)
         (is (= :converged (:type res)))
         (is (valid-graph? g))
