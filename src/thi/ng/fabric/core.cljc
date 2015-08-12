@@ -325,8 +325,9 @@
 
 (defn parallel-signal-pass
   [thresh]
-  (fn [vertices]
+  (fn [workgroup-size vertices]
     (r/fold
+     workgroup-size
      sub-pass-combine
      (fn [acc v]
        (if (should-signal? v thresh)
@@ -337,8 +338,9 @@
 
 (defn parallel-collect-pass
   [thresh]
-  (fn [vertices]
+  (fn [workgroup-size vertices]
     (r/fold
+     workgroup-size
      sub-pass-combine
      (fn [acc v]
        (if (should-collect? v thresh)
@@ -347,7 +349,17 @@
          acc))
      vertices)))
 
-(defn probabilistic-vertex-processor
+(defn parallel-two-pass-processor
+  [s-thresh c-thresh]
+  (let [sig-fn  (parallel-signal-pass s-thresh)
+        coll-fn (parallel-collect-pass c-thresh)]
+    (fn [workgroup-size vertices]
+      (let [#?@(:cljs [vertices (seq vertices)])
+            [s-act sigs]  (sig-fn workgroup-size vertices)
+            [c-act colls] (coll-fn workgroup-size vertices)]
+        [(into s-act c-act) sigs colls]))))
+
+(defn probabilistic-single-pass-processor
   [s-thresh c-thresh]
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
@@ -361,7 +373,7 @@
               [active sigs (inc colls)])
           [active sigs colls])))))
 
-(defn eager-probabilistic-vertex-processor
+(defn eager-probabilistic-single-pass-processor
   [s-thresh c-thresh]
   (fn [[active sigs colls] v]
     (let [active (conj active v)]
@@ -386,13 +398,7 @@
 
 (defn two-pass-scheduler
   [ctx]
-  (let [sig-fn  ((:signal-fn ctx) (:signal-thresh ctx))
-        coll-fn ((:collect-fn ctx) (:collect-thresh ctx))]
-    (fn [_ vertices]
-      (let [#?@(:cljs [vertices (seq vertices)])
-            [s-act sigs]  (sig-fn vertices)
-            [c-act colls] (coll-fn vertices)]
-        [(into s-act c-act) sigs colls]))))
+  ((:processor ctx) (:signal-thresh ctx) (:collect-thresh ctx)))
 
 (defn add-context-watches
   [g watch-id queue]
@@ -453,21 +459,20 @@
                   (->result :converged i sigs colls t0)))
               (->result :max-iter-reached i sigs colls t0))))))))
 
-(defn default-context-opts
+(defn default-scheduled-context-opts
   []
   {:collect-thresh 0
    :signal-thresh  0
-   ;;:signal-fn      parallel-signal-pass
-   ;;:collect-fn     parallel-collect-pass
-   ;;:scheduler      two-pass-scheduler
-   :processor      eager-probabilistic-vertex-processor
-   :scheduler      single-pass-scheduler
+   :processor      parallel-two-pass-processor
+   :scheduler      two-pass-scheduler
+   ;;:processor      eager-probabilistic-single-pass-processor
+   ;;:scheduler      single-pass-scheduler
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
 (defn scheduled-execution-context
   [opts]
-  (let [ctx       (merge (default-context-opts) opts)
+  (let [ctx       (merge (default-scheduled-context-opts) opts)
         g         (:graph ctx)
         c-thresh  (:collect-thresh ctx)
         s-thresh  (:signal-thresh ctx)
@@ -512,8 +517,10 @@
   []
   {:collect-thresh 0
    :signal-thresh  0
-   :processor      eager-probabilistic-vertex-processor
-   :scheduler      single-pass-scheduler
+   :processor      parallel-two-pass-processor
+   :scheduler      two-pass-scheduler
+   ;;:processor      eager-probabilistic-single-pass-processor
+   ;;:scheduler      single-pass-scheduler
    :max-ops        1e6
    :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
