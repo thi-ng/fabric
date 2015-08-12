@@ -64,6 +64,10 @@
   (add-watch! [_ type id f])
   (remove-watch! [_ type id]))
 
+(defprotocol IGraphComponent
+  (add-to-graph! [_ g])
+  (remove-from-graph! [_ g]))
+
 (defprotocol IGraphExecutor
   (execute! [_])
   (stop! [_])

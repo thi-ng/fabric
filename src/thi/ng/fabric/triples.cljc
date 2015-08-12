@@ -15,11 +15,15 @@
         [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
 (defprotocol ITripleGraph
+  (triple-indices [_])
   (add-triple! [_ t])
   (remove-triple! [_ t])
-  (add-query! [_ id q])
-  (add-rule! [_ id match production])
-  (query-result [_ id]))
+  (register-query! [_ q])
+  (query-for-pattern [_ pattern]))
+
+(defprotocol ITripleQuery
+  (raw-pattern [_])
+  (result-vertex [_]))
 
 (defn signal-triple
   [vertex op] [op (:id vertex) @vertex])
@@ -127,65 +131,163 @@
                            (fn [r] (not= (r 1) (r 2))))
     :else                (constantly true)))
 
-(defn add-param-query!
-  [g id [s p o]]
-  (let [vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
-        vmap       (bind-translator vs? vp? vo? s p o)
-        verify     (triple-verifier s p o vs? vp? vo?)
-        res-tx     (comp (map #(if (verify %) (vmap %))) (filter identity))
-        collect-fn (f/collect-pure
-                    (fn [_ incoming]
-                      (if-let [res (seq (peek incoming))]
-                        (into #{} res-tx res)
-                        #{})))
-        q-pattern  [(if vs? nil s) (if vp? nil p) (if vo? nil o)]
-        q-spec     (add-query! g id q-pattern)
-        resv       (f/add-vertex! g nil {::f/collect-fn collect-fn})]
-    (f/add-edge! g (:result q-spec) resv f/signal-forward nil)
-    (assoc q-spec :qvar-result resv)))
-
 (defn score-collect-join
   [vertex]
   (let [state @(:state vertex)]
-    (if (and (seq (::f/uncollected state)) (== (count (::f/signal-map @(:state vertex))) 2)) 1 0)))
+    (if (and (seq (::f/uncollected state))
+             (== (count (::f/signal-map @(:state vertex))) 2))
+      1 0)))
+
+(defn- sole-user?
+  [src user]
+  (let [n (f/neighbors src)]
+    (and (== 1 (count n)) (= user (first n)))))
+
+(defrecord BasicTripleQuery [id acc result pattern]
+  #?@(:clj
+       [clojure.lang.IDeref (deref [_] @result)]
+       :cljs
+       [IDeref (-deref [_] @result)])
+  ITripleQuery
+  (raw-pattern
+    [_] pattern)
+  (result-vertex
+    [_] result)
+  f/IGraphComponent
+  (add-to-graph!
+    [_ g]
+    (let [{:keys [subj pred obj]} (triple-indices g)
+          acc  (f/add-vertex!
+                g {} {::f/collect-fn collect-select})
+          res  (f/add-vertex!
+                g nil
+                {::f/collect-fn       (aggregate-select g)
+                 ::f/score-collect-fn (score-collect-min-signal-vals 3)})
+          [s p o] pattern
+          this (assoc _ :acc acc :result res)]
+      (f/add-edge! g subj acc signal-index-select [0 s])
+      (f/add-edge! g pred acc signal-index-select [1 p])
+      (f/add-edge! g obj  acc signal-index-select [2 o])
+      (f/add-edge! g acc  res f/signal-forward nil)
+      (register-query! g this)))
+  (remove-from-graph!
+    [_ g]
+    (f/remove-vertex! g result)
+    (f/remove-vertex! g acc)
+    (assoc _ :acc nil :result nil)))
+
+(defn add-query!
+  [g id pattern]
+  (f/add-to-graph!
+   (map->BasicTripleQuery {:id id :pattern pattern}) g))
+
+(defrecord ParametricTripleQuery
+    [id sub-query result pattern]
+  #?@(:clj
+       [clojure.lang.IDeref (deref [_] @result)]
+       :cljs
+       [IDeref (-deref [_] @result)])
+  ITripleQuery
+  (raw-pattern
+    [_] (mapv #(if-not (qvar? %) %) pattern))
+  (result-vertex
+    [_] result)
+  f/IGraphComponent
+  (add-to-graph!
+    [_ g]
+    (let [[s p o]    pattern
+          vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
+          vmap       (bind-translator vs? vp? vo? s p o)
+          verify     (triple-verifier s p o vs? vp? vo?)
+          res-tx     (comp (map #(if (verify %) (vmap %))) (filter identity))
+          collect-fn (f/collect-pure
+                      (fn [_ incoming]
+                        (if-let [res (seq (peek incoming))]
+                          (into #{} res-tx res)
+                          #{})))
+          q-pattern  (raw-pattern _)
+          sub-q      (or (query-for-pattern g q-pattern) (add-query! g id q-pattern))
+          res        (f/add-vertex! g nil {::f/collect-fn collect-fn})]
+      (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
+      (assoc _ :sub-query sub-q :result res)))
+  (remove-from-graph!
+    [_ g]
+    (f/remove-vertex! g result)
+    (when (sole-user? (result-vertex sub-query) result)
+      (f/remove-from-graph! sub-query g))
+    (assoc _ :sub-query nil :result nil)))
+
+(defrecord TripleQueryJoin [id lhs rhs result]
+  #?@(:clj
+       [clojure.lang.IDeref (deref [_] @result)]
+       :cljs
+       [IDeref (-deref [_] @result)])
+  ITripleQuery
+  (raw-pattern
+    [_] nil)
+  (result-vertex
+    [_] result)
+  f/IGraphComponent
+  (add-to-graph!
+    [_ g]
+    (let [lhs-id (:id (result-vertex lhs))
+          rhs-id (:id (result-vertex rhs))
+          join   (f/add-vertex!
+                  g nil
+                  {::f/collect-fn
+                   (fn [vertex]
+                     (let [sig-map (::f/signal-map @(:state vertex))
+                           a (sig-map lhs-id)
+                           b (sig-map rhs-id)]
+                       (debug (:id vertex) :join-sets a b)
+                       (reset! (:value vertex) (set/join a b))))
+                   ::f/score-collect-fn
+                   score-collect-join})]
+      (f/add-edge! g (result-vertex lhs) join f/signal-forward nil)
+      (f/add-edge! g (result-vertex rhs) join f/signal-forward nil)
+      (assoc _ :result join)))
+  (remove-from-graph!
+    [_ g]
+    (f/remove-vertex! g result)
+    (when (sole-user? (result-vertex lhs) result)
+      (f/remove-from-graph! lhs g))
+    (when (sole-user? (result-vertex rhs) result)
+      (f/remove-from-graph! rhs g))))
+
+(defn random-id [] (keyword (gensym)))
+
+(defn add-param-query!
+  [g id pattern]
+  (f/add-to-graph!
+   (map->ParametricTripleQuery {:id id :pattern pattern}) g))
 
 (defn add-join!
-  [g qa qb]
-  (let [jv (f/add-vertex!
-            g nil ;; FIXME delay
-            {::f/collect-fn
-             (fn [vertex]
-               (let [sig-map (::f/signal-map @(:state vertex))
-                     a (sig-map (:id (:qvar-result qa)))
-                     b (sig-map (:id (:qvar-result qb)))]
-                 (debug (:id vertex) :join-sets a b)
-                 (reset! (:value vertex) (set/join a b))))
-             ::f/score-collect-fn
-             score-collect-join})]
-    (f/add-edge! g (:qvar-result qa) jv f/signal-forward nil)
-    (f/add-edge! g (:qvar-result qb) jv f/signal-forward nil)
-    {:a qa :b qb :qvar-result jv}))
+  ([g lhs rhs]
+   (add-join! g ))
+  ([g id lhs rhs]
+   (f/add-to-graph!
+    (map->TripleQueryJoin {:id id :lhs lhs :rhs rhs}) g)))
 
-(defn add-join-query!
-  [g [a b & more]]
-  (if b
-    (reduce
-     (fn [acc p] (add-join! g acc (add-param-query! g (keyword (gensym)) p)))
-     (add-join! g
-                (add-param-query! g (keyword (gensym)) a)
-                (add-param-query! g (keyword (gensym)) b))
-     more)
-    (add-param-query! g (keyword (gensym)) a)))
+(defn add-query-join!
+  [g a b & more]
+  (reduce
+   (fn [acc p]
+     (add-join! g (random-id) acc (add-param-query! g (random-id) p)))
+   (add-join!
+    g (random-id)
+    (add-param-query! g (random-id) a)
+    (add-param-query! g (random-id) b))
+   more))
 
 (defn add-query-filter!
-  [g q-vertex flt]
+  [g q flt]
   (let [tx (comp (mapcat identity) (filter flt))
         fv (f/add-vertex!
             g nil
             {::f/collect-fn
              (f/collect-pure
               (fn [_ incoming] (sequence tx incoming)))})]
-    (f/add-edge! g q-vertex fv f/signal-forward nil)
+    (f/add-edge! g (result-vertex q) fv f/signal-forward nil)
     fv))
 
 (defn collect-inference
@@ -204,6 +306,24 @@
                  (remove-triple! g t))
           (warn "invalid inference:" inf)))
       (swap! (:value vertex) set/union in (set inferred)))))
+
+(defrecord TripleInferenceRule
+    [id query patterns production inf]
+  f/IGraphComponent
+  (add-to-graph!
+    [_ g]
+    (let [q   (apply add-query-join! g patterns)
+          inf (f/add-vertex!
+               g #{} {::f/collect-fn (collect-inference g production)})]
+      (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
+      (assoc _ :query q :inf inf))))
+
+(defn add-rule!
+  [g id query production]
+  (f/add-to-graph!
+   (map->TripleInferenceRule
+    {:id id :patterns query :production production})
+   g))
 
 (defn- index-vertex
   [g spo]
@@ -234,6 +354,8 @@
   (remove-watch!
     [_ type id] (f/remove-watch! g type id) _)
   ITripleGraph
+  (triple-indices
+    [_] indices)
   (add-triple!
     [_ t]
     (or (@triples t)
@@ -255,35 +377,10 @@
         (f/remove-vertex! g v)
         v)
       (warn "attempting to remove unknown triple:" t)))
-  (add-query!
-    [_ id [s p o]]
-    ;; TODO remove vertices if query ID already exists
-    ;; TODO add default [nil nil nil] query & re-use
-    (let [{:keys [subj pred obj]} indices
-          acc  (f/add-vertex!
-                g {} {::f/collect-fn collect-select})
-          res  (f/add-vertex!
-                g nil
-                {::f/collect-fn       (aggregate-select g)
-                 ::f/score-collect-fn (score-collect-min-signal-vals 3)})
-          spec {:pattern [s p o] :acc acc :result res}]
-      (f/add-edge! g subj acc signal-index-select [0 s])
-      (f/add-edge! g pred acc signal-index-select [1 p])
-      (f/add-edge! g obj  acc signal-index-select [2 o])
-      (f/add-edge! g acc  res f/signal-forward nil)
-      (swap! queries assoc id spec)
-      spec))
-  (query-result
-    [_ id] (when-let [q (@queries id)] @(:result q)))
-  (add-rule!
-    [_ id query production]
-    (let [q    (add-join-query! _ query)
-          inf  (f/add-vertex!
-                g #{} {::f/collect-fn (collect-inference _ production)})
-          spec {:query q :inf inf}]
-      (f/add-edge! g (:qvar-result q) inf f/signal-forward nil)
-      (swap! rules assoc id spec)
-      spec)))
+  (register-query!
+    [_ q] (swap! queries assoc (raw-pattern q) q) q)
+  (query-for-pattern
+    [_ pattern] (@queries pattern)))
 
 (defn triple-graph
   [g]
@@ -312,7 +409,7 @@
 (defn add-triple-graph-logger
   [g log-fn]
   (let [ch        (chan 1024 triple-log-transducer)
-        watch-id  (keyword (gensym))
+        watch-id  (random-id)
         log->chan #(go (>! ch %))]
     (go-loop []
       (let [t (<! ch)]
@@ -337,13 +434,13 @@
                   #(spit "triple-log.edn" (str (pr-str %) "\n") :append true)
                   :cljs
                   #(.log js/console (pr-str %))))
-        toxi (:result (add-query! g :toxi ['toxi nil nil]))
-        types (:result (add-query! g :types [nil 'type nil]))
-        projects (:result (add-query! g :projects [nil 'type 'project]))
-        knows (:result (add-query! g :projects [nil 'knows nil]))
-        all (:result (add-query! g :all [nil nil nil]))
-        num-projects (add-counter! g projects)
-        num-types (add-counter! g types)
+        toxi (add-query! g :toxi ['toxi nil nil])
+        types (add-query! g :types [nil 'type nil])
+        projects (add-query! g :projects [nil 'type 'project])
+        knows (add-query! g :projects [nil 'knows nil])
+        all (add-query! g :all [nil nil nil])
+        num-projects (add-counter! g (result-vertex projects))
+        num-types (add-counter! g (result-vertex types))
         _ (add-rule!
            g :symmetric '[[?a ?prop ?b] [?prop type symmetric-prop]]
            (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]]))
@@ -362,9 +459,9 @@
         _ (add-rule!
            g :modified '[[?a modified ?t1] [?a modified ?t2]]
            (fn [{:syms [?a ?t1 ?t2]}] (if (not= ?t1 ?t2) [[:- [?a 'modified (min ?t1 ?t2)]]])))
-        pq (:qvar-result (add-param-query! g :pq '[?s knows ?o]))
-        jq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj type project] [?p type person]]))
-        tq (:qvar-result (add-join-query! g '[[?p author ?prj] [?prj tag ?t]]))]
+        pq (add-param-query! g :pq '[?s knows ?o])
+        jq (add-query-join! g '[?p author ?prj] '[?prj type project] '[?p type person])
+        tq (add-query-join! g '[?p author ?prj] '[?prj tag ?t])]
     (run!
      #(add-triple! g %)
      '[[toxi author fabric]
