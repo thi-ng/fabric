@@ -35,7 +35,7 @@
   [] (keyword (gensym)))
 
 (defn- signal-triple
-  [vertex op] [op (:id vertex) @vertex])
+  [^thi.ng.fabric.core.Vertex vertex op] [op (f/id vertex) @vertex])
 
 (defn- collect-index
   [spo]
@@ -73,13 +73,13 @@
 
 (defn- score-collect-min-signal-vals
   [num]
-  (fn [vertex]
-    (if (> num (count (vals (peek (::f/uncollected @(:state vertex)))))) 0 1)))
+  (fn [^thi.ng.fabric.core.Vertex vertex]
+    (if (> num (count (vals (peek (f/uncollected-signals vertex))))) 0 1)))
 
 (defn- score-collect-min-signals
   [num]
-  (fn [vertex]
-    (if (> num (count (::f/uncollected @(:state vertex)))) 0 1)))
+  (fn [^thi.ng.fabric.core.Vertex vertex]
+    (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
 (defn- aggregate-select
   [g]
@@ -141,20 +141,19 @@
     :else                (constantly true)))
 
 (defn- score-collect-join
-  [vertex]
-  (let [state @(:state vertex)]
-    (if (and (seq (::f/uncollected state))
-             (== (count (::f/signal-map @(:state vertex))) 2))
-      1 0)))
+  [^thi.ng.fabric.core.Vertex vertex]
+  (if (and (seq (f/uncollected-signals vertex))
+           (== (count (::f/signal-map @(.-state vertex))) 2))
+    1 0))
 
 (defn- collect-inference
   [g production]
-  (fn [vertex]
+  (fn [^thi.ng.fabric.core.Vertex vertex]
     (let [prev @vertex
-          in   (reduce into #{} (::f/uncollected @(:state vertex)))
+          in   (reduce into #{} (f/uncollected-signals vertex))
           adds (set/difference in prev)
           inferred (mapcat production adds)]
-      (debug (:id vertex) :additions adds)
+      (debug (f/id vertex) :additions adds)
       (doseq [[op t :as inf] inferred]
         (case op
           :+ (do (debug :add-triple t)
@@ -162,7 +161,7 @@
           :- (do (debug :remove-triple t)
                  (remove-triple! g t))
           (warn "invalid inference:" inf)))
-      (swap! (:value vertex) set/union adds))))
+      (swap! (.-value vertex) set/union adds))))
 
 (defn- index-vertex
   [g spo]
@@ -309,21 +308,23 @@
   f/IGraphComponent
   (add-to-graph!
     [_ g]
-    (let [lhs-id (:id (result-vertex lhs))
-          rhs-id (:id (result-vertex rhs))
+    (let [^thi.ng.fabric.core.Vertex lhs-v  (result-vertex lhs)
+          ^thi.ng.fabric.core.Vertex rhs-v  (result-vertex rhs)
+          lhs-id (f/id lhs-v)
+          rhs-id (f/id rhs-v)
           join   (f/add-vertex!
                   g nil
                   {::f/collect-fn
-                   (fn [vertex]
-                     (let [sig-map (::f/signal-map @(:state vertex))
+                   (fn [^thi.ng.fabric.core.Vertex vertex]
+                     (let [sig-map (::f/signal-map @(.-state vertex))
                            a (sig-map lhs-id)
                            b (sig-map rhs-id)]
-                       (debug (:id vertex) :join-sets a b)
-                       (reset! (:value vertex) (set/join a b))))
+                       (debug (f/id vertex) :join-sets a b)
+                       (reset! (.-value vertex) (set/join a b))))
                    ::f/score-collect-fn
                    score-collect-join})]
-      (f/add-edge! g (result-vertex lhs) join f/signal-forward nil)
-      (f/add-edge! g (result-vertex rhs) join f/signal-forward nil)
+      (f/add-edge! g lhs-v join f/signal-forward nil)
+      (f/add-edge! g rhs-v join f/signal-forward nil)
       (assoc _ :result join)))
   (remove-from-graph!
     [_ g]

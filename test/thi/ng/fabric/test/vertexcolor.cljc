@@ -28,8 +28,8 @@
 
 (defn collect-color-vertex
   [numc]
-  (fn [vertex]
-    (let [neighbors (set (vals (::f/signal-map @(:state vertex))))]
+  (fn [^thi.ng.fabric.core.Vertex vertex]
+    (let [neighbors (set (vals (::f/signal-map @(.-state vertex))))]
       (if (neighbors @vertex)
         (f/update-value! vertex #(rand-col-except % numc))))))
 
@@ -60,9 +60,9 @@
      [path g]
      (fu/vertices->dot
       path (f/vertices g) identity
-      (fn [v val]
+      (fn [^thi.ng.fabric.core.Vertex v val]
         (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
-                (:id v) (:id v) val (colors @v))))))
+                (f/id v) (f/id v) val (colors @v))))))
 
 (defn valid-vertex?
   [v] (let [val @v] (every? #(not= val @%) (f/neighbors v))))
