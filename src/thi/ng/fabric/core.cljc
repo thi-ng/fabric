@@ -43,7 +43,7 @@
 (defprotocol IVertex
   (id [_])
   (connect-to! [_ v sig-fn edge-opts])
-  (disconnect-vertex! [_ v])
+  (disconnect-neighbor! [_ v])
   (disconnect-all! [_])
   (neighbors [_])
   (collect! [_])
@@ -53,8 +53,10 @@
   (receive-signal [_ src sig])
   (uncollected-signals [_])
   (signal-map [_])
+  (new-edge-count [_])
   (set-value! [_ val])
-  (update-value! [_ f]))
+  (update-value! [_ f])
+  (previous-value [_]))
 
 (defprotocol IComputeGraph
   (add-vertex! [_ val vspec])
@@ -77,7 +79,8 @@
   (stop! [_]))
 
 (deftype Vertex
-    [id value state prev-val uncollected signal-map outs]
+    [id value prev-val state uncollected signal-map new-edges outs
+     score-signal-fn score-collect-fn collect-fn]
   #?@(:clj
        [clojure.lang.IDeref
         (deref
@@ -93,36 +96,40 @@
     [_ val] (reset! value val) _)
   (update-value!
     [_ f] (swap! value f) _)
+  (previous-value
+    [_] @prev-val)
   (collect!
     [_]
-    ((::collect-fn @state) _)
+    (collect-fn _)
     (reset! uncollected [])
     _)
   (score-collect
-    [_] ((::score-collect-fn @state) _))
+    [_] (score-collect-fn _))
   (connect-to!
     [_ v sig-fn opts]
     (swap! outs assoc v [sig-fn opts])
-    (swap! state update ::new-edges inc)
-    (debug id "edge to" (id ^Vertex v) "(" (pr-str opts) ") new:" (::new-edges @state))
+    (swap! new-edges inc)
+    (debug id "edge to" (thi.ng.fabric.core/id ^Vertex v) "(" (pr-str opts) ") new:" @new-edges)
     _)
   (neighbors
     [_] (keys @outs))
-  (disconnect-vertex!
+  (disconnect-neighbor!
     [_ v]
-    (debug id "disconnect from" (id ^Vertex v))
+    (debug id "disconnect from" (thi.ng.fabric.core/id ^Vertex v))
     (swap! outs dissoc v)
     _)
   (disconnect-all!
     [_]
-    (run! #(disconnect-vertex! _ %) (keys @outs))
+    (run! #(disconnect-neighbor! _ %) (keys @outs))
     _)
+  (new-edge-count
+    [_] @new-edges)
   (score-signal
-    [_] ((::score-signal-fn @state) _))
+    [_] (score-signal-fn _))
   (signal!
     [_ handler]
     (reset! prev-val @value)
-    (swap! state assoc ::new-edges 0)
+    (reset! new-edges 0)
     (handler _))
   (receive-signal
     [_ src sig]
@@ -136,17 +143,20 @@
   (uncollected-signals
     [_] @uncollected))
 
-#?(:clj
-   (defmethod clojure.pprint/simple-dispatch Vertex
-     [^Vertex o] ((get-method clojure.pprint/simple-dispatch clojure.lang.IPersistentMap) o)))
-#?(:clj
-   (defmethod print-method Vertex
-     [^Vertex o ^java.io.Writer w] (.write w (.toString (into {} o)))))
+(comment
+  #?(:clj
+     (defmethod clojure.pprint/simple-dispatch Vertex
+       [^Vertex o] ((get-method clojure.pprint/simple-dispatch clojure.lang.IPersistentMap) o)))
+
+  #?(:clj
+     (defmethod print-method Vertex
+       [^Vertex o ^java.io.Writer w] (.write w (.toString (into {} o)))))
+  )
 
 (defn collect-pure
   [collect-fn]
   (fn [^Vertex vertex]
-    (swap! (.-value vertex) #(collect-fn % (uncollected-signals vertex)))))
+    (update-value! vertex #(collect-fn % (uncollected-signals vertex)))))
 
 (def collect-into (collect-pure into))
 
@@ -156,13 +166,13 @@
 (defn default-score-signal
   "Computes vertex signal score. Returns 0 if value equals prev-val,
   else returns 1."
-  [^Vertex vertex] (if (= @vertex @(.-prev-val vertex)) 0 1))
+  [^Vertex vertex] (if (= @vertex (previous-value vertex)) 0 1))
 
 (defn score-signal-with-new-edges
   "Computes vertex signal score. Returns number of *new* outgoing
   edges plus 1 if value not equals prev-val. New edge counter is reset
   each time signal! is called."
-  [^Vertex vertex] (+ (::new-edges @(.-state vertex)) (if (= @vertex @(.-prev-val vertex)) 0 1)))
+  [^Vertex vertex] (+ (new-edge-count vertex) (if (= @vertex (previous-value vertex)) 0 1)))
 
 (defn default-score-collect
   "Computes vertex collect score, here simply the number of
@@ -185,22 +195,27 @@
                   (recur active (next outs)))))
           (persistent! active))))))
 
-(def default-vertex-state
+(def default-vertex-opts
   {::score-collect-fn default-score-collect
    ::score-signal-fn  default-score-signal
-   ::collect-fn       collect-into
-   ::new-edges        0})
+   ::collect-fn       collect-into})
 
 (defn vertex
   [id val opts]
-  (Vertex.
-   id
-   (atom val)
-   (atom (merge default-vertex-state opts))
-   (atom nil)
-   (atom [])
-   (atom {})
-   (atom {})))
+  (let [opts (merge default-vertex-opts opts)
+        opts' (dissoc opts ::score-signal-fn ::score-collect-fn ::collect-fn)]
+    (Vertex.
+     id
+     (atom val)                 ;; value
+     (atom nil)                 ;; prev
+     (atom opts')               ;; state
+     (atom [])                  ;; uncollected
+     (atom {})                  ;; sig-map
+     (atom 0)                   ;; new-edges
+     (atom {})                  ;; outs
+     (::score-signal-fn opts)
+     (::score-collect-fn opts)
+     (::collect-fn opts))))
 
 (defn notify-watches
   [watches evt]
@@ -215,13 +230,12 @@
     [_ val vspec]
     (let [v (-> state
                 (swap!
-                 (fn [state]
-                   (let [id (:next-id state)
-                         v  (vertex id val vspec)]
-                     (-> state
-                         (update :next-id inc)
-                         (update :vertices assoc id v)
-                         (assoc  :curr-vertex v)))))
+                 #(let [id (:next-id %)
+                        v  (vertex id val vspec)]
+                    (-> %
+                        (update :next-id inc)
+                        (update :vertices assoc id v)
+                        (assoc  :curr-vertex v))))
                 :curr-vertex)]
       (notify-watches @watches [:add-vertex v])
       v))
