@@ -224,6 +224,8 @@
   (query-for-pattern
     [_ pattern] (@queries pattern)))
 
+#?(:clj (prefer-method print-method clojure.lang.IRecord clojure.lang.IDeref))
+
 (defrecord BasicTripleQuery [id acc result pattern]
   #?@(:clj
        [clojure.lang.IDeref (deref [_] (when result @result))]
