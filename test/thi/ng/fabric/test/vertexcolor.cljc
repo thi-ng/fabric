@@ -29,7 +29,7 @@
 (defn collect-color-vertex
   [numc]
   (fn [^thi.ng.fabric.core.Vertex vertex]
-    (let [neighbors (set (vals (::f/signal-map @(.-state vertex))))]
+    (let [neighbors (set (vals (f/signal-map vertex)))]
       (if (neighbors @vertex)
         (f/update-value! vertex #(rand-col-except % numc))))))
 

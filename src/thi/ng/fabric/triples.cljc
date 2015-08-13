@@ -143,7 +143,7 @@
 (defn- score-collect-join
   [^thi.ng.fabric.core.Vertex vertex]
   (if (and (seq (f/uncollected-signals vertex))
-           (== (count (::f/signal-map @(.-state vertex))) 2))
+           (== (count (f/signal-map vertex)) 2))
     1 0))
 
 (defn- collect-inference
@@ -316,7 +316,7 @@
                   g nil
                   {::f/collect-fn
                    (fn [^thi.ng.fabric.core.Vertex vertex]
-                     (let [sig-map (::f/signal-map @(.-state vertex))
+                     (let [sig-map (f/signal-map vertex)
                            a (sig-map lhs-id)
                            b (sig-map rhs-id)]
                        (debug (f/id vertex) :join-sets a b)

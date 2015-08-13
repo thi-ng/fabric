@@ -52,6 +52,7 @@
   (score-signal [_])
   (receive-signal [_ src sig])
   (uncollected-signals [_])
+  (signal-map [_])
   (set-value! [_ val])
   (update-value! [_ f]))
 
@@ -76,7 +77,7 @@
   (stop! [_]))
 
 (deftype Vertex
-    [id value state prev-val uncollected outs]
+    [id value state prev-val uncollected signal-map outs]
   #?@(:clj
        [clojure.lang.IDeref
         (deref
@@ -125,11 +126,13 @@
     (handler _))
   (receive-signal
     [_ src sig]
-    (if-not (= sig ((::signal-map @state) src))
+    (if-not (= sig (@signal-map src))
       (do (swap! uncollected conj sig)
-          (swap! state assoc-in [::signal-map src] sig)
+          (swap! signal-map assoc src sig)
           true)
       (debug id " ignoring unchanged signal: " (pr-str sig))))
+  (signal-map
+    [_] @signal-map)
   (uncollected-signals
     [_] @uncollected))
 
@@ -183,8 +186,7 @@
           (persistent! active))))))
 
 (def default-vertex-state
-  {::signal-map       {}
-   ::score-collect-fn default-score-collect
+  {::score-collect-fn default-score-collect
    ::score-signal-fn  default-score-signal
    ::collect-fn       collect-into
    ::new-edges        0})
@@ -197,6 +199,7 @@
    (atom (merge default-vertex-state opts))
    (atom nil)
    (atom [])
+   (atom {})
    (atom {})))
 
 (defn notify-watches
