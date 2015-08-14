@@ -19,7 +19,6 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
          - [[#automatically-updating-fact-graph-queries-with-rule-based-inferencing][Automatically updating fact graph queries with rule based inferencing]]
-     - [[#benchmarks][Benchmarks]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -240,14 +239,9 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 [[./fabric-facts/test/core.org][full source]]
 
-** Benchmarks
-
-
 * Modules
 
 - [[./fabric-core/README.org][fabric-core]]
-
-The core module provides all components of a graph based computation model: Vertices
 
 - [[./fabric-facts/README.org][fabric-facts]]
 
