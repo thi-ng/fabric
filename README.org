@@ -34,7 +34,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.100"]
+  [thi.ng/fabric "0.0.108"]
 #+END_SRC
 
 ** TODO Overview
@@ -169,9 +169,9 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*      | *Lein coordinates*        | *Tagged Github URL* |
-|-----------+------------+--------------------+---------------------------+---------------------|
-|     0.0.0 | pending    | 1st public release | =[thi.ng/fabric "0.0.0"]= |                     |
+| *Version* | *Released* | *Description*      | *Lein coordinates*          | *Tagged Github URL* |
+|-----------+------------+--------------------+-----------------------------+---------------------|
+|   0.0.108 | pending    | 1st public release | =[thi.ng/fabric "0.0.108"]= |                     |
 
 ** Contributors
 
