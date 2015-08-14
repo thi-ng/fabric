@@ -1,0 +1,183 @@
+#+SETUPFILE: ../../common/setup.org
+
+* thi.ng.fabric.facts.test.core
+
+** Transitive closure extraction
+
+*** Inference rules
+
+#+BEGIN_SRC clojure :noweb-ref const
+  (def logger
+    #?(:clj
+       #(spit "fact-log.edn" (str (pr-str %) "\n") :append true)
+       :cljs
+       #(.log js/console (pr-str %))))
+
+  (def default-facts
+    '[[knows type symmetric-prop]
+      [knows domain person]
+      [author domain person]
+      [author range creative-work]
+      [parent sub-prop-of ancestor]
+      [ancestor type transitive-prop]
+      [ancestor domain person]
+      [ancestor range person]
+      [toxi author fabric]
+      [fabric type project]
+      [toxi modified 23]
+      [toxi modified 42]])
+
+  (def inference-rules
+    {:symmetric  ['[[?a ?prop ?b] [?prop type symmetric-prop]]
+                  (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]])]
+     :domain     ['[[?a ?prop nil] [?prop domain ?d]]
+                  (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])]
+     :range      ['[[nil ?prop ?a] [?prop range ?r]]
+                  (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]])]
+     :transitive ['[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+                  (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]])]
+     :sub-prop   ['[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+                  (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]])]
+     :modified   ['[[?a modified ?t1] [?a modified ?t2]]
+                  (fn [{:syms [?a ?t1 ?t2]}] (if (not= ?t1 ?t2) [[:- [?a 'modified (min ?t1 ?t2)]]]))]})
+#+END_SRC
+
+*** Helpers functions
+
+#+BEGIN_SRC clojure :noweb-ref helpers
+  (defn test-graph
+    []
+    (let [g            (ff/fact-graph (f/compute-graph))
+          log          (ff/add-fact-graph-logger g logger)
+          toxi         (ff/add-query! g :toxi ['toxi nil nil])
+          types        (ff/add-query! g :types [nil 'type nil])
+          projects     (ff/add-query! g :projects [nil 'type 'project])
+          knows        (ff/add-query! g :knows [nil 'knows nil])
+          all          (ff/add-query! g :all [nil nil nil])
+          num-projects (ff/add-counter! g (ff/result-vertex projects))
+          num-types    (ff/add-counter! g (ff/result-vertex types))
+          knows-pq     (ff/add-param-query! g :knows-param '[?s knows ?o])
+          jq           (ff/add-query-join! g '[?p author ?prj] '[?prj type project] '[?p type person])
+          tq           (ff/add-query-join! g '[?p author ?prj] '[?prj tag ?t])]
+      (run!
+       (fn [[id [q prod]]] (ff/add-rule! g id q prod)) inference-rules)
+      (run!
+       #(ff/add-fact! g %) default-facts)
+      {:g            g
+       :log          log
+       :all          all
+       :toxi         toxi
+       :types        types
+       :projects     projects
+       :knows        knows
+       :knows-pq     knows-pq
+       :jq           jq
+       :tq           tq
+       :num-projects num-projects
+       :num-types    num-types}))
+#+END_SRC
+
+** Tests
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-sync
+    []
+    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph)
+          ctx (f/sync-execution-context {:graph g})
+          res (f/execute! ctx)]
+      (warn :result res)
+      (warn (sort @all))
+      (run!
+       #(ff/add-fact! g %)
+       '[[toxi parent noah]
+         [ingo parent toxi]
+         [geom type project]
+         [toxi author geom]
+         [toxi knows noah]
+         [geom tag clojure]
+         [fabric tag clojure]])
+      (warn :result2 (f/execute! ctx))
+      (warn :all (sort @all))
+      (warn :knows @knows-pq)
+      (warn :jq @jq)
+      (warn :tq @tq)
+      (f/signal! (ff/remove-fact! g '[geom tag clojure]) f/sync-vertex-signal)
+      (f/signal! (ff/remove-fact! g '[fabric tag clojure]) f/sync-vertex-signal)
+      (warn :result3 (f/execute! ctx))
+      (warn :all @all)
+      (warn :jq @jq)
+      (warn :tq @tq)
+      (ff/remove-fact-graph-logger log)
+      (assoc spec :ctx ctx)))
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest ^:async test-async
+    []
+    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph)
+          ctx      (f/async-execution-context {:graph g})
+          ctx-chan (f/execute! ctx)
+          notify   (chan)]
+      (go
+        (let [res (<! ctx-chan)]
+          (warn :result res)
+          (warn (sort @all))
+          (run!
+           #(ff/add-fact! g %)
+           '[[toxi parent noah]
+             [ingo parent toxi]
+             [geom type project]
+             [toxi author geom]
+             [toxi knows noah]
+             [geom tag clojure]
+             [fabric tag clojure]])
+          (f/notify! ctx)
+          (let [res (<! ctx-chan)]
+            (warn :result2 res)
+            (warn :all (sort @all))
+            (warn :knows @knows-pq)
+            (warn :jq @jq)
+            (warn :tq @tq)
+            (ff/remove-fact! g '[geom tag clojure])
+            (ff/remove-fact! g '[fabric tag clojure])
+            (f/notify! ctx)
+            (let [res (<! ctx-chan)]
+              (warn :result3 res)
+              (warn :jq @jq)
+              (warn :tq @tq)
+              (f/stop! ctx)
+              (ff/remove-fact-graph-logger log)
+              (warn :done)
+              (>! notify :ok)))))
+      #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))
+      (assoc spec :ctx ctx)))
+#+END_SRC
+
+** Namespace declaration
+
+#+BEGIN_SRC clojure :tangle ../babel/test/thi/ng/fabric/facts/test/core.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.facts.test.core
+    #?(:cljs
+       (:require-macros
+        [cljs.core.async.macros :refer [go go-loop]]
+        [cljs-log.core :refer [debug info warn]]))
+    (:require
+     [thi.ng.fabric.core :as f]
+     [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.fabric.core.utils :as fu]
+     #?@(:clj
+         [[clojure.test :refer :all]
+          [clojure.core.async :refer [go go-loop chan close! <! <!! >!]]
+          [taoensso.timbre :refer [debug info warn]]]
+         :cljs
+         [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
+          [cljs.core.async :refer [chan close! <! >! take!]]])))
+
+  #?(:clj (taoensso.timbre/set-level! :warn))
+
+  <<const>>
+
+  <<helpers>>
+
+  <<tests>>
+#+END_SRC
