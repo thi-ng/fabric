@@ -1,4 +1,4 @@
-#+SETUPFILE: setup.org
+#+SETUPFILE: ../../common/setup.org
 
 * Contents                                                         :toc_3_gh:
      - [[#graphviz-dot-export][Graphviz Dot export]]
@@ -50,8 +50,8 @@
 
 ** Complete namespace definition
 
-#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/utils.cljc :noweb yes :mkdirp yes :padline no
-  (ns thi.ng.fabric.utils
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/core/utils.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.core.utils
     (:require
      [thi.ng.fabric.core :as f]))
 

@@ -1,4 +1,4 @@
-#+SETUPFILE: setup.org
+#+SETUPFILE: ../../common/setup.org
 
 * Contents                                                         :toc_3_gh:
  - [[#namespace-thingfabriccore][Namespace: thi.ng.fabric.core]]

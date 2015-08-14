@@ -1,4 +1,4 @@
-#+SETUPFILE: ../src/setup.org
+#+SETUPFILE: ../../common/setup.org
 
 * thi.ng.fabric.test.sssp
 
@@ -199,7 +199,7 @@
         [cljs.core.async.macros :refer [go go-loop]]))
     (:require
      [thi.ng.fabric.core :as f]
-     [thi.ng.fabric.utils :as fu]
+     [thi.ng.fabric.core.utils :as fu]
      #?@(:clj
          [[clojure.test :refer :all]
           [clojure.core.async :refer [go go-loop chan close! <! <!! >!]]]

@@ -1,0 +1,120 @@
+#+SETUPFILE: setup.org
+
+* Shared library module configuration
+
+** Injected properties
+
+#+NAME: conf-version
+#+BEGIN_SRC emacs-lisp
+  (concat
+   "0.0."
+   (replace-regexp-in-string
+    "\\`[ \t\n]*" ""
+    (replace-regexp-in-string
+     "[ \t\n]*\\'" ""
+     (shell-command-to-string "git describe --match 'v0.0' --dirty | cut -d '-' -f 2,4"))))
+#+END_SRC
+
+#+NAME: conf-project-url
+#+BEGIN_SRC clojure
+https://github.com/thi-ng/fabric
+#+END_SRC
+
+** Dependencies
+
+*** Runtime
+**** [[https://github.com/clojure/clojure][Clojure]]
+#+NAME: dep-clj
+#+BEGIN_SRC clojure
+[org.clojure/clojure "1.7.0"]
+#+END_SRC
+
+**** [[https://github.com/clojure/clojurescript][ClojureScript]]
+#+NAME: dep-cljs
+#+BEGIN_SRC clojure
+[org.clojure/clojurescript "1.7.48"]
+#+END_SRC
+**** core.async
+#+NAME: dep-async
+#+BEGIN_SRC clojure
+[org.clojure/core.async "0.1.346.0-17112a-alpha"]
+#+END_SRC
+
+**** timbre
+#+NAME: dep-timbre
+#+BEGIN_SRC clojure
+[com.taoensso/timbre "4.0.2"]
+#+END_SRC
+
+**** cljs-log
+#+NAME: dep-cljslog
+#+BEGIN_SRC clojure
+[cljs-log "0.2.1"]
+#+END_SRC
+
+**** xerror
+#+NAME: dep-xerror
+#+BEGIN_SRC clojure
+[thi.ng/xerror "0.1.0"]
+#+END_SRC
+
+**** [[https://github.com/thi-ng/dstruct][thi.ng/dstruct]]
+#+NAME: dep-dstruct
+#+BEGIN_SRC clojure
+[thi.ng/dstruct "0.1.0"]
+#+END_SRC
+
+**** [[https://github.com/thi-ng/strf][thi.ng/strf]]
+#+NAME: dep-strf
+#+BEGIN_SRC clojure
+[thi.ng/strf "0.1.0"]
+#+END_SRC
+
+**** [[https://github.com/thi-ng/color/][thi.ng/color]]
+#+NAME: dep-color
+#+BEGIN_SRC clojure
+[thi.ng/color "0.3.1"]
+#+END_SRC
+
+*** Development
+**** [[https://github.com/emezeske/lein-cljsbuild][Cljsbuild]]
+#+NAME: dep-cljsbuild
+#+BEGIN_SRC clojure
+[lein-cljsbuild "1.0.6"]
+#+END_SRC
+
+**** [[https://github.com/hugoduncan/criterium][Criterium]]
+#+NAME: dep-criterium
+#+BEGIN_SRC clojure
+[criterium "0.4.3"]
+#+END_SRC
+
+**** [[https://github.com/cemerick/clojurescript.test][clojurescript.test]]
+#+NAME: dep-cljs-test
+#+BEGIN_SRC clojure
+[com.cemerick/clojurescript.test "0.3.3"]
+#+END_SRC
+
+**** [[https://github.com/davidsantiago/perforate][perforate]]
+#+NAME: dep-perforate
+#+BEGIN_SRC clojure
+[perforate "0.3.4"]
+#+END_SRC
+
+**** [[https://github.com/postspectacular/perforate-x][perforate-x]]
+#+NAME: dep-perforate-x
+#+BEGIN_SRC clojure
+[perforate-x "0.1.0"]
+#+END_SRC
+
+**** [[https://github.com/RyanMcG/lein-npm][lein-npm]]
+#+NAME: dep-lein-npm
+#+BEGIN_SRC clojure
+[lein-npm "0.5.0"]
+#+END_SRC
+
+**** [[https://www.npmjs.com/package/benchmark][node benchmark]]
+#+NAME: dep-npm-benchmark
+#+BEGIN_SRC clojure
+[benchmark "1.0.0"]
+#+END_SRC
