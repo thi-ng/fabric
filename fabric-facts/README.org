@@ -73,7 +73,9 @@ target/fabric-facts-<<conf-version()>>.js
 
     :min-lein-vesion "2.4.0"
 
-    :dependencies [[thi.ng/facts-core "<<conf-version()>>"]]
+    :dependencies [<<dep-clj>>
+                   <<dep-cljs>>
+                   [thi.ng/fabric-core "<<conf-version()>>"]]
 
     :profiles     {:dev {:dependencies [<<dep-criterium>>]
                          :plugins      [<<dep-cljsbuild>>

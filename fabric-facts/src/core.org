@@ -4,9 +4,9 @@
  - [[#namespace-thingfabricfactscore][Namespace: thi.ng.fabric.facts.core]]
      - [[#protocols][Protocols]]
      - [[#basic-types][Basic types]]
-         - [[#triple-vertex][Triple vertex]]
+         - [[#fact-vertex][Fact vertex]]
          - [[#index-vertex][Index vertex]]
-         - [[#triplegraph][TripleGraph]]
+         - [[#factgraph][FactGraph]]
      - [[#queries][Queries]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
@@ -24,25 +24,25 @@
 ** Protocols
 
 #+BEGIN_SRC clojure :noweb-ref protos
-  (defprotocol ITripleGraph
-    (triple-indices [_])
-    (add-triple! [_ t])
-    (remove-triple! [_ t])
+  (defprotocol IFactGraph
+    (fact-indices [_])
+    (add-fact! [_ t])
+    (remove-fact! [_ t])
     (register-query! [_ q])
     (unregister-query! [_ q])
     (query-for-pattern [_ pattern]))
 
-  (defprotocol ITripleQuery
+  (defprotocol IFactQuery
     (raw-pattern [_])
     (result-vertex [_]))
 #+END_SRC
 
 ** Basic types
 
-*** Triple vertex
+*** Fact vertex
 
-#+BEGIN_SRC clojure :noweb-ref triple-v
-(def ^:private triple-vertex-spec
+#+BEGIN_SRC clojure :noweb-ref fact-v
+(def ^:private fact-vertex-spec
   {::f/score-collect-fn (constantly 0)
    ::f/score-signal-fn  f/score-signal-with-new-edges})
 #+END_SRC
@@ -57,11 +57,11 @@
          ::f/score-signal-fn f/score-signal-with-new-edges}))
 #+END_SRC
 
-*** TripleGraph
+*** FactGraph
 
 #+BEGIN_SRC clojure :noweb-ref graph
-(defrecord TripleGraph
-    [g indices triples queries rules]
+(defrecord FactGraph
+    [g indices facts queries rules]
   f/IComputeGraph
   (add-vertex!
     [_ val vspec] (f/add-vertex! g val vspec))
@@ -78,30 +78,30 @@
     [_ type id f] (f/add-watch! g type id f) _)
   (remove-watch!
     [_ type id] (f/remove-watch! g type id) _)
-  ITripleGraph
-  (triple-indices
+  IFactGraph
+  (fact-indices
     [_] indices)
-  (add-triple!
+  (add-fact!
     [_ t]
-    (or (@triples t)
+    (or (@facts t)
         (let [{:keys [subj pred obj]} indices
-              v (f/add-vertex! g t triple-vertex-spec)]
-          (f/add-edge! g v subj signal-triple :add)
-          (f/add-edge! g v pred signal-triple :add)
-          (f/add-edge! g v obj  signal-triple :add)
-          (swap! triples assoc t v)
+              v (f/add-vertex! g t fact-vertex-spec)]
+          (f/add-edge! g v subj signal-fact :add)
+          (f/add-edge! g v pred signal-fact :add)
+          (f/add-edge! g v obj  signal-fact :add)
+          (swap! facts assoc t v)
           v)))
-  (remove-triple!
+  (remove-fact!
     [_ t]
-    (if-let [v (@triples t)]
+    (if-let [v (@facts t)]
       (let [{:keys [subj pred obj]} indices]
-        (f/add-edge! g v subj signal-triple :remove)
-        (f/add-edge! g v pred signal-triple :remove)
-        (f/add-edge! g v obj  signal-triple :remove)
-        (swap! triples dissoc t)
+        (f/add-edge! g v subj signal-fact :remove)
+        (f/add-edge! g v pred signal-fact :remove)
+        (f/add-edge! g v obj  signal-fact :remove)
+        (swap! facts dissoc t)
         (f/remove-vertex! g v)
         v)
-      (warn "attempting to remove unknown triple:" t)))
+      (warn "attempting to remove unknown fact:" t)))
   (register-query!
     [_ q] (swap! queries assoc (raw-pattern q) q) q)
   (unregister-query!
@@ -114,13 +114,13 @@
 **** Constructor
 
 #+BEGIN_SRC clojure :noweb-ref graph
-  (defn triple-graph
+  (defn fact-graph
     [g]
-    (map->TripleGraph
+    (map->FactGraph
      {:indices {:subj (index-vertex g 0)
                 :pred (index-vertex g 1)
                 :obj  (index-vertex g 2)}
-      :triples (atom {})
+      :facts (atom {})
       :queries (atom {})
       :rules   (atom {})
       :g       g}))
@@ -136,12 +136,12 @@
 *** Basic pattern query
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord BasicTripleQuery [id acc result pattern]
+  (defrecord BasicFactQuery [id acc result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
          [IDeref (-deref [_] (when result @result))])
-    ITripleQuery
+    IFactQuery
     (raw-pattern
       [_] pattern)
     (result-vertex
@@ -149,7 +149,7 @@
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [{:keys [subj pred obj]} (triple-indices g)
+      (let [{:keys [subj pred obj]} (fact-indices g)
             acc  (f/add-vertex!
                   g {} {::f/collect-fn collect-select})
             res  (f/add-vertex!
@@ -176,13 +176,13 @@
 *** Parametric query
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord ParametricTripleQuery
+  (defrecord ParametricFactQuery
       [id sub-query result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
          [IDeref (-deref [_] (when result @result))])
-    ITripleQuery
+    IFactQuery
     (raw-pattern
       [_] (mapv #(if-not (qvar? %) %) pattern))
     (result-vertex
@@ -193,7 +193,7 @@
       (let [[s p o]    pattern
             vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
             vmap       (bind-translator vs? vp? vo? s p o)
-            verify     (triple-verifier s p o vs? vp? vo?)
+            verify     (fact-verifier s p o vs? vp? vo?)
             res-tx     (comp (map #(if (verify %) (vmap %))) (filter identity))
             collect-fn (f/collect-pure
                         (fn [_ incoming]
@@ -217,12 +217,12 @@
 *** Query join
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord TripleQueryJoin [id lhs rhs result]
+  (defrecord FactQueryJoin [id lhs rhs result]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
          [IDeref (-deref [_] (when result @result))])
-    ITripleQuery
+    IFactQuery
     (raw-pattern
       [_] nil)
     (result-vertex
@@ -263,19 +263,19 @@
   (defn add-query!
     [g id pattern]
     (f/add-to-graph!
-     (map->BasicTripleQuery {:id id :pattern pattern}) g))
+     (map->BasicFactQuery {:id id :pattern pattern}) g))
 
   (defn add-param-query!
     [g id pattern]
     (f/add-to-graph!
-     (map->ParametricTripleQuery {:id id :pattern pattern}) g))
+     (map->ParametricFactQuery {:id id :pattern pattern}) g))
 
   (defn add-join!
     ([g lhs rhs]
      (add-join! g (random-id) lhs rhs))
     ([g id lhs rhs]
      (f/add-to-graph!
-      (map->TripleQueryJoin {:id id :lhs lhs :rhs rhs}) g)))
+      (map->FactQueryJoin {:id id :lhs lhs :rhs rhs}) g)))
 
   (defn add-query-join!
     [g a b & more]
@@ -333,7 +333,7 @@
           (fn [r] {o (r 2)})
           (fn [_] {})))))
 
-  (defn- triple-verifier
+  (defn- fact-verifier
     [ts tp to vars varp varo]
     (cond
       (and vars varp varo) (cond
@@ -357,7 +357,7 @@
 ** Rulebased inference
 
 #+BEGIN_SRC clojure :noweb-ref inference
-  (defrecord TripleInferenceRule
+  (defrecord FactInferenceRule
       [id query patterns production inf]
     f/IGraphComponent
     (add-to-graph!
@@ -374,7 +374,7 @@
   (defn add-rule!
     [g id query production]
     (f/add-to-graph!
-     (map->TripleInferenceRule
+     (map->FactInferenceRule
       {:id id :patterns query :production production})
      g))
 #+END_SRC
@@ -382,7 +382,7 @@
 ** Signal & collect functions
 
 #+BEGIN_SRC clojure :noweb-ref sig-coll
-  (defn- signal-triple
+  (defn- signal-fact
     [^thi.ng.fabric.core.Vertex vertex op] [op (f/id vertex) @vertex])
 
   (defn- collect-index
@@ -462,10 +462,10 @@
         (debug (f/id vertex) :additions adds)
         (doseq [[op t :as inf] inferred]
           (case op
-            :+ (do (debug :add-triple t)
-                   (add-triple! g t))
-            :- (do (debug :remove-triple t)
-                   (remove-triple! g t))
+            :+ (do (debug :add-fact t)
+                   (add-fact! g t))
+            :- (do (debug :remove-fact t)
+                   (remove-fact! g t))
             (warn "invalid inference:" inf)))
         (swap! (.-value vertex) set/union adds))))
 #+END_SRC
@@ -473,14 +473,14 @@
 ** Graph logging
 
 #+BEGIN_SRC clojure :noweb-ref logger
-  (def triple-log-transducer
+  (def fact-log-transducer
     (comp
      (filter (fn [[op v]] (and (#{:add-vertex :remove-vertex} op) (vector? @v))))
      (map (fn [[op v]] [({:add-vertex :+ :remove-vertex :-} op) @v]))))
 
-  (defn add-triple-graph-logger
+  (defn add-fact-graph-logger
     [g log-fn]
-    (let [ch        (chan 1024 triple-log-transducer)
+    (let [ch        (chan 1024 fact-log-transducer)
           watch-id  (random-id)
           log->chan #(go (>! ch %))]
       (go-loop []
@@ -492,7 +492,7 @@
       (f/add-watch! g :remove-vertex watch-id log->chan)
       {:graph g :chan ch :watch-id watch-id}))
 
-  (defn remove-triple-graph-logger
+  (defn remove-fact-graph-logger
     [{:keys [graph watch-id chan]}]
     (f/remove-watch! graph :add-vertex watch-id)
     (f/remove-watch! graph :remove-vertex watch-id)
@@ -540,7 +540,7 @@
 
   <<query-helpers>>
 
-  <<triple-v>>
+  <<fact-v>>
 
   <<index-v>>
 
