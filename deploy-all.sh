@@ -3,7 +3,7 @@
 readonly PROGNAME=$(basename $0)
 readonly PROGDIR=$(cd "$(dirname "$0")"; pwd)
 readonly ARGS="$@"
-readonly PREFIX="deploy-"
+readonly PREFIX="fabric-"
 
 main() {
     local modules="core facts"
