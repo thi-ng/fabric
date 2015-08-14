@@ -9,8 +9,11 @@ Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript
  - [[#about-the-project][About the project]]
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#todo-overview][TODO Overview]]
-     - [[#todo-status][TODO Status]]
-     - [[#todo-example-usage][TODO Example usage]]
+         - [[#motivation][Motivation]]
+         - [[#use-cases][Use cases]]
+         - [[#related-work][Related work]]
+     - [[#status][Status]]
+     - [[#example-usage][Example usage]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -34,17 +37,23 @@ Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript
 
 Compute graph infrastructure
 
-** TODO Status
+*** Motivation
+*** Use cases
+*** Related work
+
+** Status
 
 ALPHA quality, in active development.
 
-** TODO Example usage
+** Example usage
 
-#+BEGIN_SRC clojure
-  (require 'thi.ng.fabric.core)
+Currently, the included test cases acts as the best usage examples and
+demonstrate most of the current implemented functionality:
 
-  ;; TODO some magic
-#+END_SRC
+- [[./fabric-core/test/sssp.org][Single-source shortest path]]
+- [[./fabric-core/test/vertexcoloring.org][Vertex coloring in random graphs]]
+- [[./fabric-core/test/transclosure.org][Transitive closure (type inheritance example)]]
+- [[./fabric-facts/test/core.org][Automatically updating fact graph queries with rule based inferencing]]
 
 * Modules
 
@@ -108,6 +117,9 @@ it from Emacs (=C-c C-v t=) or =tangle.sh=, then reload the namespace
 in the REPL via =(require 'thi.ng.fabric... :reload)= or similar.
 
 ** Leiningen project file                                          :noexport:
+
+This project file only acts as meta-project definition adding
+dependencies to all currently existing modules.
 
 #+BEGIN_SRC clojure :tangle babel/project.clj :noweb yes :mkdirp yes :padline no
   (defproject <<project-name>> "<<conf-version()>>"
