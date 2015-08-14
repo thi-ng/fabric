@@ -60,15 +60,15 @@ demonstrate most of the current implemented functionality:
 
 *** [[./fabric-core/test/sssp.org][Single-source shortest path]]
 
-[[./assets/sssp.png]]
+[[./assets/sssp.jpg]]
 
 *** [[./fabric-core/test/vertexcoloring.org][Vertex coloring in random graphs]]
 
-[[./assets/vcolor.png]]
+[[./assets/vcolor.jpg]]
 
 *** [[./fabric-core/test/transclosure.org][Transitive closure (type inheritance example)]]
 
-[[./assets/transclosure.png]]
+[[./assets/transclosure.jpg]]
 
 *** [[./fabric-facts/test/core.org][Automatically updating fact graph queries with rule based inferencing]]
 
