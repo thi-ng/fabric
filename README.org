@@ -11,9 +11,13 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
      - [[#todo-overview][TODO Overview]]
          - [[#motivation][Motivation]]
          - [[#use-cases][Use cases]]
-         - [[#related-work][Related work]]
+         - [[#resources--related-work][Resources / related work]]
      - [[#status][Status]]
      - [[#example-usage][Example usage]]
+         - [[#fabric-coretestsssporgsingle-source-shortest-path][[[./fabric-core/test/sssp.org][Single-source shortest path]]]]
+         - [[#fabric-coretestvertexcoloringorgvertex-coloring-in-random-graphs][[[./fabric-core/test/vertexcoloring.org][Vertex coloring in random graphs]]]]
+         - [[#fabric-coretesttransclosureorgtransitive-closure-type-inheritance-example][[[./fabric-core/test/transclosure.org][Transitive closure (type inheritance example)]]]]
+         - [[#fabric-factstestcoreorgautomatically-updating-fact-graph-queries-with-rule-based-inferencing][[[./fabric-facts/test/core.org][Automatically updating fact graph queries with rule based inferencing]]]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -39,7 +43,11 @@ Compute graph infrastructure
 
 *** Motivation
 *** Use cases
-*** Related work
+*** Resources / related work
+
+- http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
+- http://www.semantic-web-journal.net/system/files/swj971.pdf
+- http://signalcollect.com
 
 ** Status
 
@@ -50,10 +58,19 @@ ALPHA quality, in active development.
 Currently, the included test cases acts as the best usage examples and
 demonstrate most of the current implemented functionality:
 
-- [[./fabric-core/test/sssp.org][Single-source shortest path]]
-- [[./fabric-core/test/vertexcoloring.org][Vertex coloring in random graphs]]
-- [[./fabric-core/test/transclosure.org][Transitive closure (type inheritance example)]]
-- [[./fabric-facts/test/core.org][Automatically updating fact graph queries with rule based inferencing]]
+*** [[./fabric-core/test/sssp.org][Single-source shortest path]]
+
+[[./assets/sssp.png]]
+
+*** [[./fabric-core/test/vertexcoloring.org][Vertex coloring in random graphs]]
+
+[[./assets/vcolor.png]]
+
+*** [[./fabric-core/test/transclosure.org][Transitive closure (type inheritance example)]]
+
+[[./assets/transclosure.png]]
+
+*** [[./fabric-facts/test/core.org][Automatically updating fact graph queries with rule based inferencing]]
 
 * Modules
 
