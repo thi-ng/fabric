@@ -102,13 +102,13 @@ This namespace provides...
       [_ v sig-fn opts]
       (swap! outs assoc v [sig-fn opts])
       (swap! new-edges inc)
-      (debug id "edge to" (thi.ng.fabric.core/id v) "(" (pr-str opts) ") new:" @new-edges)
+      (debug id "edge to" (thi.ng.fabric.core/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
       _)
     (neighbors
       [_] (keys @outs))
     (disconnect-neighbor!
       [_ v]
-      (debug id "disconnect from" (thi.ng.fabric.core/id v))
+      (debug id "disconnect from" (thi.ng.fabric.core/vertex-id v))
       (swap! outs dissoc v)
       _)
     (disconnect-all!
@@ -123,7 +123,7 @@ This namespace provides...
       [_ handler]
       (reset! prev-val @value)
       (reset! new-edges 0)
-      (handler _))
+      (handler _ @outs))
     (receive-signal
       [_ src sig]
       (if-not (= sig (@signal-map src))
@@ -249,9 +249,8 @@ This namespace provides...
     [vertex] (count (uncollected-signals vertex)))
 
   (defn sync-vertex-signal
-    [^Vertex vertex]
-    (let [id   (vertex-id vertex)
-          outs @(.-outs vertex)]
+    [vertex outs]
+    (let [id (vertex-id vertex)]
       (loop [active (transient []), outs outs]
         (let [[v [f opts]] (first outs)]
           (if v

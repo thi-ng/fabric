@@ -19,8 +19,8 @@
              (filter flt)
              (sort-by f/vertex-id)
              (mapcat
-              (fn [v]
-                (if-let [outs @(.-outs ^thi.ng.fabric.core.Vertex v)]
+              (fn [^thi.ng.fabric.core.Vertex v]
+                (if-let [outs (seq @(.-outs v))]
                   (let [val @v
                         val (pr-str (if (instance? clojure.lang.IDeref val) @val val))]
                     (->> outs
