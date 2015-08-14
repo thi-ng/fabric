@@ -9,15 +9,17 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
  - [[#about-the-project][About the project]]
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#todo-overview][TODO Overview]]
-         - [[#motivation][Motivation]]
-         - [[#use-cases][Use cases]]
+         - [[#features][Features]]
+         - [[#motivation--use-cases][Motivation & use cases]]
          - [[#resources--related-work][Resources / related work]]
+         - [[#benchmarks][Benchmarks]]
      - [[#status][Status]]
      - [[#example-usage][Example usage]]
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
          - [[#automatically-updating-fact-graph-queries-with-rule-based-inferencing][Automatically updating fact graph queries with rule based inferencing]]
+     - [[#benchmarks][Benchmarks]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -39,15 +41,78 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 
 ** TODO Overview
 
-Compute graph infrastructure
+*** Features
 
-*** Motivation
-*** Use cases
+- Modular architecture
+- Protocol based implementation
+- Customizable vertex, edge, graph & execution context types
+- 3 types of graph execution contexts built-in
+- Sync, async, parallel & continuous processing (and mixtures of)
+- Partial or stepwise execution
+- Activity scoring system (customizable)
+- Automatic graph convergence detection (no more outstanding actions)
+- Computation of minimum active work set
+- Built-in graphs & vertices are mutable (via atoms)
+- Edges are functions and all signal/collect actions are purely functional too
+- Support for graph modification logging (persistence, event sourcing etc.)
+- Self-modifiable graphs during execution (add/remove/modify vertices/edges)
+- Easy-to-use API
+
+*** Motivation & use cases
+
+**** Reactive programming
+
+- truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
+  mandatory integration or reliance on React.js or DOM rendering cycle
+
+**** Single machine or distributed processing
+
+- multi-machine graphs not yet implemented (WIP)
+
+**** (Semantic) knowledge graphs, queries & reasoning
+
+- use compute graphs as auto-updating database using attached queries
+  & inference rules to automatically add or retract facts when certain
+  patterns are matched
+
+- use as storage backend for [[http://thi.ng/trio][thi.ng/trio]]
+
+- implement Rete-style rule engines, using vertices for pervasive
+  intermediate result caching and define custom signal and scoring
+  functions to inhibit obsolete work in the graph (see fabric-facts
+  module)
+
+**** Toolkit w/ Clojurescript support
+
 *** Resources / related work
 
 - http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
 - http://www.semantic-web-journal.net/system/files/swj971.pdf
 - http://signalcollect.com
+
+*** Benchmarks
+
+**** Single-source shortest path
+
+10,000 vertices, 30,000 paths, max. length 3 hops
+
+|         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
+|---------+---------------------+---------------+-----------------------+-------------+----------|
+| Total   | 221ms               | 182ms         | 229ms                 | 309ms       | 130ms    |
+| Per op  | 6.1µs               | 3.1µs         | 4.0µs                 | 2.5µs       | 4.0µs    |
+
+**** Vertex coloring
+
+1000 vertices, max. 180 colors, 5% edge probability
+
+|         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
+|---------+---------------------+---------------+-----------------------+-------------+----------|
+| Total   | 1706ms              | 605ms         | 289ms                 | 361ms       | 825ms    |
+| Per op  | 3.9µs               | 3.8µs         | 2.2µs                 | 2.7µs       | 4.3µs    |
+| Signals | 122651              | 144580        | 122651                | 126198      | 182802   |
+| Colls   | 42960               | 12839         | 4001                  | 4772        | 6251     |
+
+TODO add charts
 
 ** Status
 
@@ -55,10 +120,12 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-Currently, the included test cases acts as the best usage examples and
-demonstrate most of the current implemented functionality:
+Currently, the included test cases act as the best demonstation of usage patterns and
+also show most of the currently implemented functionality:
 
 *** Single-source shortest path
+
+Calculate minimum distance from a single node to all others (connected) in the graph.
 
 [[./assets/sssp.jpg]]
 
@@ -66,11 +133,18 @@ demonstrate most of the current implemented functionality:
 
 *** Vertex coloring in random graphs
 
+Assign each vertex a color from a limited pallete such that no two
+neighbors have the same color.
+
 [[./assets/vcolor.jpg]]
 
 [[./fabric-core/test/vertexcoloring.org][source]]
 
 *** Transitive closure (type inheritance example)
+
+Given a graph encoding a tree structure (e.g. type hierarchy), compute
+all super types for each node. This example uses a tiny fragment of
+top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of Life]].
 
 [[./assets/transclosure.jpg]]
 
@@ -78,12 +152,105 @@ demonstrate most of the current implemented functionality:
 
 *** Automatically updating fact graph queries with rule based inferencing
 
-[[./fabric-facts/test/core.org][source]]
+#+BEGIN_SRC clojure
+  (require '[thi.ng.fabric.core :as f])
+  (require '[thi.ng.fabric.facts.core :as ff])
+
+  ;; Initial facts
+
+  (def facts
+    '[[toxi author fabric]
+      [toxi parent noah]
+      [ingo parent toxi]
+      [fabric type project]
+      [author domain person]
+      [author range creative-work]
+      [parent sub-prop-of ancestor]
+      [ancestor type transitive-prop]
+      [ancestor domain person]
+      [ancestor range person]])
+
+  ;; Rule specs (join queries) and their production functions
+  ;; The keyword :+ means these facts will be added to the graph (rules
+  ;; can also retract facts)
+
+  (def inference-rules
+    {:symmetric  {:match '[[?a ?prop ?b] [?prop type symmetric-prop]]
+                  :infer (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]])}
+     :domain     {:match '[[?a ?prop nil] [?prop domain ?d]]
+                  :infer (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])}
+     :range      {:match '[[nil ?prop ?a] [?prop range ?r]]
+                  :infer (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]])}
+     :transitive {:match '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+                  :infer (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]])}
+     :sub-prop   {:match '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+                  :infer (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]])}})
+
+  ;; Create empty knowledge graph using default compute graph as backend
+
+  (def g (ff/fact-graph (f/compute-graph)))
+
+  ;; Setup execution context (with default opts)
+
+  (def ctx (f/sync-execution-context {:graph g}))
+
+  ;; Define a query returning *all* facts (nil catches any subject, pred, object)
+
+  (def all (ff/add-query! g :all [nil nil nil]))
+
+  ;; Add rules & facts to graph
+
+  (run! (fn [[id rule]] (ff/add-rule! g id (:match rule) (:infer rule))) inference-rules)
+  (run! #(ff/add-fact! g %) facts)
+
+  ;; Execute!
+
+  (f/execute! ctx)
+
+  ;; The `all` var holds the result vertex of the query, its value can
+  ;; be obtained by dereferencing...
+
+  (sort @all)
+  ;; ([ancestor domain person]
+  ;;  [ancestor range person]
+  ;;  [ancestor type transitive-prop]
+  ;;  [author domain person]
+  ;;  [author range creative-work]
+  ;;  [fabric type creative-work]     ;; inferred
+  ;;  [fabric type project]
+  ;;  [ingo ancestor noah]            ;; inferred
+  ;;  [ingo ancestor toxi]            ;; inferred
+  ;;  [ingo parent toxi]
+  ;;  [ingo type person]              ;; inferred
+  ;;  [noah type person]              ;; inferred
+  ;;  [parent sub-prop-of ancestor]
+  ;;  [toxi ancestor noah]            ;; inferred
+  ;;  [toxi author fabric]
+  ;;  [toxi parent noah]
+  ;;  [toxi type person])             ;; inferred
+
+  ;; Add another query, this time with variable bindings
+
+  (def people (ff/add-param-query! g :all-people '[?p type person]))
+  (f/execute! ctx)
+
+  @people
+  ;; #{{?p toxi} {?p noah} {?p ingo}}
+#+END_SRC
+
+[[./fabric-facts/test/core.org][full source]]
+
+** Benchmarks
+
 
 * Modules
 
 - [[./fabric-core/README.org][fabric-core]]
+
+The core module provides all components of a graph based computation model: Vertices
+
 - [[./fabric-facts/README.org][fabric-facts]]
+
 - [[./fabric-redis/README.org][fabric-redis]]
 
 * Project definition

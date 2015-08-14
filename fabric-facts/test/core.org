@@ -2,7 +2,7 @@
 
 * thi.ng.fabric.facts.test.core
 
-** Transitive closure extraction
+** Facts, pattern based queries & rule based inferencing
 
 *** Inference rules
 
