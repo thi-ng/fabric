@@ -232,8 +232,8 @@
       [_ g]
       (let [^thi.ng.fabric.core.Vertex lhs-v  (result-vertex lhs)
             ^thi.ng.fabric.core.Vertex rhs-v  (result-vertex rhs)
-            lhs-id (f/id lhs-v)
-            rhs-id (f/id rhs-v)
+            lhs-id (f/vertex-id lhs-v)
+            rhs-id (f/vertex-id rhs-v)
             join   (f/add-vertex!
                     g nil
                     {::f/collect-fn
@@ -241,7 +241,7 @@
                        (let [sig-map (f/signal-map vertex)
                              a (sig-map lhs-id)
                              b (sig-map rhs-id)]
-                         (debug (f/id vertex) :join-sets a b)
+                         (debug (f/vertex-id vertex) :join-sets a b)
                          (reset! (.-value vertex) (set/join a b))))
                      ::f/score-collect-fn
                      score-collect-join})]
@@ -383,7 +383,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref sig-coll
   (defn- signal-fact
-    [^thi.ng.fabric.core.Vertex vertex op] [op (f/id vertex) @vertex])
+    [^thi.ng.fabric.core.Vertex vertex op] [op (f/vertex-id vertex) @vertex])
 
   (defn- collect-index
     [spo]
@@ -459,7 +459,7 @@
             in   (reduce into #{} (f/uncollected-signals vertex))
             adds (set/difference in prev)
             inferred (mapcat production adds)]
-        (debug (f/id vertex) :additions adds)
+        (debug (f/vertex-id vertex) :additions adds)
         (doseq [[op t :as inf] inferred]
           (case op
             :+ (do (debug :add-fact t)

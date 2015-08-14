@@ -69,7 +69,7 @@
         path (f/vertices g) identity
         (fn [^thi.ng.fabric.core.Vertex v val]
           (format "%d[label=\"%d (%s)\",color=\"%s\"];\n"
-                  (f/id v) (f/id v) val (colors @v))))))
+                  (f/vertex-id v) (f/vertex-id v) val (colors @v))))))
 #+END_SRC
 
 ** Tests

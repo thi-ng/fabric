@@ -13,11 +13,11 @@
        ([path vertices flt]
         (vertices->dot
          path vertices flt
-         #(format "%d[label=\"%d (%s)\"];\n" (f/id %) (f/id %) %2)))
+         #(format "%d[label=\"%d (%s)\"];\n" (f/vertex-id %) (f/vertex-id %) %2)))
        ([path vertices flt fmt]
         (->> vertices
              (filter flt)
-             (sort-by f/id)
+             (sort-by f/vertex-id)
              (mapcat
               (fn [v]
                 (if-let [outs @(.-outs ^thi.ng.fabric.core.Vertex v)]
@@ -26,7 +26,7 @@
                     (->> outs
                          (map
                           (fn [[k [_ opts]]]
-                            (str (f/id v) "->" (f/id k) "[label=\"" (pr-str opts) "\"];\n")))
+                            (str (f/vertex-id v) "->" (f/vertex-id k) "[label=\"" (pr-str opts) "\"];\n")))
                          (cons (fmt v val)))))))
              (apply str)
              (format "digraph g {
@@ -44,8 +44,8 @@
   (defn sorted-vertex-values
     [vertices]
     (->> vertices
-         (sort-by f/id)
-         (map (juxt f/id deref))))
+         (sort-by f/vertex-id)
+         (map (juxt f/vertex-id deref))))
 #+END_SRC
 
 ** Complete namespace definition

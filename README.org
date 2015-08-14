@@ -1,9 +1,9 @@
 #+SETUPFILE: common/setup.org
 #+TITLE: thi.ng/fabric
 
-Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript
-
 [[./assets/fabric-hot-1280x720-orange.jpg]]
+
+Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript.
 
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]

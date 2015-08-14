@@ -28,7 +28,7 @@ This namespace provides...
 
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IVertex
-    (id [_])
+    (vertex-id [_])
     (connect-to! [_ v sig-fn edge-opts])
     (disconnect-neighbor! [_ v])
     (disconnect-all! [_])
@@ -83,7 +83,7 @@ This namespace provides...
           (-deref
            [_] @value)])
     IVertex
-    (id
+    (vertex-id
       [_] id)
     (set-value!
       [_ val] (reset! value val) _)
@@ -157,9 +157,9 @@ This namespace provides...
         v))
     (remove-vertex!
       [_ v]
-      (when (get-in @state [:vertices (id v)])
+      (when (get-in @state [:vertices (vertex-id v)])
         (notify-watches @watches [:remove-vertex v])
-        (swap! state update :vertices dissoc (id v))
+        (swap! state update :vertices dissoc (vertex-id v))
         ;;(disconnect-all! v)
         true))
     (vertex-for-id
@@ -250,7 +250,7 @@ This namespace provides...
 
   (defn sync-vertex-signal
     [^Vertex vertex]
-    (let [id   (id vertex)
+    (let [id   (vertex-id vertex)
           outs @(.-outs vertex)]
       (loop [active (transient []), outs outs]
         (let [[v [f opts]] (first outs)]
@@ -260,7 +260,7 @@ This namespace provides...
                 (if (receive-signal v id signal)
                   (recur (conj! active v) (next outs))
                   (recur active (next outs)))
-                (do (debug "signal fn for" (id v) "returned nil, skipping...")
+                (do (debug "signal fn for" (vertex-id v) "returned nil, skipping...")
                     (recur active (next outs)))))
             (persistent! active))))))
 #+END_SRC
@@ -323,7 +323,7 @@ This namespace provides...
         (if verts
           (let [v (first verts)]
             (if (> (score-signal v) thresh)
-              (do (debug (id v) "signaling")
+              (do (debug (vertex-id v) "signaling")
                   (recur (long (+ sigs (count (signal! v sync-vertex-signal)))) (next verts)))
               (recur sigs (next verts))))
           sigs))))
@@ -335,7 +335,7 @@ This namespace provides...
         (if verts
           (let [v (first verts)]
             (if (> (score-collect v) thresh)
-              (do (debug (id v) "collecting")
+              (do (debug (vertex-id v) "collecting")
                   (collect! v)
                   (recur (inc colls) (next verts)))
               (recur colls (next verts))))
