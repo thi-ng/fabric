@@ -531,7 +531,8 @@ This namespace provides...
         (stop!
           [_]
           (remove-context-watches g watch-id)
-          (async/close! notify-chan))
+          (async/close! notify-chan)
+          (async/close! res-chan))
         (notify!
           [_] (go (>! notify-chan true)) nil)
         (execute!
