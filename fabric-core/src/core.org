@@ -146,26 +146,26 @@ This namespace provides...
       [_ val vspec]
       (let [v (-> state
                   (swap!
-                   #(let [id (:next-id %)
+                   #(let [id (::next-id %)
                           v  (vertex id val vspec)]
                       (-> %
-                          (update :next-id inc)
-                          (update :vertices assoc id v)
-                          (assoc  :curr-vertex v))))
-                  :curr-vertex)]
+                          (update ::next-id (::id-gen-fn %))
+                          (update ::vertices assoc id v)
+                          (assoc  ::curr-vertex v))))
+                  ::curr-vertex)]
         (notify-watches @watches [:add-vertex v])
         v))
     (remove-vertex!
       [_ v]
-      (when (get-in @state [:vertices (vertex-id v)])
+      (when (get-in @state [::vertices (vertex-id v)])
         (notify-watches @watches [:remove-vertex v])
-        (swap! state update :vertices dissoc (vertex-id v))
+        (swap! state update ::vertices dissoc (vertex-id v))
         ;;(disconnect-all! v)
         true))
     (vertex-for-id
-      [_ id] (get-in @state [:vertices id]))
+      [_ id] (get-in @state [::vertices id]))
     (vertices
-      [_] (-> @state :vertices vals))
+      [_] (-> @state ::vertices vals))
     (add-edge!
       [_ src dest sig-fn opts]
       (connect-to! src dest sig-fn opts)
@@ -216,7 +216,14 @@ This namespace provides...
 
 #+BEGIN_SRC clojure :noweb-ref ctor-graph
   (defn compute-graph
-    [] (InMemoryGraph. (atom {:vertices {} :next-id 0}) (atom {})))
+    ([]
+     (compute-graph {::id-gen-fn (fnil inc 0)}))
+    ([opts]
+     (let [start-id ((::id-gen-fn opts) nil)
+           state    (merge opts {::vertices {} ::next-id start-id})]
+       (InMemoryGraph.
+        (atom state)
+        (atom {})))))
 #+END_SRC
 
 ** Signal & collection functions
