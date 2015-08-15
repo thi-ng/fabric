@@ -11,6 +11,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
      - [[#todo-overview][TODO Overview]]
          - [[#features][Features]]
          - [[#motivation--use-cases][Motivation & use cases]]
+         - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
          - [[#resources--related-work][Resources / related work]]
          - [[#benchmarks][Benchmarks]]
      - [[#status][Status]]
@@ -68,20 +69,42 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 
 - multi-machine graphs not yet implemented (WIP)
 
+**** Self-organizing workflows
+
+Think self-updating visualizations when inputs are changing. Using
+custom collection thresholds, this model can also be extended to only
+operate when a minimum number of new signals has been received
+(throttling) or after a period of time since the last computation.
+
 **** (Semantic) knowledge graphs, queries & reasoning
 
-- use compute graphs as auto-updating database using attached queries
+- Use compute graphs as auto-updating database using attached queries
   & inference rules to automatically add or retract facts when certain
-  patterns are matched
+  patterns are matched. Query results are cached in vertices and
+  available immediately. This behavior also allows (and is used) to
+  reuse intermediate sub-query results from similar queries, leading
+  to better performance.
 
-- use as storage backend for [[http://thi.ng/trio][thi.ng/trio]]
+- Use as storage backend for [[http://thi.ng/trio][thi.ng/trio]]
 
-- implement Rete-style rule engines, using vertices for pervasive
+- Implement Rete-style rule engines, using vertices for pervasive
   intermediate result caching and define custom signal and scoring
   functions to inhibit obsolete work in the graph (see fabric-facts
   module)
 
 **** Toolkit w/ Clojurescript support
+
+
+*** Differences to Map-Reduce and dataflow DAGs
+
+- Ordered OR unordered processing
+- Scored / thresholded processing
+  - custom scoring & signal functions can inhibit signals to neighboring vertices
+  - collection functions can ignore or delay processing of incoming signals
+- Individual mapping functions for each edge
+- Cycles (recursion) allowed and needed for some problems
+- Vertices only hold state, processing done in edges (i.e. single
+  values can be transformed in parallel via different signal functions from same vertex)
 
 *** Resources / related work
 
@@ -151,9 +174,13 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 *** Automatically updating fact graph queries with rule based inferencing
 
-#+BEGIN_SRC clojure
+#+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
+
+  ;; turn off verbose logging
+
+  #?(:clj (taoensso.timbre/set-level! :warn))
 
   ;; Initial facts
 
@@ -162,6 +189,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
       [toxi parent noah]
       [ingo parent toxi]
       [fabric type project]
+      [fabric url "http://thi.ng/fabric"]
       [author domain person]
       [author range creative-work]
       [parent sub-prop-of ancestor]
@@ -206,8 +234,8 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   (f/execute! ctx)
 
-  ;; The `all` var holds the result vertex of the query, its value can
-  ;; be obtained by dereferencing...
+  ;; The `all` var holds is a defrecord holding all related process
+  ;; vertices of the query. Its result can obtained by dereferencing...
 
   (sort @all)
   ;; ([ancestor domain person]
@@ -215,18 +243,19 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;;  [ancestor type transitive-prop]
   ;;  [author domain person]
   ;;  [author range creative-work]
-  ;;  [fabric type creative-work]     ;; inferred
+  ;;  [fabric type creative-work]         ;; inferred
   ;;  [fabric type project]
-  ;;  [ingo ancestor noah]            ;; inferred
-  ;;  [ingo ancestor toxi]            ;; inferred
+  ;;  [fabric url "http://thi.ng/fabric"]
+  ;;  [ingo ancestor noah]                ;; inferred
+  ;;  [ingo ancestor toxi]                ;; inferred
   ;;  [ingo parent toxi]
-  ;;  [ingo type person]              ;; inferred
-  ;;  [noah type person]              ;; inferred
+  ;;  [ingo type person]                  ;; inferred
+  ;;  [noah type person]                  ;; inferred
   ;;  [parent sub-prop-of ancestor]
-  ;;  [toxi ancestor noah]            ;; inferred
+  ;;  [toxi ancestor noah]                ;; inferred
   ;;  [toxi author fabric]
   ;;  [toxi parent noah]
-  ;;  [toxi type person])             ;; inferred
+  ;;  [toxi type person])                 ;; inferred
 
   ;; Add another query, this time with variable bindings
 
@@ -235,6 +264,39 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   @people
   ;; #{{?p toxi} {?p noah} {?p ingo}}
+
+  ;; queries are composable:
+  ;; add filtered join query (reusing above people query) to only select
+  ;; people with age < 20
+
+  (def children
+    (->> (ff/add-param-query! g :age '[?p age ?age])
+         (ff/add-join! g people)
+         (ff/add-query-filter! g #(< (% '?age) 20))))
+
+  (ff/add-fact! g '[noah age 13])
+  (ff/add-fact! g '[toxi age 40])
+
+  (f/execute! ctx)
+  @children
+  ;; #{{?p noah ?age 13}}
+
+  ;; join queries can also be constructed directly:
+  ;; query returning all creative-works w/ their authors & urls
+  (def projects
+    (ff/add-query-join! g
+                        '[?prj type creative-work]
+                        '[?prj url ?homepage]
+                        '[?author author ?prj]))
+  (f/execute! ctx)
+  @projects
+  ;; #{{?prj fabric, ?homepage "http://thi.ng/fabric", ?author toxi}}
+
+  ;; add result transformations (e.g. a counter)
+  (def num-people (ff/add-counter! g (ff/result-vertex people)))
+  (f/execute! ctx)
+  @num-people
+  ;; 3
 #+END_SRC
 
 [[./fabric-facts/test/core.org][full source]]
