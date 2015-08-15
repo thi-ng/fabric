@@ -155,6 +155,7 @@
             res  (f/add-vertex!
                   g nil
                   {::f/collect-fn       (aggregate-select g)
+                   ::f/score-signal-fn  f/score-signal-with-new-edges
                    ::f/score-collect-fn (score-collect-min-signal-vals 3)})
             [s p o] pattern
             this (assoc _ :acc acc :result res)]
@@ -170,7 +171,6 @@
       (f/remove-vertex! g result)
       (f/remove-vertex! g acc)
       (assoc _ :acc nil :result nil)))
-
 #+END_SRC
 
 *** Parametric query
@@ -202,7 +202,8 @@
                             #{})))
             q-pattern  (raw-pattern _)
             sub-q      (or (query-for-pattern g q-pattern) (add-query! g id q-pattern))
-            res        (f/add-vertex! g nil {::f/collect-fn collect-fn})]
+            res        (f/add-vertex! g nil {::f/collect-fn      collect-fn
+                                             ::f/score-signal-fn f/score-signal-with-new-edges})]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
         (assoc _ :sub-query sub-q :result res)))
     (remove-from-graph!
@@ -230,21 +231,21 @@
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [^thi.ng.fabric.core.Vertex lhs-v  (result-vertex lhs)
-            ^thi.ng.fabric.core.Vertex rhs-v  (result-vertex rhs)
+      (let [lhs-v  (result-vertex lhs)
+            rhs-v  (result-vertex rhs)
             lhs-id (f/vertex-id lhs-v)
             rhs-id (f/vertex-id rhs-v)
             join   (f/add-vertex!
                     g nil
                     {::f/collect-fn
-                     (fn [^thi.ng.fabric.core.Vertex vertex]
+                     (fn [vertex]
                        (let [sig-map (f/signal-map vertex)
                              a (sig-map lhs-id)
                              b (sig-map rhs-id)]
                          (debug (f/vertex-id vertex) :join-sets a b)
-                         (reset! (.-value vertex) (set/join a b))))
-                     ::f/score-collect-fn
-                     score-collect-join})]
+                         (f/set-value! vertex (set/join a b))))
+                     ::f/score-collect-fn score-collect-join
+                     ::f/score-signal-fn  f/score-signal-with-new-edges})]
         (f/add-edge! g lhs-v join f/signal-forward nil)
         (f/add-edge! g rhs-v join f/signal-forward nil)
         (assoc _ :result join)))
@@ -289,13 +290,12 @@
      more))
 
   (defn add-query-filter!
-    [g q flt]
+    [g flt q]
     (let [tx (comp (mapcat identity) (filter flt))
           fv (f/add-vertex!
               g nil
-              {::f/collect-fn
-               (f/collect-pure
-                (fn [_ incoming] (sequence tx incoming)))})]
+              {::f/collect-fn      (f/collect-pure (fn [_ in] (sequence tx in)))
+               ::f/score-signal-fn f/score-signal-with-new-edges})]
       (f/add-edge! g (result-vertex q) fv f/signal-forward nil)
       fv))
 
@@ -303,7 +303,8 @@
     [g src]
     (let [v (f/add-vertex!
              g nil
-             {::f/collect-fn (f/collect-pure (fn [_ in] (count (peek in))))})]
+             {::f/collect-fn      (f/collect-pure (fn [_ in] (count (peek in))))
+              ::f/score-signal-fn f/score-signal-with-new-edges})]
       (f/add-edge! g src v f/signal-forward nil)
       v))
 #+END_SRC
