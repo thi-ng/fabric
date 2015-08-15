@@ -19,6 +19,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
+         - [[#spreadsheet-like-computation][Spreadsheet like computation]]
          - [[#automatically-updating-fact-graph-queries-with-rule-based-inferencing][Automatically updating fact graph queries with rule based inferencing]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
@@ -172,9 +173,85 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 [[./fabric-core/test/transclosure.org][source]]
 
+*** Spreadsheet like computation
+
+#+BEGIN_SRC clojure :tangle fabric-core/babel/examples/spreadsheet.cljc :mkdirp yes :padline no
+  (require '[thi.ng.fabric.core :as f])
+  (require '[clojure.core.async :refer [go-loop <! chan]])
+
+  (def g (f/compute-graph))
+  (def result-chan (chan))
+  (def ctx (f/async-execution-context {:graph g :result result-chan}))
+
+  ;; Define vertex collection functions
+  (defn collect-with
+    [f] (fn [v] (f/set-value! v (reduce f (vals (f/signal-map v))))))
+
+  (def collect-sum     (collect-with +))
+  (def collect-product (collect-with *))
+
+  ;; Define some cells with values to sum
+
+  (def A1 (f/add-vertex! g 100.00 {}))
+  (def A2 (f/add-vertex! g 200.00 {}))
+  (def A3 (f/add-vertex! g 300.00 {}))
+
+  ;; Another one with VAT rate
+
+  (def VAT (f/add-vertex! g 1.2 {}))
+
+  ;; This cell will produce the net price (the sum of A1 + A2 + A3, see below...)
+
+  (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
+
+  ;; And this one the total (net * vat)
+
+  (def TOTAL (f/add-vertex! g nil {::f/collect-fn collect-product}))
+
+  ;; Connect everything together:
+  ;; The direction is always src -> dest
+  ;; signal-forward will simply send a vertex' value as signal
+  ;; The nil arg is because signal-foward doesn't use any signal arguments
+  ;; but other signal functions could make use of this extra arg (see SSSP example above)
+
+  (f/connect-to! A1 NET    f/signal-forward nil)
+  (f/connect-to! A2 NET    f/signal-forward nil)
+  (f/connect-to! A3 NET    f/signal-forward nil)
+  (f/connect-to! NET TOTAL f/signal-forward nil)
+  (f/connect-to! VAT TOTAL f/signal-forward nil)
+
+  ;; Everytime the graph converges into a stable/unchanging state
+  ;; the async execution context will push a result map to the channel provided
+  ;; Here we simply print it out along with the values of the NET & TOTAL vertices
+
+  (go-loop []
+    (when-let [res (<! result-chan)]
+      (prn :result res)
+      (prn :net @NET)
+      (prn :total @TOTAL)
+      (recur)))
+
+  ;; Kick off computation
+
+  (f/execute! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6274799999999999, :time-per-op 0.15686999999999998}
+  ;; :net 600.0
+  ;; :total 720.0
+
+  ;; Modify A1 and notify exec context
+
+  (f/set-value! A1 1000)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.812716, :time-per-op 0.203179}
+  ;; :net 1500.0
+  ;; :total 1800.0
+
+  (f/stop! ctx)
+#+END_SRC
+
 *** Automatically updating fact graph queries with rule based inferencing
 
-#+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
+#+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/queries01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
 
