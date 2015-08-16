@@ -11,6 +11,7 @@
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
+         - [[#query-union][Query union]]
          - [[#query-ops][Query ops]]
          - [[#query-helpers][Query helpers]]
      - [[#rulebased-inference][Rulebased inference]]
@@ -265,6 +266,42 @@
         (f/remove-from-graph! lhs g))
       (when (sole-user? (result-vertex rhs) result)
         (f/remove-from-graph! rhs g))))
+
+#+END_SRC
+
+*** Query union
+
+#+BEGIN_SRC clojure :noweb-ref queries
+  (defrecord FactQueryUnion [id sub-queries result]
+    #?@(:clj
+         [clojure.lang.IDeref (deref [_] (when result @result))]
+         :cljs
+         [IDeref (-deref [_] (when result @result))])
+    IFactQuery
+    (raw-pattern
+      [_] nil)
+    (result-vertex
+      [_] result)
+    f/IGraphComponent
+    (add-to-graph!
+      [_ g]
+      (let [res (f/add-vertex!
+                 g nil
+                 {::f/collect-fn
+                  (fn [vertex]
+                    (let [subs (vals (f/signal-map vertex))]
+                      (f/set-value! vertex (reduce (fn [acc res] (if (seq res) (into acc res) acc)) subs))))
+                  ;;::f/score-collect-fn score-collect-join
+                  ::f/score-signal-fn  f/score-signal-with-new-edges})]
+        (run! #(f/add-edge! g (result-vertex %) res f/signal-forward nil) sub-queries)
+        (assoc _ :result res)))
+    (remove-from-graph!
+      [_ g]
+      (f/remove-vertex! g result)
+      (run!
+       #(when (sole-user? (result-vertex %) result)
+          (f/remove-from-graph! % g))
+       sub-queries)))
 #+END_SRC
 
 *** Query ops
@@ -297,6 +334,11 @@
       (add-param-query! g (random-id) a)
       (add-param-query! g (random-id) b))
      more))
+
+  (defn add-query-union!
+    [g id & queries]
+    (f/add-to-graph!
+     (map->FactQueryUnion {:id id :sub-queries queries}) g))
 
   (defn add-query-filter!
     [g flt q]
@@ -406,7 +448,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref sig-coll
   (defn- signal-fact
-    [^thi.ng.fabric.core.Vertex vertex op] [op (f/vertex-id vertex) @vertex])
+    [vertex op] [op (f/vertex-id vertex) @vertex])
 
   (defn- collect-index
     [spo]
@@ -444,12 +486,12 @@
 
   (defn- score-collect-min-signal-vals
     [num]
-    (fn [^thi.ng.fabric.core.Vertex vertex]
+    (fn [vertex]
       (if (> num (count (vals (peek (f/uncollected-signals vertex))))) 0 1)))
 
   (defn- score-collect-min-signals
     [num]
-    (fn [^thi.ng.fabric.core.Vertex vertex]
+    (fn [vertex]
       (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
   (defn- aggregate-select
