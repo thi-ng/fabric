@@ -37,7 +37,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.116"]
+  [thi.ng/fabric "0.0.123"]
 #+END_SRC
 
 ** TODO Overview
