@@ -50,7 +50,8 @@ This namespace provides...
     (remove-vertex! [_ v])
     (vertex-for-id [_ id])
     (vertices [_])
-    (add-edge! [_ src dest f opts]))
+    (add-edge! [_ src dest f opts])
+    (remove-edge! [_ src dest]))
 
   (defprotocol IWatch
     (add-watch! [_ type id f])
@@ -171,6 +172,11 @@ This namespace provides...
       (connect-to! src dest sig-fn opts)
       (notify-watches @watches [:add-edge src dest sig-fn opts])
       _)
+    (remove-edge!
+      [_ src dest]
+      (disconnect-neighbor! src dest)
+      (notify-watches @watches [:remove-edge src dest])
+      _)
     IWatch
     (add-watch!
       [_ type id f]
@@ -217,7 +223,7 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref ctor-graph
   (defn compute-graph
     ([]
-     (compute-graph {::id-gen-fn (fnil inc 0)}))
+     (compute-graph {::id-gen-fn (fnil inc -1)}))
     ([opts]
      (let [start-id ((::id-gen-fn opts) nil)
            state    (merge opts {::vertices {} ::next-id start-id})]
@@ -302,8 +308,6 @@ This namespace provides...
 
   (defn add-context-watches
     [g watch-id queue]
-    (add-watch! g :add-vertex watch-id
-                (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
     (add-watch! g :remove-vertex watch-id
                 (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
     (add-watch! g :add-edge watch-id
@@ -311,7 +315,6 @@ This namespace provides...
 
   (defn remove-context-watches
     [g watch-id]
-    (remove-watch! g :add-vertex watch-id)
     (remove-watch! g :remove-vertex watch-id)
     (remove-watch! g :add-edge watch-id))
 
@@ -499,6 +502,7 @@ This namespace provides...
      ;;:processor      eager-probabilistic-single-pass-processor
      ;;:scheduler      single-pass-scheduler
      :max-ops        1e6
+     :auto-stop      false
      :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
 
 #+END_SRC
@@ -531,14 +535,13 @@ This namespace provides...
         (stop!
           [_]
           (remove-context-watches g watch-id)
-          (async/close! notify-chan)
-          (async/close! res-chan))
+          (async/close! notify-chan))
         (notify!
           [_] (go (>! notify-chan true)) nil)
         (execute!
           [_]
-          (let [t0     (atom (now))
-                active (atom (sequence v-filter (vertices g)))
+          (let [t0     (volatile! (now))
+                active (volatile! (sequence v-filter (vertices g)))
                 queue  (atom #{})]
             (add-context-watches g watch-id queue)
             (go-loop [colls 0, sigs 0]
@@ -546,10 +549,11 @@ This namespace provides...
               (if (seq @active)
                 (if (<= (+ colls sigs) max-ops)
                   (let [grp-size            (max 512 (long (/ (count @active) threads)))
-                        [act' sigs' colls'] (scheduler grp-size @active)]
-                    ;;(warn :auto (count @queue))
-                    (reset! active (into (into #{} v-filter act') @queue))
-                    (reset! queue #{})
+                        [act' sigs' colls'] (scheduler grp-size @active)
+                        curr-q              @queue]
+                    ;;(warn :queue (count curr-q))
+                    (vreset! active (into (into #{} v-filter act') curr-q))
+                    (compare-and-set! queue curr-q #{})
                     (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                   (do (stop! _)
                       (->result :max-ops-reached sigs colls @t0)))
@@ -557,8 +561,8 @@ This namespace provides...
                     (if (:auto-stop ctx)
                       (stop! _)
                       (when (<! notify-chan)
-                        (reset! t0 (now))
-                        (reset! active (sequence v-filter (vertices g)))
+                        (vreset! t0 (now))
+                        (vreset! active (sequence v-filter (vertices g)))
                         (reset! queue #{})
                         ;;(warn :rerun (count @active))
                         (recur 0 0))))))
@@ -660,10 +664,12 @@ This namespace provides...
 
   (defn notify-watches
     [watches evt]
-    (loop [watches (vals (watches (first evt)))]
+    (let [watches (watches (first evt))]
       (when watches
-        ((first watches) evt)
-        (recur (next watches)))))
+        (loop [watches (vals watches)]
+          (when watches
+            ((first watches) evt)
+            (recur (next watches)))))))
 #+END_SRC
 
 ** CLJS polyfill
