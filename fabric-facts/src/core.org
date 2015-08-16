@@ -30,7 +30,9 @@
     (remove-fact! [_ t])
     (register-query! [_ q])
     (unregister-query! [_ q])
-    (query-for-pattern [_ pattern]))
+    (query-for-pattern [_ pattern])
+    (register-index-selection! [_ sel v])
+    (index-selection-for [_ sel]))
 
   (defprotocol IFactQuery
     (raw-pattern [_])
@@ -61,7 +63,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref graph
 (defrecord FactGraph
-    [g indices facts queries rules]
+    [g indices facts queries selections rules]
   f/IComputeGraph
   (add-vertex!
     [_ val vspec] (f/add-vertex! g val vspec))
@@ -106,6 +108,10 @@
     [_ q] (swap! queries assoc (raw-pattern q) q) q)
   (unregister-query!
     [_ q] (swap! queries dissoc (raw-pattern q) nil))
+  (register-index-selection!
+    [_ sel v] (swap! selections assoc sel v) v)
+  (index-selection-for
+    [_ sel] (@selections sel))
   (query-for-pattern
     [_ pattern] (@queries pattern)))
 
@@ -117,13 +123,14 @@
   (defn fact-graph
     [g]
     (map->FactGraph
-     {:indices {:subj (index-vertex g 0)
-                :pred (index-vertex g 1)
-                :obj  (index-vertex g 2)}
-      :facts (atom {})
-      :queries (atom {})
-      :rules   (atom {})
-      :g       g}))
+     {:indices    {:subj (index-vertex g 0)
+                   :pred (index-vertex g 1)
+                   :obj  (index-vertex g 2)}
+      :facts      (atom {})
+      :queries    (atom {})
+      :selections (atom {})
+      :rules      (atom {})
+      :g          g}))
 #+END_SRC
 
 ** Queries
@@ -150,19 +157,21 @@
     (add-to-graph!
       [_ g]
       (let [{:keys [subj pred obj]} (fact-indices g)
-            acc  (f/add-vertex!
-                  g {} {::f/collect-fn collect-select})
-            res  (f/add-vertex!
-                  g nil
-                  {::f/collect-fn       (aggregate-select g)
-                   ::f/score-signal-fn  f/score-signal-with-new-edges
-                   ::f/score-collect-fn (score-collect-min-signal-vals 3)})
             [s p o] pattern
+            sel-s (index-selection g [0 s])
+            sel-p (index-selection g [1 p])
+            sel-o (index-selection g [2 o])
+            acc   (f/add-vertex! g {} {::f/collect-fn collect-select})
+            res   (f/add-vertex!
+                   g nil
+                   {::f/collect-fn       (aggregate-select g)
+                    ::f/score-signal-fn  f/score-signal-with-new-edges
+                    ::f/score-collect-fn (score-collect-min-signal-vals 3)})
             this (assoc _ :acc acc :result res)]
         ;; TODO add index selection vertices, use existing if possible
-        (f/add-edge! g subj acc signal-index-select [0 s])
-        (f/add-edge! g pred acc signal-index-select [1 p])
-        (f/add-edge! g obj  acc signal-index-select [2 o])
+        (f/add-edge! g sel-s acc f/signal-forward nil)
+        (f/add-edge! g sel-p acc f/signal-forward nil)
+        (f/add-edge! g sel-o acc f/signal-forward nil)
         (f/add-edge! g acc  res f/signal-forward nil)
         (register-query! g this)))
     (remove-from-graph!
@@ -312,6 +321,19 @@
 *** Query helpers
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
+  (defn index-selection
+    [g sel]
+    (if-let [sel-v (index-selection-for g sel)]
+      (do (debug :reuse-index sel) sel-v)
+      (let [index ((fact-indices g) ([:subj :pred :obj] (first sel)))
+            sel-v (f/add-vertex!
+                   g nil
+                   {::f/score-signal-fn f/score-signal-with-new-edges
+                    ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})]
+        (f/add-edge! g index sel-v signal-index-select sel)
+        (register-index-selection! g sel sel-v)
+        sel-v)))
+
   (defn- qvar?
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
