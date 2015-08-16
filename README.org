@@ -190,7 +190,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   (def collect-sum     (collect-with +))
   (def collect-product (collect-with *))
 
-  ;; Define some cells with values to sum
+  ;; Define some data vertices with values to sum
 
   (def A1 (f/add-vertex! g 100.00 {}))
   (def A2 (f/add-vertex! g 200.00 {}))
@@ -200,7 +200,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   (def VAT (f/add-vertex! g 1.2 {}))
 
-  ;; This cell will produce the net price (the sum of A1 + A2 + A3, see below...)
+  ;; This vertex will produce the net price (the sum of A1 + A2 + A3, see below...)
 
   (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
 
@@ -221,7 +221,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   (f/connect-to! VAT TOTAL f/signal-forward nil)
 
   ;; Everytime the graph converges into a stable/unchanging state
-  ;; the async execution context will push a result map to the channel provided
+  ;; the async execution context will pause & push a result map to the channel provided
   ;; Here we simply print it out along with the values of the NET & TOTAL vertices
 
   (go-loop []
@@ -234,19 +234,29 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; Kick off computation
 
   (f/execute! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6274799999999999, :time-per-op 0.15686999999999998}
+  ;; :result {:collections 3, :signals 5, :type :converged, :runtime 1.9211129999999998, :time-per-op 0.24013912499999998}
   ;; :net 600.0
   ;; :total 720.0
 
-  ;; Modify A1 and notify exec context
+  ;; Modify A1 and notify exec context. Calling notify! on an active
+  ;; async context is indempodent, i.e. multiple invocations will only
+  ;; trigger 1 additional execution loop (until the graph is converged
+  ;; again). Calling notify! on a converged graph/context is almost free
+  ;; and will bail out quickly, since no active vertices will be found
 
   (f/set-value! A1 1000)
   (f/notify! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.812716, :time-per-op 0.203179}
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6149319999999999, :time-per-op 0.15373299999999998}
   ;; :net 1500.0
   ;; :total 1800.0
 
-  (f/stop! ctx)
+  ;; Add another data vertex to include in results
+
+  (f/add-edge! g (f/add-vertex! g 400 {}) NET f/signal-forward nil)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.563244, :time-per-op 0.140811}
+  ;; :net 1900.0
+  ;; :total 2280.0
 #+END_SRC
 
 *** Automatically updating fact graph queries with rule based inferencing
@@ -279,14 +289,18 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; can also retract facts)
 
   (def inference-rules
-    {:symmetric  {:match '[[?a ?prop ?b] [?prop type symmetric-prop]]
-                  :infer (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]])}
+    {;; infer type of subject for any property which declares a domain 
      :domain     {:match '[[?a ?prop nil] [?prop domain ?d]]
                   :infer (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])}
+     ;; infer type of object for any property which declared a range
      :range      {:match '[[nil ?prop ?a] [?prop range ?r]]
                   :infer (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]])}
+     ;; infer transitive property relationships
+     ;; e.g. ?a ancestor ?b and ?b ancestor ?c => ?a ancestor ?c
      :transitive {:match '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
                   :infer (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]])}
+     ;; infer super property relationships from sub-properties
+     ;; e.g. parent is a specialization/sub-prop of ancestor
      :sub-prop   {:match '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
                   :infer (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]])}})
 
@@ -311,7 +325,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   (f/execute! ctx)
 
-  ;; The `all` var holds is a defrecord holding all related process
+  ;; The `all` var is a defrecord holding all related process
   ;; vertices of the query. Its result can obtained by dereferencing...
 
   (sort @all)
@@ -359,7 +373,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; #{{?p noah ?age 13}}
 
   ;; join queries can also be constructed directly:
-  ;; query returning all creative-works w/ their authors & urls
+  ;; a query returning all creative-works w/ their authors & urls
   (def projects
     (ff/add-query-join! g
                         '[?prj type creative-work]
