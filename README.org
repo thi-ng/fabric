@@ -483,11 +483,11 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*              | *Lein coordinates*          | *Tagged Github URL* |
-|-----------+------------+----------------------------+-----------------------------+---------------------|
-|   0.0.123 | 2015-08-16 | more reusable fact queries | =[thi.ng/fabric "0.0.123"]= |                     |
-|   0.0.116 | 2015-08-15 | more reusable fact queries | =[thi.ng/fabric "0.0.116"]= |                     |
-|   0.0.108 | 2015-08-14 | 1st public release         | =[thi.ng/fabric "0.0.108"]= |                     |
+| *Version* | *Released* | *Description*                                |
+|-----------+------------+----------------------------------------------|
+|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching |
+|   0.0.116 | 2015-08-15 | more reusable fact queries                   |
+|   0.0.108 | 2015-08-14 | 1st public release                           |
 
 ** Contributors
 
