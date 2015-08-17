@@ -119,6 +119,8 @@ operate when a minimum number of new signals has been received
 
 10,000 vertices, 30,000 paths, max. length 3 hops
 
+Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
+
 |         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
 |---------+---------------------+---------------+-----------------------+-------------+----------|
 | Total   | 221ms               | 182ms         | 229ms                 | 309ms       | 130ms    |
@@ -127,6 +129,8 @@ operate when a minimum number of new signals has been received
 **** Vertex coloring
 
 1000 vertices, max. 180 colors, 5% edge probability
+
+Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
 
 |         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
 |---------+---------------------+---------------+-----------------------+-------------+----------|
@@ -289,7 +293,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; can also retract facts)
 
   (def inference-rules
-    {;; infer type of subject for any property which declares a domain 
+    {;; infer type of subject for any property which declares a domain
      :domain     {:match '[[?a ?prop nil] [?prop domain ?d]]
                   :infer (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])}
      ;; infer type of object for any property which declared a range
@@ -314,7 +318,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   ;; Define a query returning *all* facts (nil catches any subject, pred, object)
 
-  (def all (ff/add-query! g :all [nil nil nil]))
+  (def all (ff/add-query! g [nil nil nil]))
 
   ;; Add rules & facts to graph
 
@@ -350,7 +354,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   ;; Add another query, this time with variable bindings
 
-  (def people (ff/add-param-query! g :all-people '[?p type person]))
+  (def people (ff/add-param-query! g '[?p type person]))
   (f/execute! ctx)
 
   @people
@@ -361,7 +365,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; people with age < 20
 
   (def children
-    (->> (ff/add-param-query! g :age '[?p age ?age])
+    (->> (ff/add-param-query! g '[?p age ?age])
          (ff/add-join! g people)
          (ff/add-query-filter! g #(< (% '?age) 20))))
 
@@ -375,10 +379,12 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; join queries can also be constructed directly:
   ;; a query returning all creative-works w/ their authors & urls
   (def projects
-    (ff/add-query-join! g
-                        '[?prj type creative-work]
-                        '[?prj url ?homepage]
-                        '[?author author ?prj]))
+    (ff/add-query-join!
+     g
+     '[?prj type creative-work]
+     '[?prj url ?homepage]
+     '[?author author ?prj]))
+
   (f/execute! ctx)
   @projects
   ;; #{{?prj fabric, ?homepage "http://thi.ng/fabric", ?author toxi}}

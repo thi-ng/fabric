@@ -5,16 +5,17 @@
      - [[#protocols][Protocols]]
      - [[#basic-types][Basic types]]
          - [[#fact-vertex][Fact vertex]]
-         - [[#index-vertex][Index vertex]]
          - [[#factgraph][FactGraph]]
      - [[#queries][Queries]]
+         - [[#overview--example][Overview & example]]
+         - [[#override-print-methods][Override print methods]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
-         - [[#query-ops][Query ops]]
+         - [[#query-constructors][Query constructors]]
          - [[#query-helpers][Query helpers]]
-     - [[#rulebased-inference][Rulebased inference]]
+     - [[#todo-rulebased-inference][TODO Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
@@ -44,23 +45,70 @@
 
 *** Fact vertex
 
-#+BEGIN_SRC clojure :noweb-ref fact-v
-(def ^:private fact-vertex-spec
-  {::f/score-collect-fn (constantly 0)
-   ::f/score-signal-fn  f/score-signal-with-new-edges})
+Facts are RDF-style triples (vectors) of =[subject predicate object]=,
+stored in normal vertices. However, each fact vertex is configured to
+never collect (facts are immutable) and signal only once when added
+(or removed) from the graph.
+
+Any Clojure value can be used as subject/pred/obj, though in most
+cases you'll want to use strings, keywords, symbols, UUIDs or numbers.
+
+Example facts:
+
+#+BEGIN_SRC clojure
+;; P-123 has name Alice
+["P-123" :name "Alice"]
+
+;; toxi is author of fabric
+['toxi 'author 'fabric]
+
+;; subject with UUID ... has a template function f
+[#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" :template-fn (fn [title] [:div [:h1 title]])]
 #+END_SRC
 
-*** Index vertex
-
-#+BEGIN_SRC clojure :noweb-ref index-v
-(defn- index-vertex
-  [g spo]
-  (f/add-vertex!
-   g {} {::f/collect-fn      (collect-index spo)
-         ::f/score-signal-fn f/score-signal-with-new-edges}))
+#+BEGIN_SRC clojure :noweb-ref fact-v
+  (def ^:private fact-vertex-spec
+    {::f/score-collect-fn (constantly 0)
+     ::f/score-signal-fn  f/score-signal-with-new-edges})
 #+END_SRC
 
 *** FactGraph
+
+The default implementation of the =FactGraph= wraps an existing
+=IComputeGraph= instance and provides an extended API via the
+=IFactGraph= and =ICache= protocols.
+
+**** Fact indexing
+
+The =FactGraph= indexes all facts by their subject, predicate and
+object (SPO) values. These indices are special vertices, automatically
+added during graph construction and all fact vertices are
+automatically connected to (and only to!) these indices. When queries
+are added to the graph, they indirectly attach themselves to the 3
+indices (via intermediate index selection vertices, see Queries
+section below) and are notified each time their index selection is
+changing.
+
+**** Entity caching
+
+The =ICache= protocol is used to cache various query related entities
+for DRY reasons. Intermediate result caching is not just done for
+performance reasons, but also to minimize memory usage, since queries
+often make use of similar patterns and sub-patterns (e.g. two separate
+query joins might use the same pattern as LHS or RHS). Currently the
+cache is an atom with a nested map and these top-level keys:
+
+- =::index-sel= - caches vertices selecting a specific key from any of
+  the 3 SPO indices (or a wildcard selection). These vertices
+  basically act as sub-sub-queries of a specific S, P or O.
+- =::queries= - caches existing single-pattern queries based on their
+  query pattern (no query joins or unions are cached). Note: the
+  cached values are NOT vertices, but query entities (defrecords w/
+  =IFactQuery= implementations)
+- =::rules= - caches inference rules based on their ID (also
+  defrecords)
+
+**** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
 (defrecord FactGraph
@@ -128,7 +176,112 @@
       :g       g}))
 #+END_SRC
 
+**** Index vertex
+
+This is the helper function used by the =FactGraph= constructor to
+create a single SPO index vertex.
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+(defn- index-vertex
+  [g spo]
+  (f/add-vertex!
+   g {} {::f/collect-fn      (collect-index spo)
+         ::f/score-signal-fn f/score-signal-with-new-edges}))
+#+END_SRC
+
 ** Queries
+
+*** Overview & example
+
+This diagram illustrates how queries are generally implemented via multiple
+vertices in the graph. There're two queries here:
+
+Q1: All "friend" facts
+Q2: All facts about subject "alice"
+
+- Row 1 : 4 facts stored in the graph
+- Row 2 : S, P, O index vertices
+- Row 3 : Index selection vertices (the blue vertex is re-used by both queries)
+- Row 4 : Query accumulators (combine intersection of index selection sets)
+- Row 5 : Query results (basic queries)
+- Row 6 : Query results (parametric queries)
+
+The vertex values of the result row differ based on the query type
+used. In this example Q1 is a basic fact query and Q2 a parametric
+query with variables. The result set of a basic query contains the
+matching facts. The result set of parametric queries contains unique
+maps of variable bindings.
+
+[[../../assets/query-example01.png]]
+
+Graphviz file to generate the above example:
+
+#+BEGIN_SRC dot :tangle ../../assets/query-example01.dot
+digraph g {
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
+  edge[fontname="Inconsolata",fontsize=9];
+
+  f1[label="1 [alice friend bob]"];
+  f2[label="2 [bob friend charlie]"];
+  f3[label="3 [alice friend dora]"];
+  f4[label="4 [alice email a@b.com]"];
+  is[label="subj: {alice #{1 3 4} bob #{2}",color="#cc0066"];
+  ip[label="pred: {friend #{1 2 3} email #{4}",color="#cc6600"];
+  io[label="obj: {bob #{1} charlie #{2} dora #{3} a@b.com #{4}",color="#0066cc"];
+  f1 -> is; f1 -> ip; f1 -> io;
+  f2 -> is; f2 -> ip; f2 -> io;
+  f3 -> is; f3 -> ip; f3 -> io;
+  f4 -> is; f4 -> ip; f4 -> io;
+
+  q1[label="Q1: [nil friend nil]"];
+  q2[label="Q2: [alice ?p ?o]"];
+
+  sq1[label="[0 #{1 2 3 4}]",color="#cc0066"];
+  pq1[label="[1 #{1 2 3}]",color="#cc6600"];
+  oq1[label="[2 #{1 2 3 4}]",color="#0066cc"];
+
+  q1res[label="#{[alice friend bob] [bob friend charlie] [alice friend dora]}"];
+
+  is -> sq1 -> q1 -> q1res;
+  ip -> pq1 -> q1;
+  io -> oq1 -> q1;
+
+  sq2[label="[0 #{1 3 4}]",color="#cc0066"];
+  pq2[label="[1 #{1 2 3 4}",color="#cc6600"];
+
+  q2res[label="#{[alice friend bob] [alice friend dora] [alice email a@b.com]}"];
+  q2final[label="#{{?p friend ?o bob} {?p friend ?o dora} {?p email ?o a@b.com}}"];
+
+  is -> sq2 -> q2 -> q2res -> q2final;
+  ip -> pq2 -> q2;
+  oq1 -> q2;
+}
+#+END_SRC
+
+In code form this same graph could be constructed like this:
+
+#+BEGIN_SRC clojure :tangle ../babel/examples/query-example01.cljc
+  (require '[thi.ng.fabric.core :as f])
+  (require '[thi.ng.fabric.facts.core :as ff])
+
+  (def g (ff/fact-graph (f/compute-graph)))
+  (ff/add-fact! g '[alice friend bob])
+  (ff/add-fact! g '[bob friend charlie])
+  (ff/add-fact! g '[alice friend dora])
+  (ff/add-fact! g '[alice email "a@b.com"])
+
+  (def friends (ff/add-query! g :friends '[nil friend nil]))
+  (def alice   (ff/add-param-query! g :alice '[alice ?p ?o]))
+
+  (f/execute! (f/sync-execution-context {:graph g}))
+
+  @friends
+  ;; #{[alice friend dora] [bob friend charlie] [alice friend bob]}
+  @alice
+  ;; #{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}}
+#+END_SRC
+
+*** Override print methods
 
 #+BEGIN_SRC clojure :noweb-ref queries
 #?(:clj (prefer-method print-method clojure.lang.IRecord clojure.lang.IDeref))
@@ -137,8 +290,17 @@
 
 *** Basic pattern query
 
+A =BasicFactQuery= is used to match a single or multiple facts without variable bindings:
+
+- =['alice 'friend 'bob]= only matches the stated fact
+- =[nil 'friend 'bob]= matches all facts which have predicate ='friend= and object ='bob=
+
+In general, =nil= is used as wildcard to match any S, P or O position.
+Therefore, the query pattern =[nil nil nil]= matches all facts in the
+graph.
+
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord BasicFactQuery [id acc result pattern]
+  (defrecord BasicFactQuery [acc result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -153,9 +315,9 @@
       [_ g]
       (let [{:keys [subj pred obj]} (fact-indices g)
             [s p o] pattern
-            sel-s (index-selection g [0 s])
-            sel-p (index-selection g [1 p])
-            sel-o (index-selection g [2 o])
+            sel-s (index-selection-vertex g [0 s])
+            sel-p (index-selection-vertex g [1 p])
+            sel-o (index-selection-vertex g [2 o])
             acc   (f/add-vertex! g {} {::f/collect-fn collect-select})
             res   (f/add-vertex!
                    g nil
@@ -181,7 +343,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defrecord ParametricFactQuery
-      [id sub-query result pattern]
+      [sub-query result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -205,9 +367,11 @@
                             (into #{} res-tx res)
                             #{})))
             q-pattern  (raw-pattern _)
-            sub-q      (or (cached g ::queries q-pattern) (add-query! g id q-pattern))
-            res        (f/add-vertex! g nil {::f/collect-fn      collect-fn
-                                             ::f/score-signal-fn f/score-signal-with-new-edges})
+            sub-q      (or (cached g ::queries q-pattern) (add-query! g q-pattern))
+            res        (f/add-vertex!
+                        g nil
+                        {::f/collect-fn      collect-fn
+                         ::f/score-signal-fn f/score-signal-with-new-edges})
             this       (assoc _ :sub-query sub-q :result res)]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
         (cache! g ::queries pattern this)))
@@ -217,13 +381,12 @@
       (when (sole-user? (result-vertex sub-query) result)
         (f/remove-from-graph! sub-query g))
       (assoc _ :sub-query nil :result nil)))
-
 #+END_SRC
 
 *** Query join
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactQueryJoin [id lhs rhs result]
+  (defrecord FactQueryJoin [lhs rhs result]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -267,7 +430,7 @@
 *** Query union
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactQueryUnion [id sub-queries result]
+  (defrecord FactQueryUnion [sub-queries result]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -299,41 +462,36 @@
        sub-queries)))
 #+END_SRC
 
-*** Query ops
+*** Query constructors
 
 #+BEGIN_SRC clojure :noweb-ref query-ops
   (defn add-query!
-    [g id pattern]
+    [g pattern]
     (f/add-to-graph!
-     (map->BasicFactQuery {:id id :pattern pattern}) g))
+     (map->BasicFactQuery {:pattern pattern}) g))
 
   (defn add-param-query!
-    [g id pattern]
+    [g pattern]
     (f/add-to-graph!
-     (map->ParametricFactQuery {:id id :pattern pattern}) g))
+     (map->ParametricFactQuery {:pattern pattern}) g))
 
   (defn add-join!
-    ([g lhs rhs]
-     (add-join! g (random-id) lhs rhs))
-    ([g id lhs rhs]
-     (f/add-to-graph!
-      (map->FactQueryJoin {:id id :lhs lhs :rhs rhs}) g)))
+    [g lhs rhs]
+    (f/add-to-graph!
+     (map->FactQueryJoin {:lhs lhs :rhs rhs}) g))
 
+  ;; TODO pre-sort patterns based on restrictiveness
   (defn add-query-join!
     [g a b & more]
     (reduce
-     (fn [acc p]
-       (add-join! g (random-id) acc (add-param-query! g (random-id) p)))
-     (add-join!
-      g (random-id)
-      (add-param-query! g (random-id) a)
-      (add-param-query! g (random-id) b))
+     (fn [acc p] (add-join! g acc (add-param-query! g p)))
+     (add-join! g (add-param-query! g a) (add-param-query! g b))
      more))
 
   (defn add-query-union!
-    [g id & queries]
+    [g a b & queries]
     (f/add-to-graph!
-     (map->FactQueryUnion {:id id :sub-queries queries}) g))
+     (map->FactQueryUnion {:sub-queries (into [a b] queries)}) g))
 
   (defn add-query-filter!
     [g flt q]
@@ -366,7 +524,7 @@
 *** Query helpers
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
-  (defn index-selection
+  (defn index-selection-vertex
     [g sel]
     (if-let [sel-v (cached g ::index-sel sel)]
       (do (debug :reuse-index-sel sel) sel-v)
@@ -422,7 +580,7 @@
       :else                (constantly true)))
 #+END_SRC
 
-** Rulebased inference
+** TODO Rulebased inference
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defrecord FactInferenceRule
@@ -434,7 +592,9 @@
             inf (f/add-vertex!
                  g #{} {::f/collect-fn (collect-inference g production)})]
         (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
-        (assoc _ :query q :inf inf))))
+        (cache! g ::rules id (assoc _ :query q :inf inf))))
+    (remove-from-graph!
+      [_ g]))
 
 #+END_SRC
 

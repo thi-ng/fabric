@@ -49,14 +49,14 @@
     []
     (let [g            (ff/fact-graph (f/compute-graph))
           log          (ff/add-fact-graph-logger g logger)
-          toxi         (ff/add-query! g :toxi ['toxi nil nil])
-          types        (ff/add-query! g :types [nil 'type nil])
-          projects     (ff/add-query! g :projects [nil 'type 'project])
-          knows        (ff/add-query! g :knows [nil 'knows nil])
-          all          (ff/add-query! g :all [nil nil nil])
+          toxi         (ff/add-query! g ['toxi nil nil])
+          types        (ff/add-query! g [nil 'type nil])
+          projects     (ff/add-query! g [nil 'type 'project])
+          knows        (ff/add-query! g [nil 'knows nil])
+          all          (ff/add-query! g [nil nil nil])
           num-projects (ff/add-counter! g (ff/result-vertex projects))
           num-types    (ff/add-counter! g (ff/result-vertex types))
-          knows-pq     (ff/add-param-query! g :knows-param '[?s knows ?o])
+          knows-pq     (ff/add-param-query! g '[?s knows ?o])
           jq           (ff/add-query-join! g '[?p author ?prj] '[?prj type project] '[?p type person])
           tq           (ff/add-query-join! g '[?p author ?prj] '[?prj tag ?t])]
       (run!
