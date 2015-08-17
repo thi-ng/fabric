@@ -119,7 +119,7 @@
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests
-  (deftest test-sync
+  (defn test-sync*
     []
     (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph)
           ctx (f/sync-execution-context {:graph g})
@@ -148,11 +148,13 @@
       (warn :tq @tq)
       (ff/remove-fact-graph-logger log)
       (assoc spec :ctx ctx)))
+
+  (deftest test-sync
+    (test-sync*))
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest ^:async test-async
-    []
     (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph)
           ctx      (f/async-execution-context {:graph g})
           ctx-chan (f/execute! ctx)

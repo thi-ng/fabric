@@ -431,7 +431,7 @@ graph.
 *** Query join
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactQueryJoin [lhs rhs result]
+  (defrecord FactQueryJoin [lhs rhs result join-fn]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -448,7 +448,7 @@ graph.
             rhs-v  (result-vertex rhs)
             lhs-id (f/vertex-id lhs-v)
             rhs-id (f/vertex-id rhs-v)
-            join   (f/add-vertex!
+            result (f/add-vertex!
                     g nil
                     {::f/collect-fn
                      (fn [vertex]
@@ -456,12 +456,12 @@ graph.
                              a (sig-map lhs-id)
                              b (sig-map rhs-id)]
                          (debug (f/vertex-id vertex) :join-sets a b)
-                         (f/set-value! vertex (set/join a b))))
+                         (f/set-value! vertex (join-fn a b))))
                      ::f/score-collect-fn score-collect-join
                      ::f/score-signal-fn  f/score-signal-with-new-edges})]
-        (f/add-edge! g lhs-v join f/signal-forward nil)
-        (f/add-edge! g rhs-v join f/signal-forward nil)
-        (assoc _ :result join)))
+        (f/add-edge! g lhs-v result f/signal-forward nil)
+        (f/add-edge! g rhs-v result f/signal-forward nil)
+        (assoc _ :result result)))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -541,16 +541,27 @@ graph.
        (map->ParametricFactQuery {:pattern pattern}) g)))
 
   (defn add-join!
-    [g lhs rhs]
-    (f/add-to-graph!
-     (map->FactQueryJoin {:lhs lhs :rhs rhs}) g))
+    ([g lhs rhs]
+     (add-join! g join lhs rhs))
+    ([g join-fn lhs rhs]
+     (f/add-to-graph!
+      (map->FactQueryJoin {:lhs lhs :rhs rhs :join-fn join-fn}) g)))
 
-  ;; TODO pre-sort patterns based on restrictiveness
   (defn add-query-join!
+    [g & patterns]
+    {:pre [(<= 2 (count patterns))]}
+    (let [[a b & more :as p] (sort-patterns patterns)]
+      (debug :sorted-join-patterns p)
+      (reduce
+       (fn [acc p] (add-join! g join acc (add-param-query! g p)))
+       (add-join! g join (add-param-query! g a) (add-param-query! g b))
+       more)))
+
+  (defn add-query-join-optional!
     [g a b & more]
     (reduce
-     (fn [acc p] (add-join! g acc (add-param-query! g p)))
-     (add-join! g (add-param-query! g a) (add-param-query! g b))
+     (fn [acc p] (add-join! g join-optional acc (add-param-query! g p)))
+     (add-join! g join-optional (add-param-query! g a) (add-param-query! g b))
      more))
 
   (defn add-query-union!
@@ -593,6 +604,14 @@ graph.
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
 
+  (defn pattern-var-count
+    [pattern]
+    (count (filter qvar? pattern)))
+
+  (defn sort-patterns
+    [patterns]
+    (sort-by pattern-var-count patterns))
+
   (defn- bind-translator
     [vs? vp? vo? s p o]
     (if vs?
@@ -630,6 +649,63 @@ graph.
                              (fn [r] (= (r 1) (r 2)))
                              (fn [r] (not= (r 1) (r 2))))
       :else                (constantly true)))
+
+  (defn select-keys*
+    "Like like c.c/select-keys, but doesn't retain map's meta"
+    {:static true}
+    [map keyseq]
+    (loop [ret {} keys (seq keyseq)]
+      (if keys
+        #?(:clj
+           (let [entry (. clojure.lang.RT (find map (first keys)))]
+             (recur
+              (if entry (conj ret entry) ret)
+              (next keys)))
+           :cljs
+           (let [key   (first keys)
+                 entry (get map key ::not-found)]
+             (recur
+              (if (= entry ::not-found) ret (assoc ret key entry))
+              (next keys))))
+        ret)))
+
+  (defn join
+    "Optimized version of clojure.set/join (w/o key mapping & using transients)"
+    [xrel yrel]
+    (if (and (seq xrel) (seq yrel))
+      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
+            [r s] (if (<= (count xrel) (count yrel))
+                    [xrel yrel]
+                    [yrel xrel])
+            idx (set/index r ks)]
+        (persistent!
+         (reduce
+          (fn [ret x]
+            (let [found (idx (select-keys* x ks))]
+              (if found
+                (reduce #(conj! %1 (conj %2 x)) ret found)
+                ret)))
+          (transient #{}) s)))
+      #{}))
+
+  (defn join-optional
+    [a b]
+    (loop [old (transient #{}), new (transient #{}), kb b]
+      (if kb
+        (let [kb' [(first kb)]
+              [old new] (loop [old old, new new, ka a]
+                          (if ka
+                            (let [ka' (first ka)
+                                  j (first (join [ka'] kb'))]
+                              (if j
+                                (recur (conj! old ka') (conj! new j) (next ka))
+                                (recur old new (next ka))))
+                            [old new]))]
+          (recur old new (next kb)))
+        (let [new (persistent! new)]
+          (if (seq new)
+            (into (apply disj (set a) (persistent! old)) new)
+            a)))))
 #+END_SRC
 
 ** TODO Rulebased inference
