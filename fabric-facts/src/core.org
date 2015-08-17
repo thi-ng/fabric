@@ -651,7 +651,7 @@ graph.
       :else                (constantly true)))
 
   (defn select-keys*
-    "Like like c.c/select-keys, but doesn't retain map's meta"
+    "Like c.c/select-keys, but doesn't retain map's meta"
     {:static true}
     [map keyseq]
     (loop [ret {} keys (seq keyseq)]
@@ -669,21 +669,32 @@ graph.
               (next keys))))
         ret)))
 
+  (defn index*
+    "Like clojure.set/index, but using select-keys w/o metadata retention."
+    [xrel ks]
+    (persistent!
+     (reduce
+      (fn [m x]
+        (let [ik (select-keys* x ks)]
+          (assoc! m ik (conj (get m ik #{}) x))))
+      (transient {}) xrel)))
+
   (defn join
-    "Optimized version of clojure.set/join (w/o key mapping & using transients)"
+    "Optimized version of clojure.set/join (w/o key mapping & using
+    transients). ~20% faster than original."
     [xrel yrel]
     (if (and (seq xrel) (seq yrel))
       (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
             [r s] (if (<= (count xrel) (count yrel))
                     [xrel yrel]
                     [yrel xrel])
-            idx (set/index r ks)]
+            idx (index* r ks)]
         (persistent!
          (reduce
           (fn [ret x]
             (let [found (idx (select-keys* x ks))]
               (if found
-                (reduce #(conj! %1 (conj %2 x)) ret found)
+                (reduce #(conj! % (conj %2 x)) ret found)
                 ret)))
           (transient #{}) s)))
       #{}))
