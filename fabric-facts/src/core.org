@@ -28,12 +28,12 @@
   (defprotocol IFactGraph
     (fact-indices [_])
     (add-fact! [_ t])
-    (remove-fact! [_ t])
-    (register-query! [_ q])
-    (unregister-query! [_ q])
-    (query-for-pattern [_ pattern])
-    (register-index-selection! [_ sel v])
-    (index-selection-for [_ sel]))
+    (remove-fact! [_ t]))
+
+  (defprotocol ICache
+    (cached [_ type k])
+    (cache! [_ type k v])
+    (clear! [_ type k]))
 
   (defprotocol IFactQuery
     (raw-pattern [_])
@@ -64,7 +64,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref graph
 (defrecord FactGraph
-    [g indices facts queries selections rules]
+    [g indices facts cache]
   f/IComputeGraph
   (add-vertex!
     [_ val vspec] (f/add-vertex! g val vspec))
@@ -105,17 +105,13 @@
         (f/remove-vertex! g v)
         v)
       (warn "attempting to remove unknown fact:" t)))
-  (register-query!
-    [_ q] (swap! queries assoc (raw-pattern q) q) q)
-  (unregister-query!
-    [_ q] (swap! queries dissoc (raw-pattern q) nil))
-  (register-index-selection!
-    [_ sel v] (swap! selections assoc sel v) v)
-  (index-selection-for
-    [_ sel] (@selections sel))
-  (query-for-pattern
-    [_ pattern] (@queries pattern)))
-
+  ICache
+  (cached
+    [_ type k] (get-in @cache [type k]))
+  (cache!
+    [_ type k v] (swap! cache assoc-in [type k] v) v)
+  (clear!
+    [_ type k] (cache! assoc-in type k nil)))
 #+END_SRC
 
 **** Constructor
@@ -124,14 +120,12 @@
   (defn fact-graph
     [g]
     (map->FactGraph
-     {:indices    {:subj (index-vertex g 0)
-                   :pred (index-vertex g 1)
-                   :obj  (index-vertex g 2)}
-      :facts      (atom {})
-      :queries    (atom {})
-      :selections (atom {})
-      :rules      (atom {})
-      :g          g}))
+     {:indices {:subj (index-vertex g 0)
+                :pred (index-vertex g 1)
+                :obj  (index-vertex g 2)}
+      :facts   (atom {})
+      :cache   (atom {})
+      :g       g}))
 #+END_SRC
 
 ** Queries
@@ -174,10 +168,10 @@
         (f/add-edge! g sel-p acc f/signal-forward nil)
         (f/add-edge! g sel-o acc f/signal-forward nil)
         (f/add-edge! g acc  res f/signal-forward nil)
-        (register-query! g this)))
+        (cache! g ::queries pattern this)))
     (remove-from-graph!
       [_ g]
-      (unregister-query! g _)
+      (clear! g ::queries pattern)
       (f/remove-vertex! g result)
       (f/remove-vertex! g acc)
       (assoc _ :acc nil :result nil)))
@@ -211,11 +205,12 @@
                             (into #{} res-tx res)
                             #{})))
             q-pattern  (raw-pattern _)
-            sub-q      (or (query-for-pattern g q-pattern) (add-query! g id q-pattern))
+            sub-q      (or (cached g ::queries q-pattern) (add-query! g id q-pattern))
             res        (f/add-vertex! g nil {::f/collect-fn      collect-fn
-                                             ::f/score-signal-fn f/score-signal-with-new-edges})]
+                                             ::f/score-signal-fn f/score-signal-with-new-edges})
+            this       (assoc _ :sub-query sub-q :result res)]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
-        (assoc _ :sub-query sub-q :result res)))
+        (cache! g ::queries pattern this)))
     (remove-from-graph!
       [_ g]
       (f/remove-vertex! g result)
@@ -342,13 +337,21 @@
 
   (defn add-query-filter!
     [g flt q]
-    (let [tx (comp (mapcat identity) (filter flt))
-          fv (f/add-vertex!
-              g nil
-              {::f/collect-fn      (f/collect-pure (fn [_ in] (sequence tx in)))
-               ::f/score-signal-fn f/score-signal-with-new-edges})]
-      (f/add-edge! g (result-vertex q) fv f/signal-forward nil)
-      fv))
+    (let [res (f/add-vertex!
+               g nil
+               {::f/collect-fn      (f/collect-pure (fn [_ in] (filter flt (peek in))))
+                ::f/score-signal-fn f/score-signal-with-new-edges})]
+      (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+      res))
+
+  (defn add-query-group-by!
+    [g gfn q]
+    (let [res (f/add-vertex!
+               g nil
+               {::f/collect-fn      (f/collect-pure (fn [_ in] (group-by gfn (peek in))))
+                ::f/score-signal-fn f/score-signal-with-new-edges})]
+      (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+      res))
 
   (defn add-counter!
     [g src]
@@ -365,15 +368,15 @@
 #+BEGIN_SRC clojure :noweb-ref query-helpers
   (defn index-selection
     [g sel]
-    (if-let [sel-v (index-selection-for g sel)]
-      (do (debug :reuse-index sel) sel-v)
+    (if-let [sel-v (cached g ::index-sel sel)]
+      (do (debug :reuse-index-sel sel) sel-v)
       (let [index ((fact-indices g) ([:subj :pred :obj] (first sel)))
             sel-v (f/add-vertex!
                    g nil
                    {::f/score-signal-fn f/score-signal-with-new-edges
                     ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})]
         (f/add-edge! g index sel-v signal-index-select sel)
-        (register-index-selection! g sel sel-v)
+        (cache! g ::index-sel sel sel-v)
         sel-v)))
 
   (defn- qvar?
