@@ -9,6 +9,7 @@
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
          - [[#override-print-methods][Override print methods]]
+         - [[#index-selection][Index selection]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
@@ -34,7 +35,7 @@
   (defprotocol ICache
     (cached [_ type k])
     (cache! [_ type k v])
-    (clear! [_ type k]))
+    (expire! [_ type k]))
 
   (defprotocol IFactQuery
     (raw-pattern [_])
@@ -158,8 +159,8 @@ cache is an atom with a nested map and these top-level keys:
     [_ type k] (get-in @cache [type k]))
   (cache!
     [_ type k v] (swap! cache assoc-in [type k] v) v)
-  (clear!
-    [_ type k] (cache! assoc-in type k nil)))
+  (expire!
+    [_ type k] (swap! cache update type dissoc k) nil))
 #+END_SRC
 
 **** Constructor
@@ -270,8 +271,8 @@ In code form this same graph could be constructed like this:
   (ff/add-fact! g '[alice friend dora])
   (ff/add-fact! g '[alice email "a@b.com"])
 
-  (def friends (ff/add-query! g :friends '[nil friend nil]))
-  (def alice   (ff/add-param-query! g :alice '[alice ?p ?o]))
+  (def friends (ff/add-query! g '[nil friend nil]))
+  (def alice   (ff/add-param-query! g '[alice ?p ?o]))
 
   (f/execute! (f/sync-execution-context {:graph g}))
 
@@ -288,6 +289,33 @@ In code form this same graph could be constructed like this:
 
 #+END_SRC
 
+
+*** Index selection
+
+#+BEGIN_SRC clojure :noweb-ref queries
+  (defrecord FactIndexSelection [index sel vertex]
+    f/IGraphComponent
+    (add-to-graph!
+      [_ g]
+      (let [v (f/add-vertex!
+               g nil
+               {::f/score-signal-fn f/score-signal-with-new-edges
+                ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})]
+        (f/add-edge! g index v signal-index-select sel)
+        (cache! g ::index-sel sel (assoc _ :vertex v))))
+    (remove-from-graph!
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? vertex parent)
+        (do (warn :remove-index-sel sel)
+            (f/disconnect-neighbor! index vertex)
+            (f/remove-vertex! g vertex)
+            true)
+        (do (f/disconnect-neighbor! vertex parent)
+            false))))
+#+END_SRC
+
 *** Basic pattern query
 
 A =BasicFactQuery= is used to match a single or multiple facts without variable bindings:
@@ -300,7 +328,7 @@ Therefore, the query pattern =[nil nil nil]= matches all facts in the
 graph.
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord BasicFactQuery [acc result pattern]
+  (defrecord BasicFactQuery [acc selections result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -315,28 +343,35 @@ graph.
       [_ g]
       (let [{:keys [subj pred obj]} (fact-indices g)
             [s p o] pattern
-            sel-s (index-selection-vertex g [0 s])
-            sel-p (index-selection-vertex g [1 p])
-            sel-o (index-selection-vertex g [2 o])
+            sel-s (index-selection g [0 s])
+            sel-p (index-selection g [1 p])
+            sel-o (index-selection g [2 o])
             acc   (f/add-vertex! g {} {::f/collect-fn collect-select})
             res   (f/add-vertex!
                    g nil
                    {::f/collect-fn       (aggregate-select g)
                     ::f/score-signal-fn  f/score-signal-with-new-edges
                     ::f/score-collect-fn (score-collect-min-signal-vals 3)})
-            this (assoc _ :acc acc :result res)]
+            this  (assoc _ :acc acc :result res :selections [sel-s sel-p sel-o])]
         ;; TODO add index selection vertices, use existing if possible
-        (f/add-edge! g sel-s acc f/signal-forward nil)
-        (f/add-edge! g sel-p acc f/signal-forward nil)
-        (f/add-edge! g sel-o acc f/signal-forward nil)
-        (f/add-edge! g acc  res f/signal-forward nil)
+        (f/add-edge! g (:vertex sel-s) acc f/signal-forward nil)
+        (f/add-edge! g (:vertex sel-p) acc f/signal-forward nil)
+        (f/add-edge! g (:vertex sel-o) acc f/signal-forward nil)
+        (f/add-edge! g acc             res f/signal-forward nil)
         (cache! g ::queries pattern this)))
     (remove-from-graph!
-      [_ g]
-      (clear! g ::queries pattern)
-      (f/remove-vertex! g result)
-      (f/remove-vertex! g acc)
-      (assoc _ :acc nil :result nil)))
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? result parent)
+        (do (warn :remove-query pattern)
+            (expire! g ::queries pattern)
+            (f/remove-vertex! g result)
+            (f/remove-vertex! g acc)
+            (run! #(f/remove-from-graph! % g acc) selections)
+            true)
+        (do (f/disconnect-neighbor! result parent)
+            false))))
 #+END_SRC
 
 *** Parametric query
@@ -366,8 +401,7 @@ graph.
                           (if-let [res (seq (peek incoming))]
                             (into #{} res-tx res)
                             #{})))
-            q-pattern  (raw-pattern _)
-            sub-q      (or (cached g ::queries q-pattern) (add-query! g q-pattern))
+            sub-q      (add-query! g (raw-pattern _))
             res        (f/add-vertex!
                         g nil
                         {::f/collect-fn      collect-fn
@@ -376,11 +410,17 @@ graph.
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
         (cache! g ::queries pattern this)))
     (remove-from-graph!
-      [_ g]
-      (f/remove-vertex! g result)
-      (when (sole-user? (result-vertex sub-query) result)
-        (f/remove-from-graph! sub-query g))
-      (assoc _ :sub-query nil :result nil)))
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? result parent)
+        (do (warn :remove-param-query pattern)
+            (expire! g ::queries pattern)
+            (f/remove-vertex! g result)
+            (f/remove-from-graph! sub-query g result)
+            true)
+        (do (f/disconnect-neighbor! result parent)
+            false))))
 #+END_SRC
 
 *** Query join
@@ -418,13 +458,17 @@ graph.
         (f/add-edge! g rhs-v join f/signal-forward nil)
         (assoc _ :result join)))
     (remove-from-graph!
-      [_ g]
-      (f/remove-vertex! g result)
-      (when (sole-user? (result-vertex lhs) result)
-        (f/remove-from-graph! lhs g))
-      (when (sole-user? (result-vertex rhs) result)
-        (f/remove-from-graph! rhs g))))
-
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? result parent)
+        (do (warn :remove-query-join)
+            (f/remove-vertex! g result)
+            (f/remove-from-graph! lhs g result)
+            (f/remove-from-graph! rhs g result)
+            true)
+        (do (f/disconnect-neighbor! result parent)
+            false))))
 #+END_SRC
 
 *** Query union
@@ -449,31 +493,47 @@ graph.
                   (fn [vertex]
                     (let [subs (vals (f/signal-map vertex))]
                       (f/set-value! vertex (reduce (fn [acc res] (if (seq res) (into acc res) acc)) subs))))
-                  ;;::f/score-collect-fn score-collect-join
-                  ::f/score-signal-fn  f/score-signal-with-new-edges})]
+                  ::f/score-signal-fn f/score-signal-with-new-edges})]
         (run! #(f/add-edge! g (result-vertex %) res f/signal-forward nil) sub-queries)
         (assoc _ :result res)))
     (remove-from-graph!
-      [_ g]
-      (f/remove-vertex! g result)
-      (run!
-       #(when (sole-user? (result-vertex %) result)
-          (f/remove-from-graph! % g))
-       sub-queries)))
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? result parent)
+        (do (warn :remove-query-union)
+            (f/remove-vertex! g result)
+            (run! #(f/remove-from-graph! % g result) sub-queries)
+            true)
+        (do (f/disconnect-neighbor! result parent)
+            false))))
 #+END_SRC
 
 *** Query constructors
 
 #+BEGIN_SRC clojure :noweb-ref query-ops
+  (defn index-selection
+    [g sel]
+    (if-let [sel (cached g ::index-sel sel)]
+      (do (debug :reuse-index-sel (:sel sel)) sel)
+      (f/add-to-graph!
+       (map->FactIndexSelection
+        {:index ((fact-indices g) ([:subj :pred :obj] (first sel)))
+         :sel   sel}) g)))
+
   (defn add-query!
     [g pattern]
-    (f/add-to-graph!
-     (map->BasicFactQuery {:pattern pattern}) g))
+    (if-let [q (cached g ::queries pattern)]
+      (do (debug :reuse-basic-query pattern) q)
+      (f/add-to-graph!
+       (map->BasicFactQuery {:pattern pattern}) g)))
 
   (defn add-param-query!
     [g pattern]
-    (f/add-to-graph!
-     (map->ParametricFactQuery {:pattern pattern}) g))
+    (if-let [q (cached g ::queries pattern)]
+      (do (debug :reuse-param-query pattern) q)
+      (f/add-to-graph!
+       (map->ParametricFactQuery {:pattern pattern}) g)))
 
   (defn add-join!
     [g lhs rhs]
@@ -524,19 +584,6 @@ graph.
 *** Query helpers
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
-  (defn index-selection-vertex
-    [g sel]
-    (if-let [sel-v (cached g ::index-sel sel)]
-      (do (debug :reuse-index-sel sel) sel-v)
-      (let [index ((fact-indices g) ([:subj :pred :obj] (first sel)))
-            sel-v (f/add-vertex!
-                   g nil
-                   {::f/score-signal-fn f/score-signal-with-new-edges
-                    ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})]
-        (f/add-edge! g index sel-v signal-index-select sel)
-        (cache! g ::index-sel sel sel-v)
-        sel-v)))
-
   (defn- qvar?
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
@@ -594,8 +641,16 @@ graph.
         (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
         (cache! g ::rules id (assoc _ :query q :inf inf))))
     (remove-from-graph!
-      [_ g]))
-
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? inf parent)
+        (do (warn :remove-rule id)
+            (f/remove-vertex! g inf)
+            (f/remove-from-graph! query g inf)
+            true)
+        (do (f/disconnect-neighbor! inf parent)
+            false))))
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref inference
@@ -709,7 +764,7 @@ graph.
   (defn add-fact-graph-logger
     [g log-fn]
     (let [ch        (chan 1024 fact-log-transducer)
-          watch-id  (random-id)
+          watch-id  (f/random-id)
           log->chan #(go (>! ch %))]
       (go-loop []
         (let [t (<! ch)]
@@ -730,13 +785,7 @@ graph.
 ** Generic helpers
 
 #+BEGIN_SRC clojure :noweb-ref helpers
-  (defn- sole-user?
-    [src user]
-    (let [n (f/neighbors src)]
-      (and (== 1 (count n)) (= user (first n)))))
-
-  (defn- random-id
-    [] (keyword (gensym)))
+  
 #+END_SRC
 
 ** Complete namespace definition
@@ -758,7 +807,7 @@ graph.
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
-  (declare add-query! add-query-join!)
+  (declare index-selection add-query! add-query-join!)
 
   <<protos>>
 

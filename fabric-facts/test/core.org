@@ -80,6 +80,45 @@
 ** Tests
 
 #+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-query-basic
+    (let [g       (ff/fact-graph (f/compute-graph))
+          friends (ff/add-query! g '[nil friend nil])
+          alice   (ff/add-param-query! g '[alice ?p ?o])]
+      (ff/add-fact! g '[alice friend bob])
+      (ff/add-fact! g '[bob friend charlie])
+      (ff/add-fact! g '[alice friend dora])
+      (ff/add-fact! g '[alice email "a@b.com"])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (is (set? @friends))
+      (is (set? @alice))
+      (is (= '#{[alice friend dora] [bob friend charlie] [alice friend bob]} @friends))
+      (is (= '#{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}} @alice))
+      (f/remove-from-graph! friends g)
+      (f/remove-from-graph! alice g)
+      (is (== (+ 3 4) (count (f/vertices g))))))
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-query-join
+    (let [g   (ff/fact-graph (f/compute-graph))
+          q1  (ff/add-param-query! g '[?a friend ?b])
+          q2  (ff/add-param-query! g '[?b friend ?c])
+          jq1 (ff/add-join! g q1 q2)
+          jq2 (ff/add-query-join! g '[?a friend ?b] '[?b friend ?c])]
+      (ff/add-fact! g '[alice friend bob])
+      (ff/add-fact! g '[bob friend charlie])
+      (ff/add-fact! g '[alice friend dora])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (is (== 3 (count @q1)))
+      (is (== 3 (count @q2)))
+      (is (= '#{{?a alice ?b bob ?c charlie}} @jq1))
+      (is (= @jq1 @jq2))
+      (f/remove-from-graph! jq1 g)
+      (f/remove-from-graph! jq2 g)
+      (is (== (+ 3 3) (count (f/vertices g))))))
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-sync
     []
     (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph)
@@ -173,7 +212,7 @@
          [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
           [cljs.core.async :refer [chan close! <! >! take!]]])))
 
-  #?(:clj (taoensso.timbre/set-level! :warn))
+  ;; #?(:clj (taoensso.timbre/set-level! :warn))
 
   <<const>>
 

@@ -59,7 +59,7 @@ This namespace provides...
 
   (defprotocol IGraphComponent
     (add-to-graph! [_ g])
-    (remove-from-graph! [_ g]))
+    (remove-from-graph! [_ g] [_ g parent]))
 
   (defprotocol IGraphExecutor
     (execute! [_])
@@ -109,8 +109,9 @@ This namespace provides...
       [_] (keys @outs))
     (disconnect-neighbor!
       [_ v]
-      (debug id "disconnect from" (thi.ng.fabric.core/vertex-id v))
-      (swap! outs dissoc v)
+      (when v
+        (debug id "disconnect from" (thi.ng.fabric.core/vertex-id v))
+        (swap! outs dissoc v))
       _)
     (disconnect-all!
       [_]
@@ -660,7 +661,8 @@ This namespace provides...
 ** General helper functions
 
 #+BEGIN_SRC clojure :noweb-ref helpers
-  (defn now [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
+  (defn now
+    [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
 
   (defn notify-watches
     [watches evt]
@@ -670,6 +672,16 @@ This namespace provides...
           (when watches
             ((first watches) evt)
             (recur (next watches)))))))
+
+  (defn none-or-single-user?
+    [src user]
+    (let [n (neighbors src)]
+      (if (seq n)
+        (and (== 1 (count n)) (or (nil? user) (= user (first n))))
+        true)))
+
+  (defn random-id
+    [] (keyword (gensym)))
 #+END_SRC
 
 ** CLJS polyfill
