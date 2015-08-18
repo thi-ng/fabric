@@ -1,0 +1,130 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_3_gh:
+ - [[#namespace-thingfabricfactsiontriples][Namespace: thi.ng.fabric.facts.io.ntriples]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
+* Namespace: thi.ng.fabric.facts.io.ntriples
+
+#+BEGIN_SRC clojure :noweb-ref parser
+  (defn hex->str
+    [chars]
+    (-> (Integer/parseInt (apply str chars) 16)
+        (Character/toChars)
+        (String.)))
+
+  (def WS #{\space \t \newline})
+
+  (defn parse-escape
+    "Takes escape seq w/o leading backslash. Returns parsed char &
+    stream after."
+    [str]
+    (condp = (first str)
+      \x [(hex->str (take 2 (next str))) (drop 2 (next str))]
+      \u [(hex->str (take 4 (next str))) (drop 4 (next str))]
+      \n ["\n" (next str)]
+      \r ["\r" (next str)]
+      \b ["\b" (next str)]
+      \t ["\t" (next str)]
+      \" [\" (next str)]
+      \\ [\\ (next str)]
+      (err/illegal-arg! "illegal escape sequence")))
+
+  (defn discard-until
+    "Reads allowed chars until stop returns true.
+    Returns stream from stop char."
+    [stream allowed stop]
+    (loop [stream (seq stream)]
+      (let [ch (first stream)]
+        (if (or (nil? ch) (stop ch))
+          stream
+          (if (allowed ch)
+            (recur (next stream))
+            (err/illegal-arg! (str "illegal character: " ch)))))))
+
+  (defn read-until
+    "Reads stream until stop char (incl. escape seqs).
+    Returns [token stream-after]."
+    [stream stop]
+    (loop [token (transient []) stream (seq stream)]
+      (let [ch (first stream)]
+        (if (or (nil? ch) (stop ch))
+          [(apply str (persistent! token)) stream]
+          (if (= \\ ch)
+            (let [[esc stream] (parse-escape (next stream))]
+              (recur (conj! token esc) stream))
+            (recur (conj! token ch) (next stream)))))))
+
+  (defn parse-uri
+    [str] (read-until str #(= \> %)))
+
+  (defn parse-bnode
+    [str] (read-until str #(= \space %)))
+
+  (defn parse-string
+    [str] (read-until str #(= \" %)))
+
+  (defn parse-subject
+    "NT subject is <uri> or _:bnode"
+    [str]
+    (let [str (discard-until str WS #(or (= \< %) (= \_ %)))]
+      (condp = (first str)
+        \< (parse-uri (next str))
+        \_ (parse-bnode (next str))
+        str)))
+
+  (defn parse-pred
+    [str] (parse-uri (next (discard-until str WS #(= \< %)))))
+
+  (defn parse-object
+    "NT object is: <uri>, _:bnode or \"string\"."
+    [str]
+    (let [str (discard-until str WS #{\< \_ \"})]
+      (condp = (first str)
+        \< (parse-uri (next str))
+        \_ (parse-bnode (next str))
+        \" (parse-string (next str))
+        str)))
+
+  (defn parse-ntriple
+    "NT triple is \"subject <uri> object .\" (trailing dot)"
+    [str]
+    (let [[s str] (parse-subject str)
+          [p str] (parse-pred (next str))
+          [o str] (parse-object (next str))
+          [_ str] (read-until str #(= \. %))]
+      (if (or (empty? s) (empty? p))
+        [nil (next str)]
+        [[s p o] (next str)])))
+
+  (defn parse-ntriples
+    "Takes NT string and returns vector of triples."
+    [str]
+    (loop [acc (transient []), str str]
+      (if str
+        (let [[spo str] (parse-ntriple str)]
+          ;;(prn spo)
+          (if spo
+            (recur (conj! acc spo) str)
+            (recur acc str)))
+        (persistent! acc))))
+
+  (defn parse-ntriples-lazy
+    "Takes NT string and returns lazy-seq of triples."
+    [str]
+    (lazy-seq
+     (when str
+       (let [[spo str] (parse-ntriple str)]
+         (if spo
+           (cons spo (parse-ntriples-lazy str)))))))
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/io/ntriples.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.facts.io.ntriples
+    (:require
+     [thi.ng.xerror.core :as err]))
+
+  <<parser>>
+#+END_SRC
