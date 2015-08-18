@@ -7,11 +7,16 @@
 * Namespace: thi.ng.fabric.facts.io.ntriples
 
 #+BEGIN_SRC clojure :noweb-ref parser
-  (defn hex->str
-    [chars]
-    (-> (Integer/parseInt (apply str chars) 16)
-        (Character/toChars)
-        (String.)))
+  #?(:clj
+     (defn hex->str
+       [chars]
+       (-> (Integer/parseInt (apply str chars) 16)
+           (Character/toChars)
+           (String.)))
+     :cljs
+     (defn hex->str
+       [chars]
+       (.fromCharCode js/String (js/parseInt (apply str chars) 16))))
 
   (def WS #{\space \t \newline})
 
