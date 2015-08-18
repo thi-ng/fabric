@@ -2,9 +2,83 @@
 
 * Contents                                                         :toc_3_gh:
  - [[#namespace-thingfabricfactsiontriples][Namespace: thi.ng.fabric.facts.io.ntriples]]
+     - [[#implementation-notes][Implementation notes]]
+     - [[#object-string-literal-handling][Object string literal handling]]
+         - [[#language-tags][Language tags]]
+         - [[#type-mapping][Type mapping]]
+     - [[#parser][Parser]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.facts.io.ntriples
+
+This namespace provides a simple [[http://www.w3.org/TR/n-triples/][NTriples]] parser without any other dependencies.
+
+** Implementation notes
+
+- All subjects & predicates are always returned as strings
+- Object URIs and string literals are returned as strings
+- Object string literals with language tag or type URI will be returned as map
+- BNodes IDs are returned as is (as strings), i.e. no ID mangling
+  takes place, BNodes can be identified via =:= char prefix
+- Line comments are supported (=# comment text....=)
+
+** Object string literal handling
+
+See http://www.w3.org/TR/n-triples/#sec-literals for details about
+literal type mapping.
+
+*** Language tags
+
+If a object literal string has an attached language tag, it will be
+returned as map with these keys:
+
+- =:lit= : original parsed string
+- =:lang= : language tag (excluding =@= prefix)
+
+*** Type mapping
+
+The parser provides an extensible mechanism via
+its =literal-value= multimethod. By default only boolean and common
+numeric type conversion is implemented. Typed object literals will be
+returned as map with these keys:
+
+- =:lit= : original parsed string
+- =:type= : type URI
+- =:value= : possibly converted literal value (or nil if conversion
+  failed)
+
+#+BEGIN_SRC clojure :noweb-ref xsd
+  (defn vocab-map
+    [uri & xs]
+    (->> xs (map (fn [x] [x (str uri (name x))])) (into {})))
+
+  (def xsd
+    (vocab-map
+     "http://www.w3.org/2001/XMLSchema#"
+     :boolean
+     :byte
+     :short
+     :integer
+     :int
+     :long
+     :decimal
+     :double
+     :float
+     :decimal))
+
+  (defmulti literal-value (fn [_ uri] uri))
+
+  (defmethod literal-value :default [_ _]       nil)
+  (defmethod literal-value (:byte xsd) [x _]    (strf/parse-int x))
+  (defmethod literal-value (:short xsd) [x _]   (strf/parse-int x))
+  (defmethod literal-value (:int xsd) [x _]     (strf/parse-int x 10))
+  (defmethod literal-value (:long xsd) [x _]    (strf/parse-long x 10))
+  (defmethod literal-value (:float xsd) [x _]   (strf/parse-float x))
+  (defmethod literal-value (:double xsd) [x _]  (strf/parse-double x))
+  (defmethod literal-value (:boolean xsd) [x _] (strf/parse-boolean x))
+#+END_SRC
+
+** Parser
 
 #+BEGIN_SRC clojure :noweb-ref parser
   #?(:clj
@@ -18,7 +92,7 @@
        [chars]
        (.fromCharCode js/String (js/parseInt (apply str chars) 16))))
 
-  (def WS #{\space \t \newline})
+  (def WS #{\space \tab \newline})
 
   (defn parse-escape
     "Takes escape seq w/o leading backslash. Returns parsed char &
@@ -31,6 +105,7 @@
       \r ["\r" (next str)]
       \b ["\b" (next str)]
       \t ["\t" (next str)]
+      \f ["\f" (next str)]
       \" [\" (next str)]
       \\ [\\ (next str)]
       (err/illegal-arg! "illegal escape sequence")))
@@ -43,9 +118,12 @@
       (let [ch (first stream)]
         (if (or (nil? ch) (stop ch))
           stream
-          (if (allowed ch)
-            (recur (next stream))
-            (err/illegal-arg! (str "illegal character: " ch)))))))
+          (if (= \# ch)
+            (let [stream (next (discard-until (next stream) identity #(= \newline %)))]
+              (recur stream))
+            (if (allowed ch)
+              (recur (next stream))
+              (err/illegal-arg! (str "illegal character: " ch))))))))
 
   (defn read-until
     "Reads stream until stop char (incl. escape seqs).
@@ -66,8 +144,24 @@
   (defn parse-bnode
     [str] (read-until str #(= \space %)))
 
+  (defn parse-literal-type
+    [lit stream]
+    (let [stream (discard-until stream #(= \^ %) #(= \< %))
+          [turi stream] (parse-uri (next stream))]
+      [{:type turi :lit lit :value (literal-value lit turi)} stream]))
+
+  (defn parse-lang
+    [lit stream]
+    (let [[lang stream] (read-until stream #(= \space %))]
+      [{:lit lit :lang lang} stream]))
+
   (defn parse-string
-    [str] (read-until str #(= \" %)))
+    [stream]
+    (let [[s stream] (read-until stream #(= \" %))]
+      (condp = (fnext stream)
+        \^ (parse-literal-type s (nnext stream))
+        \@ (parse-lang s (nnext stream))
+        [s stream])))
 
   (defn parse-subject
     "NT subject is <uri> or _:bnode"
@@ -129,7 +223,10 @@
 #+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/io/ntriples.cljc :noweb yes :mkdirp yes :padline no
   (ns thi.ng.fabric.facts.io.ntriples
     (:require
+     [thi.ng.strf.core :as strf]
      [thi.ng.xerror.core :as err]))
+
+  <<xsd>>
 
   <<parser>>
 #+END_SRC

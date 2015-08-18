@@ -38,6 +38,7 @@ ALPHA quality, in active development.
 * Namespaces
 
 - [[./src/core.org][thi.ng.fabric.facts.core]]
+- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]]
 
 * Tests
 
@@ -75,7 +76,8 @@ target/fabric-facts-<<conf-version()>>.js
 
     :dependencies [<<dep-clj>>
                    <<dep-cljs>>
-                   [thi.ng/fabric-core "<<conf-version()>>"]]
+                   [thi.ng/fabric-core "<<conf-version()>>"]
+                   <<dep-strf>>]
 
     :profiles     {:dev {:dependencies [<<dep-criterium>>]
                          :plugins      [<<dep-cljsbuild>>
