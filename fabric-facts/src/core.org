@@ -387,7 +387,9 @@ graph.
       (let [qvars?     (mapv qvar? pattern)
             vmap       (bind-translator qvars? pattern)
             verify     (fact-verifier qvars? pattern)
-            res-tx     (comp (map #(if (verify %) (vmap %))) (filter filter-fn))
+            res-tx     (if verify
+                         (comp (map #(if (verify %) (vmap %))) (filter filter-fn))
+                         (comp (map vmap) (filter filter-fn)))
             collect-fn (f/collect-pure
                         (fn [_ incoming]
                           (if-let [res (seq (peek incoming))]
@@ -628,27 +630,112 @@ graph.
           (fn [r] {o (r 2)})
           (fn [_] {})))))
 
-  (defmulti fact-verifier (fn [qvars? pattern] (count pattern)))
+  (defmethod bind-translator 4
+    [[vt? vs? vp? vo?] [t s p o]]
+    (if vt?
+      (if vs?
+        (if vp?
+          (if vo?
+            (fn [r] {t (r 0) s (r 1) p (r 2) o (r 3)})
+            (fn [r] {t (r 0) s (r 1) p (r 2)}))
+          (if vo?
+            (fn [r] {t (r 0) s (r 1) o (r 3)})
+            (fn [r] {t (r 0) s (r 1)})))
+        (if vp?
+          (if vo?
+            (fn [r] {t (r 0) p (r 2) o (r 3)})
+            (fn [r] {t (r 0) p (r 2)}))
+          (if vo?
+            (fn [r] {t (r 0) o (r 3)})
+            (fn [r] {t (r 0)}))))
+      (if vs?
+        (if vp?
+          (if vo?
+            (fn [r] {s (r 1) p (r 2) o (r 3)})
+            (fn [r] {s (r 1) p (r 2)}))
+          (if vo?
+            (fn [r] {s (r 1) o (r 3)})
+            (fn [r] {s (r 1)})))
+        (if vp?
+          (if vo?
+            (fn [r] {p (r 2) o (r 3)})
+            (fn [r] {p (r 2)}))
+          (if vo?
+            (fn [r] {o (r 3)})
+            (fn [_] {}))))))
+
+  (defmulti fact-verifier
+    (fn [qvars? pattern] (count pattern)))
 
   (defmethod fact-verifier 3
-    [[vs? vp? vo?] [ts tp to]]
+    [[vs? vp? vo?] [s p o]]
     (cond
       (and vs? vp? vo?) (cond
-                          (= ts tp to) (fn [r] (= (r 0) (r 1) (r 2)))
-                          (= ts tp) (fn [r] (and (= (r 0) (r 1)) (not= (r 0) (r 2))))
-                          (= ts to) (fn [r] (and (= (r 0) (r 2)) (not= (r 0) (r 1))))
-                          (= tp to) (fn [r] (and (= (r 1) (r 2)) (not= (r 0) (r 1))))
-                          :else (constantly true))
-      (and vs? vp?)      (if (= ts tp)
-                           (fn [r] (= (r 0) (r 1)))
-                           (fn [r] (not= (r 0) (r 1))))
-      (and vs? vo?)      (if (= ts to)
-                           (fn [r] (= (r 0) (r 2)))
-                           (fn [r] (not= (r 0) (r 2))))
-      (and vp? vo?)      (if (= tp to)
-                           (fn [r] (= (r 1) (r 2)))
-                           (fn [r] (not= (r 1) (r 2))))
-      :else              (constantly true)))
+                          (= s p o) #(= (% 0) (% 1) (% 2))
+                          (= s p) #(and (= (% 0) (% 1)) (not= (% 0) (% 2)))
+                          (= s o) #(and (= (% 0) (% 2)) (not= (% 0) (% 1)))
+                          (= p o) #(and (= (% 1) (% 2)) (not= (% 0) (% 1)))
+                          :else nil)
+      (and vs? vp?)     (if (= s p) #(= (% 0) (% 1)) #(not= (% 0) (% 1)))
+      (and vs? vo?)     (if (= s o) #(= (% 0) (% 2)) #(not= (% 0) (% 2)))
+      (and vp? vo?)     (if (= p o) #(= (% 1) (% 2)) #(not= (% 1) (% 2)))
+      :else             nil))
+
+  (defmethod fact-verifier 4
+    [[vt? vs? vp? vo?] [t s p o]]
+    (cond
+      (and vt? vs? vp? vo?)
+      (cond
+        (= t s p o)           #(= (% 0) (% 1) (% 2) (% 3))
+        (= t s p)             #(and (not= (% 0) (% 3)) (= (% 0) (% 1) (% 2)))
+        (= t s o)             #(and (not= (% 0) (% 2)) (= (% 0) (% 1) (% 3)))
+        (= t p o)             #(and (not= (% 0) (% 1)) (= (% 0) (% 2) (% 3)))
+        (= s p o)             #(and (not= (% 0) (% 1)) (= (% 1) (% 2) (% 3)))
+        (and (= t s) (= p o)) #(and (= (% 0) (% 1)) (= (% 2) (% 3)))
+        (and (= t p) (= s o)) #(and (= (% 0) (% 2)) (= (% 1) (% 3)))
+        (and (= t o) (= s p)) #(and (= (% 0) (% 3)) (= (% 1) (% 2)))
+        (= t s)               #(let [t (first %)] (and (= t (% 1)) (not= t (% 2)) (not= t (% 3))))
+        (= t p)               #(let [t (first %)] (and (= t (% 2)) (not= t (% 1)) (not= t (% 3))))
+        (= t o)               #(let [o (peek %)]  (and (= o (% 0)) (not= o (% 1)) (not= o (% 2))))
+        (= s p)               #(let [s (nth % 1)] (and (= s (% 2)) (not= s (% 3)) (not= s (% 0))))
+        (= s o)               #(let [o (peek %)]  (and (= o (% 1)) (not= o (% 2)) (not= o (% 0))))
+        (= p o)               #(let [o (peek %)]  (and (= o (% 2)) (not= o (% 1)) (not= o (% 0))))
+        :else                 nil)
+      (and vt? vs? vp?)
+      (cond
+        (= t s p)             #(= (% 0) (% 1) (% 2))
+        (= t s)               #(and (= (% 0) (% 1)) (not= (% 0) (% 2)))
+        (= t p)               #(and (= (% 0) (% 2)) (not= (% 0) (% 1)))
+        (= s p)               #(and (= (% 1) (% 2)) (not= (% 1) (% 0)))
+        :else                 nil)
+      (and vt? vs? vo?)
+      (cond
+        (= t s o)             #(= (% 0) (% 1) (% 3))
+        (= t s)               #(and (= (% 0) (% 1)) (not= (% 0) (% 3)))
+        (= t o)               #(and (= (% 0) (% 3)) (not= (% 0) (% 1)))
+        (= s o)               #(and (= (% 1) (% 3)) (not= (% 1) (% 0)))
+        :else                 nil)
+      (and vt? vp? vo?)
+      (cond
+        (= t p o)             #(= (% 0) (% 2) (% 3))
+        (= t p)               #(and (= (% 0) (% 2)) (not= (% 0) (% 3)))
+        (= t o)               #(and (= (% 0) (% 3)) (not= (% 0) (% 1)))
+        (= p o)               #(and (= (% 2) (% 3)) (not= (% 2) (% 0)))
+        :else                 nil)
+      (and vs? vp? vo?)
+      (cond
+        (= s p o)             #(= (% 1) (% 2) (% 3))
+        (= s p)               #(and (= (% 1) (% 2)) (not= (% 1) (% 3)))
+        (= s o)               #(and (= (% 1) (% 3)) (not= (% 1) (% 2)))
+        (= p o)               #(and (= (% 2) (% 3)) (not= (% 2) (% 1)))
+        :else                 nil)
+      (and vt? vs?)           (if (= t s) #(= (% 0) (% 1)) #(not= (% 0) (% 1)))
+      (and vt? vp?)           (if (= t p) #(= (% 0) (% 2)) #(not= (% 0) (% 2)))
+      (and vt? vo?)           (if (= t o) #(= (% 0) (% 3)) #(not= (% 0) (% 3)))
+      (and vs? vp?)           (if (= s p) #(= (% 1) (% 2)) #(not= (% 1) (% 2)))
+      (and vs? vo?)           (if (= s o) #(= (% 1) (% 3)) #(not= (% 1) (% 3)))
+      (and vp? vo?)           (if (= p o) #(= (% 2) (% 3)) #(not= (% 2) (% 3)))
+      :else                   nil))
 
   (defn select-keys*
     "Like c.c/select-keys, but doesn't retain map's meta"
