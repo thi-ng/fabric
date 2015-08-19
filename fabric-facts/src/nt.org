@@ -37,15 +37,13 @@ returned as map with these keys:
 
 *** Type mapping
 
-The parser provides an extensible mechanism via
-its =literal-value= multimethod. By default only boolean and common
-numeric type conversion is implemented. Typed object literals will be
-returned as map with these keys:
+The parser provides an extensible mechanism via its =literal-value=
+multimethod. By default only boolean and common numeric type
+conversion is implemented. If conversion isn't available or fails,
+typed object literals will be returned as map with these keys:
 
 - =:lit= : original parsed string
 - =:type= : type URI
-- =:value= : possibly converted literal value (or nil if conversion
-  failed)
 
 #+BEGIN_SRC clojure :noweb-ref xsd
   (defn vocab-map
@@ -72,9 +70,11 @@ returned as map with these keys:
   (defmethod literal-value (:byte xsd) [x _]    (strf/parse-int x))
   (defmethod literal-value (:short xsd) [x _]   (strf/parse-int x))
   (defmethod literal-value (:int xsd) [x _]     (strf/parse-int x 10))
+  (defmethod literal-value (:integer xsd) [x _] (strf/parse-int x 10))
   (defmethod literal-value (:long xsd) [x _]    (strf/parse-long x 10))
   (defmethod literal-value (:float xsd) [x _]   (strf/parse-float x))
   (defmethod literal-value (:double xsd) [x _]  (strf/parse-double x))
+  (defmethod literal-value (:decimal xsd) [x _] (strf/parse-double x))
   (defmethod literal-value (:boolean xsd) [x _] (strf/parse-boolean x))
 #+END_SRC
 
@@ -147,8 +147,9 @@ returned as map with these keys:
   (defn parse-literal-type
     [lit stream]
     (let [stream (discard-until stream #(= \^ %) #(= \< %))
-          [turi stream] (parse-uri (next stream))]
-      [{:type turi :lit lit :value (literal-value lit turi)} stream]))
+          [turi stream] (parse-uri (next stream))
+          val (literal-value lit turi)]
+      [(or val {:type turi :lit lit}) stream]))
 
   (defn parse-lang
     [lit stream]
