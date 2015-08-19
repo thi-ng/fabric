@@ -112,69 +112,63 @@ cache is an atom with a nested map and these top-level keys:
 **** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
-(defrecord FactGraph
-    [g indices facts cache]
-  f/IComputeGraph
-  (add-vertex!
-    [_ val vspec] (f/add-vertex! g val vspec))
-  (remove-vertex!
-    [_ v] (f/remove-vertex! g v))
-  (vertex-for-id
-    [_ id] (f/vertex-for-id g id))
-  (vertices
-    [_] (f/vertices g))
-  (add-edge!
-    [_ src dest sig opts] (f/add-edge! g src dest sig opts))
-  f/IWatch
-  (add-watch!
-    [_ type id f] (f/add-watch! g type id f) _)
-  (remove-watch!
-    [_ type id] (f/remove-watch! g type id) _)
-  IFactGraph
-  (fact-indices
-    [_] indices)
-  (add-fact!
-    [_ t]
-    (or (@facts t)
-        (let [{:keys [subj pred obj]} indices
-              v (f/add-vertex! g t fact-vertex-spec)]
-          (f/add-edge! g v subj signal-fact :add)
-          (f/add-edge! g v pred signal-fact :add)
-          (f/add-edge! g v obj  signal-fact :add)
-          (swap! facts assoc t v)
-          v)))
-  (remove-fact!
-    [_ t]
-    (if-let [v (@facts t)]
-      (let [{:keys [subj pred obj]} indices]
-        (f/add-edge! g v subj signal-fact :remove)
-        (f/add-edge! g v pred signal-fact :remove)
-        (f/add-edge! g v obj  signal-fact :remove)
-        (swap! facts dissoc t)
-        (f/remove-vertex! g v)
-        v)
-      (warn "attempting to remove unknown fact:" t)))
-  ICache
-  (cached
-    [_ type k] (get-in @cache [type k]))
-  (cache!
-    [_ type k v] (swap! cache assoc-in [type k] v) v)
-  (expire!
-    [_ type k] (swap! cache update type dissoc k) nil))
+  (defrecord FactGraph
+      [g indices facts cache]
+    f/IComputeGraph
+    (add-vertex!
+      [_ val vspec] (f/add-vertex! g val vspec))
+    (remove-vertex!
+      [_ v] (f/remove-vertex! g v))
+    (vertex-for-id
+      [_ id] (f/vertex-for-id g id))
+    (vertices
+      [_] (f/vertices g))
+    (add-edge!
+      [_ src dest sig opts] (f/add-edge! g src dest sig opts))
+    f/IWatch
+    (add-watch!
+      [_ type id f] (f/add-watch! g type id f) _)
+    (remove-watch!
+      [_ type id] (f/remove-watch! g type id) _)
+    IFactGraph
+    (fact-indices
+      [_] indices)
+    (add-fact!
+      [_ t]
+      (or (@facts t)
+          (let [v (f/add-vertex! g t fact-vertex-spec)]
+            (run! #(f/add-edge! g v % signal-fact :add) indices)
+            (swap! facts assoc t v)
+            v)))
+    (remove-fact!
+      [_ t]
+      (if-let [v (@facts t)]
+        (do
+          (run! #(f/add-edge! g v % signal-fact :remove) indices)
+          (swap! facts dissoc t)
+          (f/remove-vertex! g v)
+          v)
+        (warn "attempting to remove unknown fact:" t)))
+    ICache
+    (cached
+      [_ type k] (get-in @cache [type k]))
+    (cache!
+      [_ type k v] (swap! cache assoc-in [type k] v) v)
+    (expire!
+      [_ type k] (swap! cache update type dissoc k) nil))
 #+END_SRC
 
 **** Constructor
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
-    [g]
+    ([g] (fact-graph g 3))
+    ([g len]
     (map->FactGraph
-     {:indices {:subj (index-vertex g 0)
-                :pred (index-vertex g 1)
-                :obj  (index-vertex g 2)}
+     {:indices (mapv #(index-vertex g %) (range len))
       :facts   (atom {})
       :cache   (atom {})
-      :g       g}))
+      :g       g})))
 #+END_SRC
 
 **** Index vertex
@@ -184,9 +178,9 @@ create a single SPO index vertex.
 
 #+BEGIN_SRC clojure :noweb-ref index-v
 (defn- index-vertex
-  [g spo]
+  [g idx]
   (f/add-vertex!
-   g {} {::f/collect-fn      (collect-index spo)
+   g {} {::f/collect-fn      (collect-index idx)
          ::f/score-signal-fn f/score-signal-with-new-edges}))
 #+END_SRC
 
@@ -346,23 +340,18 @@ graph.
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [{:keys [subj pred obj]} (fact-indices g)
-            [s p o] pattern
-            sel-s (index-selection g [0 s])
-            sel-p (index-selection g [1 p])
-            sel-o (index-selection g [2 o])
-            acc   (f/add-vertex! g {} {::f/collect-fn collect-select})
+      (let [[s p o] pattern
+            selections (make-index-selections g pattern)
+            acc   (f/add-vertex!
+                   g {} {::f/collect-fn collect-select})
             res   (f/add-vertex!
                    g nil
                    {::f/collect-fn       (aggregate-select g)
                     ::f/score-signal-fn  f/score-signal-with-new-edges
-                    ::f/score-collect-fn (score-collect-min-signal-vals 3)})
-            this  (assoc _ :acc acc :result res :selections [sel-s sel-p sel-o])]
-        (f/add-edge! g (:vertex sel-s) acc f/signal-forward nil)
-        (f/add-edge! g (:vertex sel-p) acc f/signal-forward nil)
-        (f/add-edge! g (:vertex sel-o) acc f/signal-forward nil)
-        (f/add-edge! g acc             res f/signal-forward nil)
-        this))
+                    ::f/score-collect-fn (score-collect-min-signal-vals (count selections))})]
+        (run! #(f/add-edge! g (:vertex %) acc f/signal-forward nil) selections)
+        (f/add-edge! g acc res f/signal-forward nil)
+        (assoc _ :acc acc :result res :selections selections)))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -522,8 +511,12 @@ graph.
       (do (debug :reuse-index-sel (:sel sel)) sel)
       (f/add-to-graph!
        (map->FactIndexSelection
-        {:index ((fact-indices g) ([:subj :pred :obj] (first sel)))
+        {:index ((fact-indices g) (first sel))
          :sel   sel}) g)))
+
+  (defn make-index-selections
+    [g pattern]
+    (into [] (map-indexed #(index-selection g [% %2])) pattern))
 
   (defn add-query!
     [g pattern]
@@ -905,7 +898,7 @@ graph.
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
-  (declare index-selection add-query! add-query-join!)
+  (declare index-selection make-index-selections add-query! add-query-join!)
 
   <<protos>>
 
