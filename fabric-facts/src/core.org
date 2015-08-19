@@ -384,10 +384,9 @@ graph.
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [[s p o]    pattern
-            vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
-            vmap       (bind-translator vs? vp? vo? s p o)
-            verify     (fact-verifier s p o vs? vp? vo?)
+      (let [qvars?     (mapv qvar? pattern)
+            vmap       (bind-translator qvars? pattern)
+            verify     (fact-verifier qvars? pattern)
             res-tx     (comp (map #(if (verify %) (vmap %))) (filter filter-fn))
             collect-fn (f/collect-pure
                         (fn [_ incoming]
@@ -609,8 +608,10 @@ graph.
     [patterns]
     (sort-by pattern-var-count patterns))
 
-  (defn- bind-translator
-    [vs? vp? vo? s p o]
+  (defmulti bind-translator (fn [qvars? pattern] (count pattern)))
+
+  (defmethod bind-translator 3
+    [[vs? vp? vo?] [s p o]]
     (if vs?
       (if vp?
         (if vo?
@@ -627,25 +628,27 @@ graph.
           (fn [r] {o (r 2)})
           (fn [_] {})))))
 
-  (defn- fact-verifier
-    [ts tp to vars varp varo]
+  (defmulti fact-verifier (fn [qvars? pattern] (count pattern)))
+
+  (defmethod fact-verifier 3
+    [[vs? vp? vo?] [ts tp to]]
     (cond
-      (and vars varp varo) (cond
-                             (= ts tp to) (fn [r] (= (r 0) (r 1) (r 2)))
-                             (= ts tp) (fn [r] (and (= (r 0) (r 1)) (not= (r 0) (r 2))))
-                             (= ts to) (fn [r] (and (= (r 0) (r 2)) (not= (r 0) (r 1))))
-                             (= tp to) (fn [r] (and (= (r 1) (r 2)) (not= (r 0) (r 1))))
-                             :else (constantly true))
-      (and vars varp)      (if (= ts tp)
-                             (fn [r] (= (r 0) (r 1)))
-                             (fn [r] (not= (r 0) (r 1))))
-      (and vars varo)      (if (= ts to)
-                             (fn [r] (= (r 0) (r 2)))
-                             (fn [r] (not= (r 0) (r 2))))
-      (and varp varo)      (if (= tp to)
-                             (fn [r] (= (r 1) (r 2)))
-                             (fn [r] (not= (r 1) (r 2))))
-      :else                (constantly true)))
+      (and vs? vp? vo?) (cond
+                          (= ts tp to) (fn [r] (= (r 0) (r 1) (r 2)))
+                          (= ts tp) (fn [r] (and (= (r 0) (r 1)) (not= (r 0) (r 2))))
+                          (= ts to) (fn [r] (and (= (r 0) (r 2)) (not= (r 0) (r 1))))
+                          (= tp to) (fn [r] (and (= (r 1) (r 2)) (not= (r 0) (r 1))))
+                          :else (constantly true))
+      (and vs? vp?)      (if (= ts tp)
+                           (fn [r] (= (r 0) (r 1)))
+                           (fn [r] (not= (r 0) (r 1))))
+      (and vs? vo?)      (if (= ts to)
+                           (fn [r] (= (r 0) (r 2)))
+                           (fn [r] (not= (r 0) (r 2))))
+      (and vp? vo?)      (if (= tp to)
+                           (fn [r] (= (r 1) (r 2)))
+                           (fn [r] (not= (r 1) (r 2))))
+      :else              (constantly true)))
 
   (defn select-keys*
     "Like c.c/select-keys, but doesn't retain map's meta"
