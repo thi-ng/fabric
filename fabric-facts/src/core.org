@@ -16,7 +16,7 @@
          - [[#query-union][Query union]]
          - [[#query-constructors][Query constructors]]
          - [[#query-helpers][Query helpers]]
-     - [[#todo-rulebased-inference][TODO Rulebased inference]]
+     - [[#rulebased-inference][Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
@@ -358,12 +358,11 @@ graph.
                     ::f/score-signal-fn  f/score-signal-with-new-edges
                     ::f/score-collect-fn (score-collect-min-signal-vals 3)})
             this  (assoc _ :acc acc :result res :selections [sel-s sel-p sel-o])]
-        ;; TODO add index selection vertices, use existing if possible
         (f/add-edge! g (:vertex sel-s) acc f/signal-forward nil)
         (f/add-edge! g (:vertex sel-p) acc f/signal-forward nil)
         (f/add-edge! g (:vertex sel-o) acc f/signal-forward nil)
         (f/add-edge! g acc             res f/signal-forward nil)
-        (cache! g ::queries pattern this)))
+        this))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -383,7 +382,7 @@ graph.
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defrecord ParametricFactQuery
-      [sub-query result pattern]
+      [sub-query result pattern filter-fn]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -400,7 +399,7 @@ graph.
             vs?        (qvar? s), vp? (qvar? p), vo? (qvar? o)
             vmap       (bind-translator vs? vp? vo? s p o)
             verify     (fact-verifier s p o vs? vp? vo?)
-            res-tx     (comp (map #(if (verify %) (vmap %))) (filter identity))
+            res-tx     (comp (map #(if (verify %) (vmap %))) (filter filter-fn))
             collect-fn (f/collect-pure
                         (fn [_ incoming]
                           (if-let [res (seq (peek incoming))]
@@ -413,7 +412,7 @@ graph.
                          ::f/score-signal-fn f/score-signal-with-new-edges})
             this       (assoc _ :sub-query sub-q :result res)]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
-        (cache! g ::queries pattern this)))
+        this))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -530,15 +529,20 @@ graph.
     [g pattern]
     (if-let [q (cached g ::queries pattern)]
       (do (debug :reuse-basic-query pattern) q)
-      (f/add-to-graph!
-       (map->BasicFactQuery {:pattern pattern}) g)))
+      (->> (f/add-to-graph!
+            (map->BasicFactQuery {:pattern pattern}) g)
+           (cache! g ::queries pattern))))
 
   (defn add-param-query!
-    [g pattern]
-    (if-let [q (cached g ::queries pattern)]
-      (do (debug :reuse-param-query pattern) q)
-      (f/add-to-graph!
-       (map->ParametricFactQuery {:pattern pattern}) g)))
+    ([g pattern]
+     (if-let [q (cached g ::queries pattern)]
+       (do (debug :reuse-param-query pattern) q)
+       (->> (f/add-to-graph!
+             (map->ParametricFactQuery {:filter-fn identity :pattern pattern}) g)
+            (cache! g ::queries pattern))))
+    ([g flt pattern]
+     (f/add-to-graph!
+      (map->ParametricFactQuery {:filter-fn flt :pattern pattern}) g)))
 
   (defn add-join!
     ([g lhs rhs]
@@ -719,7 +723,7 @@ graph.
             a)))))
 #+END_SRC
 
-** TODO Rulebased inference
+** Rulebased inference
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defrecord FactInferenceRule
@@ -727,7 +731,9 @@ graph.
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [q   (apply add-query-join! g patterns)
+      (let [q   (if (< 1 (count patterns))
+                  (apply add-query-join! g patterns)
+                  (add-param-query! g (first patterns)))
             inf (f/add-vertex!
                  g #{} {::f/collect-fn (collect-inference g production)})]
         (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
@@ -837,9 +843,9 @@ graph.
         (debug (f/vertex-id vertex) :additions adds)
         (doseq [[op t :as inf] inferred]
           (case op
-            :+ (do (debug :add-fact t)
+            :+ (do (debug (f/vertex-id vertex) :rule-add-fact t)
                    (add-fact! g t))
-            :- (do (debug :remove-fact t)
+            :- (do (debug (f/vertex-id vertex) :rule-remove-fact t)
                    (remove-fact! g t))
             (warn "invalid inference:" inf)))
         (swap! (.-value vertex) set/union adds))))
