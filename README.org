@@ -400,11 +400,11 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 * Modules
 
-- [[./fabric-core/README.org][fabric-core]]
+- [[./fabric-core/README.org][fabric-core]] - core compute graph functionality
 
-- [[./fabric-facts/README.org][fabric-facts]]
+- [[./fabric-facts/README.org][fabric-facts]] - semantic knowledge graph, cached query trees, inferencing, I/O, parsing
 
-- [[./fabric-redis/README.org][fabric-redis]]
+- [[./fabric-redis/README.org][fabric-redis]] - redis backend (not yet included)
 
 * Project definition
 
