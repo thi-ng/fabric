@@ -3,9 +3,9 @@
 
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]
-     - [[#todo-overview][TODO Overview]]
-     - [[#todo-status][TODO Status]]
-     - [[#todo-example-usage][TODO Example usage]]
+     - [[#overview][Overview]]
+     - [[#status][Status]]
+     - [[#example-usage][Example usage]]
  - [[#namespaces][Namespaces]]
  - [[#tests][Tests]]
  - [[#module-definition][Module definition]]
@@ -19,21 +19,37 @@
 
 * About the project
 
-** TODO Overview
+** Overview
 
-Compute graph infrastructure
+This module provides the following features on top of the core compute
+graph setup:
 
-** TODO Status
+- Triple or Quad fact graphs
+- Fact indexing
+- Fact graph logging (via [[https://github.com/clojure/core.async][core.async]])
+- Query tree construction (vertex based)
+  - Query variable bindings (SPARQL / Datalog style pattern queries)
+  - Joins
+  - Optional joins
+  - Unions
+  - Arbitrary filters
+  - Arbitrary result grouping
+- Extensive query & sub-query reuse/caching
+- Intelligent recursive query removal
+- Queries are only computed once, results are cached and updated
+  automatically when underlying fact set is changing
+- Rule based inferencing
+- RDF N-Triple parser
+
+** Status
 
 ALPHA quality, in active development.
 
-** TODO Example usage
+** Example usage
 
-#+BEGIN_SRC clojure
-  (require 'thi.ng.fabric.core)
-
-  ;; TODO some magic
-#+END_SRC
+The [[../README.org#automatically-updating-fact-graph-queries-with-rule-based-inferencing][main README]] contains an example for this module and more detailed
+information can be found in the core namespace and tests. Literate
+programming FTW!
 
 * Namespaces
 

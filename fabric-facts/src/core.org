@@ -339,8 +339,8 @@ A =BasicFactQuery= is used to match a single or multiple facts without variable 
 - =[nil 'friend 'bob]= matches all facts which have predicate ='friend= and object ='bob=
 
 In general, =nil= is used as wildcard to match any S, P or O position.
-Therefore, the query pattern =[nil nil nil]= matches all facts in the
-graph.
+Therefore, the query pattern =[nil nil nil]= matches all facts in a
+triple graph (or =[nil nil nil nil]= for quads).
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defrecord BasicFactQuery
