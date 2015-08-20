@@ -8,7 +8,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]
      - [[#leiningen-coordinates][Leiningen coordinates]]
-     - [[#todo-overview][TODO Overview]]
+     - [[#overview][Overview]]
          - [[#features][Features]]
          - [[#motivation--use-cases][Motivation & use cases]]
          - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
@@ -37,14 +37,14 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.131"]
+  [thi.ng/fabric "0.0.144"]
 #+END_SRC
 
-** TODO Overview
+** Overview
 
 *** Features
 
-- Modular architecture
+- Modular architecture (see [[#modules][Modules]] section below)
 - Protocol based implementation
 - Customizable vertex, edge, graph & execution context types
 - 3 types of graph execution contexts built-in
@@ -57,6 +57,11 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 - Edges are functions and all signal/collect actions are purely functional too
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
+- Knowledge graphs (triples & quads)
+- Fully featured, efficient query engine (variables, joins, optional
+  joins, unions, filters, grouping)
+- Rulebased fact inferencing (additions & retractions)
+- N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
 
 *** Motivation & use cases
@@ -489,12 +494,13 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*                                |
-|-----------+------------+----------------------------------------------|
-|   0.0.131 | 2015-08-17 | fact query updates & recursive removal       |
-|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching |
-|   0.0.116 | 2015-08-15 | more reusable fact queries                   |
-|   0.0.108 | 2015-08-14 | 1st public release                           |
+| *Version* | *Released* | *Description*                                                |
+|-----------+------------+--------------------------------------------------------------|
+|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support |
+|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                       |
+|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                 |
+|   0.0.116 | 2015-08-15 | more reusable fact queries                                   |
+|   0.0.108 | 2015-08-14 | 1st public release                                           |
 
 ** Contributors
 
