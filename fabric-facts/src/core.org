@@ -3,9 +3,15 @@
 * Contents                                                         :toc_3_gh:
  - [[#namespace-thingfabricfactscore][Namespace: thi.ng.fabric.facts.core]]
      - [[#protocols][Protocols]]
-     - [[#basic-types][Basic types]]
+     - [[#core-types--concepts][Core types & concepts]]
          - [[#facts][Facts]]
          - [[#factgraph][FactGraph]]
+         - [[#fact-indexing][Fact indexing]]
+         - [[#todo-fact-transformation][TODO Fact transformation]]
+         - [[#entity-caching][Entity caching]]
+         - [[#implementation][Implementation]]
+         - [[#constructor][Constructor]]
+         - [[#index-vertex][Index vertex]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
          - [[#override-print-methods][Override print methods]]
@@ -29,6 +35,7 @@
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
     (fact-indices [_])
+    (fact-transformer [_])
     (add-fact! [_ t])
     (remove-fact! [_ t]))
 
@@ -40,9 +47,13 @@
   (defprotocol IFactQuery
     (raw-pattern [_])
     (result-vertex [_]))
+
+  (defprotocol IFactTransformer
+    (transform [_ x])
+    (untransform [_ x]))
 #+END_SRC
 
-** Basic types
+** Core types & concepts
 
 *** Facts
 
@@ -82,11 +93,7 @@ default implementation of the =FactGraph= wraps an existing
 =IComputeGraph= instance and provides an extended API via the
 =IFactGraph= and =ICache= protocols.
 
-**** Questions
-
-- Is there a point to support mixed length facts within a graph?
-
-**** Fact indexing
+*** Fact indexing
 
 The =FactGraph= indexes all facts by their individual items (e.g.
 subject, predicate and object values). These indices are special
@@ -97,7 +104,156 @@ to these indices (via intermediate index selection vertices, see
 Queries section below) and are notified each time their index
 selection is changing.
 
-**** Entity caching
+*** TODO Fact transformation
+
+The =IFactTransformer= protocol allows the graph to invisibly store
+transformed facts, possibly in more compact form than specified by the
+user. When a fact is added, the =transform= method of the transformer
+is applied. Queries automatically call =untransform= on their results,
+so the user will be oblivious to the changed internal representation.
+
+**** Identity transformer
+
+This is a null transform (NOP), used when no fact transformer is given
+for a graph.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn identity-transformer
+    []
+    (reify IFactTransformer
+      (transform [_ x] x)
+      (untransform [_ x] x)))
+#+END_SRC
+
+**** PName URI replacements
+
+This transformer is useful when dealing with Linked Data (RDF), where
+most items are URIs. It's common practice in the LD community to
+specify prefixes for various often used vocabularies. E.g. We might
+define a prefix map and transformer like this:
+
+#+BEGIN_SRC clojure
+  (def prefixes
+   {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
+   "owl"  "http://www.w3.org/2002/07/owl#"})
+
+  (def tx (prefix-transformer prefixes))
+
+  (transform tx "http://www.w3.org/2002/07/owl#Ontology")
+  ;; ["owl" "Ontology"]
+
+  (untransform tx ["owl" "Ontology"])
+  ;; "http://www.w3.org/2002/07/owl#Ontology"
+#+END_SRC
+
+The transformer takes such a prefix map and value. If value is a string,
+attempts to find prefix from map and if found returns a 2-elem vector
+of =[prefix name]=, else original.
+
+The untransformer too takes the same prefix map and a value. If the
+value is a vector as produced by the transformation fn and has a known
+prefix, returns expanded string or else original value.
+
+*Important note:* This transformer only applies to single fact
+ sub-items, to apply it to full facts, wrap it in =fact-transformer=
+ (described below).
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn prefix-transformer
+    [prefixes]
+    (reify IFactTransformer
+      (transform
+        [_ x]
+        (if (string? x)
+          (loop [[[pre pn] & more] (seq prefixes)]
+            (if pre
+              (if (zero? (.indexOf x ^String pn))
+                [pre (subs x (count pn))]
+                (recur more))
+              x))
+          x))
+      (untransform
+        [_ x]
+        (if (vector? x)
+          (if-let [p (prefixes (first x))]
+            (str p (nth x 1))
+            x)
+          x))))
+#+END_SRC
+
+**** Global fact item indexing
+
+This transformer too applies to fact sub-items only (see note in
+previous section) and maps values to/from unique index IDs.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn global-index-transformer
+    []
+    (let [index (atom {:fwd {} :rev {} :id 0})]
+      (reify IFactTransformer
+        (transform
+          [_ x]
+          (if-let [x' ((@index :fwd) x)]
+            x'
+            (let [id (:id @index)]
+              (swap! index
+                     (fn [idx]
+                       (-> idx
+                           (update :id inc)
+                           (update :fwd assoc x id)
+                           (update :rev assoc id x))))
+              id)))
+        (untransform
+          [_ id] ((@index :rev) id)))))
+#+END_SRC
+
+**** Transformer composition
+
+An arbitrary number of transformers can be composed using the functions below.
+
+- =compose-transformers= applies the given transformers serially (via
+  =reduce=) and in reverse order for =untransform=.
+
+- =fact-transformer= applies 3 or 4 transformers in parallel (one per
+  fact component)
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn compose-transformers
+    [& transformers]
+    (let [rtx (reverse transformers)]
+      (reify IFactTransformer
+        (transform [_ x]
+          (reduce #(transform %2 %) x transformers))
+        (untransform [_ x]
+          (reduce #(untransform %2 %) x rtx)))))
+
+  (defn fact-transformer
+    ([txs txp txo]
+     (reify IFactTransformer
+       (transform [_ fact]
+         [(transform txs (first fact))
+          (transform txp (nth fact 1))
+          (transform txp (nth fact 2))])
+       (untransform [_ fact]
+         [(untransform txs (first fact))
+          (untransform txp (nth fact 1))
+          (untransform txp (nth fact 2))])))
+    ([txt txs txp txo]
+     (reify IFactTransformer
+       (transform [_ fact]
+         [(transform txt (first fact))
+          (transform txs (nth fact 1))
+          (transform txp (nth fact 2))
+          (transform txp (nth fact 3))])
+       (untransform [_ fact]
+         [(untransform txt (first fact))
+          (untransform txs (nth fact 1))
+          (untransform txp (nth fact 2))
+          (untransform txo (nth fact 3))]))))
+#+END_SRC
+
+*** Entity caching
 
 The =ICache= protocol is used to cache various query related entities
 for DRY reasons. Intermediate result caching is not just done for
@@ -116,11 +272,11 @@ cache is an atom with a nested map and these top-level keys:
 - =::rules= - caches inference rules based on their ID (also
   defrecords)
 
-**** Implementation
+*** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defrecord FactGraph
-      [g indices facts cache]
+      [g indices facts cache ftx]
     f/IComputeGraph
     (add-vertex!
       [_ val vspec] (f/add-vertex! g val vspec))
@@ -140,22 +296,26 @@ cache is an atom with a nested map and these top-level keys:
     IFactGraph
     (fact-indices
       [_] indices)
+    (fact-transformer
+      [_] ftx)
     (add-fact!
-      [_ t]
-      (or (@facts t)
-          (let [v (f/add-vertex! g t fact-vertex-spec)]
-            (run! #(f/add-edge! g v % signal-fact :add) indices)
-            (swap! facts assoc t v)
-            v)))
+      [_ f]
+      (let [f' (transform ftx f)]
+        (or (@facts f')
+            (let [v (f/add-vertex! g f' fact-vertex-spec)]
+              (run! #(f/add-edge! g v % signal-fact :add) indices)
+              (swap! facts assoc f' v)
+              v))))
     (remove-fact!
-      [_ t]
-      (if-let [v (@facts t)]
-        (do
-          (run! #(f/add-edge! g v % signal-fact :remove) indices)
-          (swap! facts dissoc t)
-          (f/remove-vertex! g v)
-          v)
-        (warn "attempting to remove unknown fact:" t)))
+      [_ f]
+      (let [f' (transform ftx f)]
+        (if-let [v (@facts f')]
+          (do
+            (run! #(f/add-edge! g v % signal-fact :remove) indices)
+            (swap! facts dissoc f')
+            (f/remove-vertex! g v)
+            v)
+          (warn "attempting to remove unknown fact:" f))))
     ICache
     (cached
       [_ type k] (get-in @cache [type k]))
@@ -165,27 +325,30 @@ cache is an atom with a nested map and these top-level keys:
       [_ type k] (swap! cache update type dissoc k) nil))
 #+END_SRC
 
-**** Constructor
+*** Constructor
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
     "Creates a new FactGraph instance with configurable backing
-    IComputeGraph and fact length. If length is not specified, fact
-    triples are used. Note that currently only triples or quads are
-    supported! (len = 3 or 4)."
+    IComputeGraph, fact length and fact transformer. If length is not
+    specified, fact triples are used. Note that currently only triples
+    or quads are supported! (len = 3 or 4)."
     ([]
      (fact-graph (f/compute-graph)))
     ([g]
      (fact-graph g 3))
     ([g len]
+     (fact-graph g 3 (identity-transformer)))
+    ([g len tx]
     (map->FactGraph
      {:indices (mapv #(index-vertex g %) (range len))
       :facts   (atom {})
       :cache   (atom {})
+      :ftx     tx
       :g       g})))
 #+END_SRC
 
-**** Index vertex
+*** Index vertex
 
 This is the helper function used by the =FactGraph= constructor to
 create a single fact component index vertex.
@@ -197,6 +360,7 @@ create a single fact component index vertex.
    g {} {::f/collect-fn      (collect-index idx)
          ::f/score-signal-fn f/score-signal-with-new-edges}))
 #+END_SRC
+
 
 ** Queries
 
@@ -303,7 +467,6 @@ In code form this same graph could be constructed like this:
 
 #+END_SRC
 
-
 *** Index selection
 
 #+BEGIN_SRC clojure :noweb-ref queries
@@ -363,7 +526,7 @@ graph.
                    g {} {::f/collect-fn collect-select})
             res   (f/add-vertex!
                    g nil
-                   {::f/collect-fn       (aggregate-select g)
+                   {::f/collect-fn       (collect-basic-query-results g)
                     ::f/score-signal-fn  f/score-signal-with-new-edges
                     ::f/score-collect-fn (score-collect-min-signal-vals (count selections))})]
         (run! #(f/add-edge! g (:vertex %) acc f/signal-forward nil) selections)
@@ -942,11 +1105,13 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
     (fn [vertex]
       (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
-  (defn- aggregate-select
+  (defn- collect-basic-query-results
     [g]
-    (let [agg-tx (comp (map #(f/vertex-for-id g %))
+    (let [ftx    (fact-transformer g)
+          agg-tx (comp (map #(f/vertex-for-id g %))
                        (filter identity)
-                       (map deref))]
+                       (map deref)
+                       (map #(untransform ftx %)))]
       (f/collect-pure
        (fn [_ incoming]
          (let [res (vals (peek incoming))]
@@ -1050,6 +1215,8 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   <<fact-v>>
 
   <<index-v>>
+
+  <<fact-tx>>
 
   <<graph>>
 
