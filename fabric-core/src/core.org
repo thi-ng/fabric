@@ -53,6 +53,10 @@ This namespace provides...
     (add-edge! [_ src dest f opts])
     (remove-edge! [_ src dest]))
 
+  (defprotocol IStateful
+    (state [_])
+    (update-state! [_ f]))
+
   (defprotocol IWatch
     (add-watch! [_ type id f])
     (remove-watch! [_ type id]))
@@ -136,7 +140,12 @@ This namespace provides...
     (signal-map
       [_] @signal-map)
     (uncollected-signals
-      [_] @uncollected))
+      [_] @uncollected)
+    IStateful
+    (state
+      [_] @state)
+    (update-state!
+      [_ f] (swap! state f) _))
 #+END_SRC
 
 *** ComputeGraph
@@ -285,7 +294,7 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref ctx-processing
   (defn execution-result
     [type sigs colls t0 & [opts]]
-    (let [rt #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0))]
+    (let [rt (millis-since t0)]
       (->> {:collections colls
             :signals     sigs
             :type        type
@@ -663,6 +672,9 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref helpers
   (defn now
     [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
+
+  (defn millis-since
+    [t0] #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0)))
 
   (defn notify-watches
     [watches evt]
