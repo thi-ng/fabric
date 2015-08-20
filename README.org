@@ -310,7 +310,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   ;; Create empty knowledge graph using default compute graph as backend
 
-  (def g (ff/fact-graph (f/compute-graph)))
+  (def g (ff/fact-graph))
 
   ;; Setup execution context (with default opts)
 

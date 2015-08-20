@@ -4,7 +4,7 @@
  - [[#namespace-thingfabricfactscore][Namespace: thi.ng.fabric.facts.core]]
      - [[#protocols][Protocols]]
      - [[#basic-types][Basic types]]
-         - [[#fact-vertex][Fact vertex]]
+         - [[#facts][Facts]]
          - [[#factgraph][FactGraph]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
@@ -44,27 +44,28 @@
 
 ** Basic types
 
-*** Fact vertex
+*** Facts
 
-Facts are RDF-style triples (vectors) of =[subject predicate object]=,
-stored in normal vertices. However, each fact vertex is configured to
-never collect (facts are immutable) and signal only once when added
-(or removed) from the graph.
+Facts are simply vectors of (currently 3 or 4) items, e.g. =[subject
+predicate object]= (for triples) and stored in normal vertices.
+However, each fact vertex is configured to never collect (facts are
+immutable) and signal only once when added (or removed) from the
+graph.
 
-Any Clojure value can be used as subject/pred/obj, though in most
+Any Clojure value can be used as fact item, though in most
 cases you'll want to use strings, keywords, symbols, UUIDs or numbers.
 
 Example facts:
 
 #+BEGIN_SRC clojure
-;; P-123 has name Alice
-["P-123" :name "Alice"]
+;; P123 has name Alice
+[:P123 :name "Alice"]
 
 ;; toxi is author of fabric
-['toxi 'author 'fabric]
+'[toxi author fabric]
 
-;; subject with UUID ... has a template function f
-[#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" :template-fn (fn [title] [:div [:h1 title]])]
+;; in transaction UUID we state "XYZ" has a a template function f
+[#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" "XYZ" :template-fn (fn [title] [:div [:h1 title]])]
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref fact-v
@@ -75,20 +76,26 @@ Example facts:
 
 *** FactGraph
 
-The default implementation of the =FactGraph= wraps an existing
+Facts are stored in a =FactGraph= instance which has been configured
+with a maximum fact length (currently 3 or 4 items per fact). The
+default implementation of the =FactGraph= wraps an existing
 =IComputeGraph= instance and provides an extended API via the
 =IFactGraph= and =ICache= protocols.
 
+**** Questions
+
+- Is there a point to support mixed length facts within a graph?
+
 **** Fact indexing
 
-The =FactGraph= indexes all facts by their subject, predicate and
-object (SPO) values. These indices are special vertices, automatically
-added during graph construction and all fact vertices are
-automatically connected to (and only to!) these indices. When queries
-are added to the graph, they indirectly attach themselves to the 3
-indices (via intermediate index selection vertices, see Queries
-section below) and are notified each time their index selection is
-changing.
+The =FactGraph= indexes all facts by their individual items (e.g.
+subject, predicate and object values). These indices are special
+vertices, automatically added during graph construction and all fact
+vertices are automatically connected to (and only to!) these indices.
+When queries are added to the graph, they indirectly attach themselves
+to these indices (via intermediate index selection vertices, see
+Queries section below) and are notified each time their index
+selection is changing.
 
 **** Entity caching
 
@@ -100,8 +107,8 @@ query joins might use the same pattern as LHS or RHS). Currently the
 cache is an atom with a nested map and these top-level keys:
 
 - =::index-sel= - caches vertices selecting a specific key from any of
-  the 3 SPO indices (or a wildcard selection). These vertices
-  basically act as sub-sub-queries of a specific S, P or O.
+  the indices (or a wildcard selection). These vertices basically act
+  as sub-sub-queries of a specific fact component.
 - =::queries= - caches existing single-pattern queries based on their
   query pattern (no query joins or unions are cached). Note: the
   cached values are NOT vertices, but query entities (defrecords w/
@@ -162,7 +169,14 @@ cache is an atom with a nested map and these top-level keys:
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
-    ([g] (fact-graph g 3))
+    "Creates a new FactGraph instance with configurable backing
+    IComputeGraph and fact length. If length is not specified, fact
+    triples are used. Note that currently only triples or quads are
+    supported! (len = 3 or 4)."
+    ([]
+     (fact-graph (f/compute-graph)))
+    ([g]
+     (fact-graph g 3))
     ([g len]
     (map->FactGraph
      {:indices (mapv #(index-vertex g %) (range len))
@@ -174,7 +188,7 @@ cache is an atom with a nested map and these top-level keys:
 **** Index vertex
 
 This is the helper function used by the =FactGraph= constructor to
-create a single SPO index vertex.
+create a single fact component index vertex.
 
 #+BEGIN_SRC clojure :noweb-ref index-v
 (defn- index-vertex
@@ -188,8 +202,9 @@ create a single SPO index vertex.
 
 *** Overview & example
 
-This diagram illustrates how queries are generally implemented via multiple
-vertices in the graph. There're two queries here:
+This diagram illustrates how queries are generally implemented via
+multiple vertices in the graph, though we here use a graph with
+triples only (SPO facts). There're two queries here:
 
 Q1: All "friend" facts
 Q2: All facts about subject "alice"
@@ -264,7 +279,7 @@ In code form this same graph could be constructed like this:
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
 
-  (def g (ff/fact-graph (f/compute-graph)))
+  (def g (ff/fact-graph))
   (ff/add-fact! g '[alice friend bob])
   (ff/add-fact! g '[bob friend charlie])
   (ff/add-fact! g '[alice friend dora])
@@ -292,7 +307,8 @@ In code form this same graph could be constructed like this:
 *** Index selection
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactIndexSelection [index sel vertex]
+  (defrecord FactIndexSelection
+      [index sel vertex]
     f/IGraphComponent
     (add-to-graph!
       [_ g]
@@ -327,7 +343,8 @@ Therefore, the query pattern =[nil nil nil]= matches all facts in the
 graph.
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord BasicFactQuery [acc selections result pattern]
+  (defrecord BasicFactQuery
+      [acc selections result pattern]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -420,7 +437,8 @@ graph.
 *** Query join
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactQueryJoin [lhs rhs result join-fn]
+  (defrecord FactQueryJoin
+      [lhs rhs result join-fn]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -468,7 +486,8 @@ graph.
 *** Query union
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defrecord FactQueryUnion [sub-queries result]
+  (defrecord FactQueryUnion
+      [sub-queries result]
     #?@(:clj
          [clojure.lang.IDeref (deref [_] (when result @result))]
          :cljs
@@ -610,7 +629,89 @@ graph.
     [patterns]
     (sort-by pattern-var-count patterns))
 
-  (defmulti bind-translator (fn [qvars? pattern] (count pattern)))
+  (defn select-keys*
+    "Like c.c/select-keys, but doesn't retain map's meta"
+    {:static true}
+    [map keyseq]
+    (loop [ret {} keys (seq keyseq)]
+      (if keys
+        #?(:clj
+           (let [entry (. clojure.lang.RT (find map (first keys)))]
+             (recur
+              (if entry (conj ret entry) ret)
+              (next keys)))
+           :cljs
+           (let [key   (first keys)
+                 entry (get map key ::not-found)]
+             (recur
+              (if (= entry ::not-found) ret (assoc ret key entry))
+              (next keys))))
+        ret)))
+
+  (defn index*
+    "Like clojure.set/index, but using select-keys w/o metadata retention."
+    [xrel ks]
+    (persistent!
+     (reduce
+      (fn [m x]
+        (let [ik (select-keys* x ks)]
+          (assoc! m ik (conj (get m ik #{}) x))))
+      (transient {}) xrel)))
+
+  (defn join
+    "Optimized version of clojure.set/join (w/o key mapping & using
+    transients). ~20% faster than original."
+    [xrel yrel]
+    (if (and (seq xrel) (seq yrel))
+      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
+            [r s] (if (<= (count xrel) (count yrel))
+                    [xrel yrel]
+                    [yrel xrel])
+            idx (index* r ks)]
+        (persistent!
+         (reduce
+          (fn [ret x]
+            (let [found (idx (select-keys* x ks))]
+              (if found
+                (reduce #(conj! % (conj %2 x)) ret found)
+                ret)))
+          (transient #{}) s)))
+      #{}))
+
+  (defn join-optional
+    [a b]
+    (loop [old (transient #{}), new (transient #{}), kb b]
+      (if kb
+        (let [kb'       [(first kb)]
+              [old new] (loop [old old, new new, ka a]
+                          (if ka
+                            (let [ka' (first ka)
+                                  j   (first (join [ka'] kb'))]
+                              (if j
+                                (recur (conj! old ka') (conj! new j) (next ka))
+                                (recur old new (next ka))))
+                            [old new]))]
+          (recur old new (next kb)))
+        (let [new (persistent! new)]
+          (if (seq new)
+            (into (apply disj (set a) (persistent! old)) new)
+            a)))))
+#+END_SRC
+
+**** Variable bindings injection multi-method
+
+This function (and =fact-verifier= below) are extensible mechanism to
+allow the graph to support facts of varying lengths and queries over
+them. By default this module only supports fact triples (len=3) or
+quads (len=4).
+
+=bind-translator= is used to provide optimized functions to bind query
+variables to their fact components in the result set of a parametric
+query.
+
+#+BEGIN_SRC clojure :noweb-ref query-helpers
+  (defmulti bind-translator
+    (fn [qvars? pattern] (count pattern)))
 
   (defmethod bind-translator 3
     [[vs? vp? vo?] [s p o]]
@@ -663,7 +764,25 @@ graph.
           (if vo?
             (fn [r] {o (r 3)})
             (fn [_] {}))))))
+#+END_SRC
 
+**** Fact verifier multi-method
+
+The fact verifier function is used to provide optimized validations to
+ensure query variables are bound to unique values. E.g. given a query
+pattern =['?a ?b '?a]=, these functions ensure that all 3 qvars are
+bound to different values, i.e. it would reject the fact =[fact is
+fiction]= (yes, pretty meaningless..) because =?a= wouldn't be bound to the
+same values (first =?a= binds to "fact", second =?a= to "fiction")...
+
+#+BEGIN_SRC clojure
+((fact-verifier [true true true] '[?a ?b ?a]) '[fact is fiction])
+;; false
+((fact-verifier [true true true] '[?a ?b ?a]) '[fact is fact])
+;; true
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref query-helpers
   (defmulti fact-verifier
     (fn [qvars? pattern] (count pattern)))
 
@@ -736,74 +855,6 @@ graph.
       (and vs? vo?)           (if (= s o) #(= (% 1) (% 3)) #(not= (% 1) (% 3)))
       (and vp? vo?)           (if (= p o) #(= (% 2) (% 3)) #(not= (% 2) (% 3)))
       :else                   nil))
-
-  (defn select-keys*
-    "Like c.c/select-keys, but doesn't retain map's meta"
-    {:static true}
-    [map keyseq]
-    (loop [ret {} keys (seq keyseq)]
-      (if keys
-        #?(:clj
-           (let [entry (. clojure.lang.RT (find map (first keys)))]
-             (recur
-              (if entry (conj ret entry) ret)
-              (next keys)))
-           :cljs
-           (let [key   (first keys)
-                 entry (get map key ::not-found)]
-             (recur
-              (if (= entry ::not-found) ret (assoc ret key entry))
-              (next keys))))
-        ret)))
-
-  (defn index*
-    "Like clojure.set/index, but using select-keys w/o metadata retention."
-    [xrel ks]
-    (persistent!
-     (reduce
-      (fn [m x]
-        (let [ik (select-keys* x ks)]
-          (assoc! m ik (conj (get m ik #{}) x))))
-      (transient {}) xrel)))
-
-  (defn join
-    "Optimized version of clojure.set/join (w/o key mapping & using
-    transients). ~20% faster than original."
-    [xrel yrel]
-    (if (and (seq xrel) (seq yrel))
-      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
-            [r s] (if (<= (count xrel) (count yrel))
-                    [xrel yrel]
-                    [yrel xrel])
-            idx (index* r ks)]
-        (persistent!
-         (reduce
-          (fn [ret x]
-            (let [found (idx (select-keys* x ks))]
-              (if found
-                (reduce #(conj! % (conj %2 x)) ret found)
-                ret)))
-          (transient #{}) s)))
-      #{}))
-
-  (defn join-optional
-    [a b]
-    (loop [old (transient #{}), new (transient #{}), kb b]
-      (if kb
-        (let [kb' [(first kb)]
-              [old new] (loop [old old, new new, ka a]
-                          (if ka
-                            (let [ka' (first ka)
-                                  j (first (join [ka'] kb'))]
-                              (if j
-                                (recur (conj! old ka') (conj! new j) (next ka))
-                                (recur old new (next ka))))
-                            [old new]))]
-          (recur old new (next kb)))
-        (let [new (persistent! new)]
-          (if (seq new)
-            (into (apply disj (set a) (persistent! old)) new)
-            a)))))
 #+END_SRC
 
 ** Rulebased inference
