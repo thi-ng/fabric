@@ -416,10 +416,9 @@ graph.
             res        (f/add-vertex!
                         g nil
                         {::f/collect-fn      collect-fn
-                         ::f/score-signal-fn f/score-signal-with-new-edges})
-            this       (assoc _ :sub-query sub-q :result res)]
+                         ::f/score-signal-fn f/score-signal-with-new-edges})]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
-        this))
+        (assoc _ :sub-query sub-q :result res)))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -902,26 +901,25 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn- collect-index
     [spo]
-    (f/collect-pure
-     (fn [val incoming]
-       ;;(debug :update-index spo incoming)
-       (debug :old-index val)
-       (let [val (transduce
-                  (map (fn [[op id t]] [op id (nth t spo)]))
-                  (completing
-                   (fn [acc [op id x]]
-                     (case op
-                       :add    (update acc x (fnil conj #{}) id)
-                       :remove (if-let [idx (acc x)]
-                                 (if (= #{id} idx)
-                                   (dissoc acc x)
-                                   (update acc x disj id))
-                                 acc)
-                       (do (warn "ignoring unknown index signal op:" op)
-                           acc))))
-                  val incoming)]
-         (debug :new-index val)
-         val))))
+    (let [tx (map (fn [[op id t]] [op id (nth t spo)]))
+          rf (completing
+              (fn [acc [op id x]]
+                (case op
+                  :add    (assoc acc x (conj (or (acc x) #{}) id))
+                  :remove (if-let [idx (acc x)]
+                            (if (= #{id} idx)
+                              (dissoc acc x)
+                              (assoc acc x (disj idx id)))
+                            acc)
+                  (do (warn "ignoring unknown index signal op:" op)
+                      acc))))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug :update-index spo incoming)
+         (debug :old-index val)
+         (let [val (transduce tx rf val incoming)]
+           (debug :new-index val)
+           val)))))
 
   (defn- signal-index-select
     [vertex [idx sel]]
@@ -946,43 +944,43 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn- aggregate-select
     [g]
-    (f/collect-pure
-     (fn [_ incoming]
-       (let [res (vals (peek incoming))]
-         ;;(debug :agg-incoming res)
-         (if (every? #(not= [nil] %) res)
-           (->> res
-                (into #{} (map #(disj % nil)))
-                (sort-by count)
-                (reduce set/intersection)
-                (into #{}
-                      (comp (map #(f/vertex-for-id g %))
-                            (filter identity)
-                            (map deref))))
-           #{})))))
+    (let [agg-tx (comp (map #(f/vertex-for-id g %))
+                       (filter identity)
+                       (map deref))]
+      (f/collect-pure
+       (fn [_ incoming]
+         (let [res (vals (peek incoming))]
+           ;;(debug :agg-incoming res)
+           (if (every? #(not= [nil] %) res)
+             (->> res
+                  (into #{} (map #(disj % nil)))
+                  (sort-by count)
+                  (reduce set/intersection)
+                  (into #{} agg-tx))
+             #{}))))))
 
   (defn- score-collect-join
-    [^thi.ng.fabric.core.Vertex vertex]
+    [vertex]
     (if (and (seq (f/uncollected-signals vertex))
              (== (count (f/signal-map vertex)) 2))
       1 0))
 
   (defn- collect-inference
     [g production]
-    (fn [^thi.ng.fabric.core.Vertex vertex]
+    (fn [vertex]
       (let [prev @vertex
             in   (reduce into #{} (f/uncollected-signals vertex))
             adds (set/difference in prev)
-            inferred (mapcat production adds)]
+            inf  (mapcat production adds)]
         (debug (f/vertex-id vertex) :additions adds)
-        (doseq [[op t :as inf] inferred]
+        (doseq [[op t :as i] inf]
           (case op
             :+ (do (debug (f/vertex-id vertex) :rule-add-fact t)
                    (add-fact! g t))
             :- (do (debug (f/vertex-id vertex) :rule-remove-fact t)
                    (remove-fact! g t))
-            (warn "invalid inference:" inf)))
-        (swap! (.-value vertex) set/union adds))))
+            (warn "invalid inference:" i)))
+        (f/update-value! vertex #(set/union % adds)))))
 #+END_SRC
 
 ** Graph logging
