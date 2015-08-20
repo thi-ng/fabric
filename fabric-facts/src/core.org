@@ -7,7 +7,7 @@
          - [[#facts][Facts]]
          - [[#factgraph][FactGraph]]
          - [[#fact-indexing][Fact indexing]]
-         - [[#todo-fact-transformation][TODO Fact transformation]]
+         - [[#fact-transformation][Fact transformation]]
          - [[#entity-caching][Entity caching]]
          - [[#implementation][Implementation]]
          - [[#constructor][Constructor]]
@@ -35,7 +35,7 @@
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
     (fact-indices [_])
-    (fact-transformer [_])
+    (fact-transform [_])
     (add-fact! [_ t])
     (remove-fact! [_ t]))
 
@@ -48,7 +48,7 @@
     (raw-pattern [_])
     (result-vertex [_]))
 
-  (defprotocol IFactTransformer
+  (defprotocol ITwoWayTransform
     (transform [_ x])
     (untransform [_ x]))
 #+END_SRC
@@ -104,33 +104,37 @@ to these indices (via intermediate index selection vertices, see
 Queries section below) and are notified each time their index
 selection is changing.
 
-*** TODO Fact transformation
+*** Fact transformation
 
-The =IFactTransformer= protocol allows the graph to invisibly store
+The =ITwoWayTransform= protocol allows the graph to invisibly store
 transformed facts, possibly in more compact form than specified by the
-user. When a fact is added, the =transform= method of the transformer
+user. When a fact is added, the =transform= method of the transform
 is applied. Queries automatically call =untransform= on their results,
 so the user will be oblivious to the changed internal representation.
 
-**** Identity transformer
+*Custom implementations MUST follow this rule:*
 
-This is a null transform (NOP), used when no fact transformer is given
+- Query variables (e.g. =?a=, Clojure symbols prefixed with =?=) and
+  =nil= values MUST NOT be transformed.
+
+**** Identity transform
+
+This is a null transform (NOP), used when no fact transform is given
 for a graph.
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn identity-transformer
-    []
-    (reify IFactTransformer
+  (def identity-transform
+    (reify ITwoWayTransform
       (transform [_ x] x)
       (untransform [_ x] x)))
 #+END_SRC
 
 **** PName URI replacements
 
-This transformer is useful when dealing with Linked Data (RDF), where
+This transform is useful when dealing with Linked Data (RDF), where
 most items are URIs. It's common practice in the LD community to
 specify prefixes for various often used vocabularies. E.g. We might
-define a prefix map and transformer like this:
+define a prefix map and transform like this:
 
 #+BEGIN_SRC clojure
   (def prefixes
@@ -138,7 +142,7 @@ define a prefix map and transformer like this:
    "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
    "owl"  "http://www.w3.org/2002/07/owl#"})
 
-  (def tx (prefix-transformer prefixes))
+  (def tx (prefix-transform prefixes))
 
   (transform tx "http://www.w3.org/2002/07/owl#Ontology")
   ;; ["owl" "Ontology"]
@@ -147,28 +151,28 @@ define a prefix map and transformer like this:
   ;; "http://www.w3.org/2002/07/owl#Ontology"
 #+END_SRC
 
-The transformer takes such a prefix map and value. If value is a string,
-attempts to find prefix from map and if found returns a 2-elem vector
-of =[prefix name]=, else original.
+The transform phase takes such a prefix map and value. If value is a
+string, attempts to find prefix from map and if found returns a 2-elem
+vector of =[prefix name]=, else original.
 
 The untransformer too takes the same prefix map and a value. If the
 value is a vector as produced by the transformation fn and has a known
 prefix, returns expanded string or else original value.
 
-*Important note:* This transformer only applies to single fact
- sub-items, to apply it to full facts, wrap it in =fact-transformer=
- (described below).
+*Important note:* This transform only applies to single fact
+ sub-items, to apply it to full facts, wrap it with others in
+ =combine-transforms= (described below).
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn prefix-transformer
+  (defn prefix-transform
     [prefixes]
-    (reify IFactTransformer
+    (reify ITwoWayTransform
       (transform
         [_ x]
         (if (string? x)
           (loop [[[pre pn] & more] (seq prefixes)]
             (if pre
-              (if (zero? (.indexOf x ^String pn))
+              (if (zero? (.indexOf ^String x ^String pn))
                 [pre (subs x (count pn))]
                 (recur more))
               x))
@@ -184,68 +188,79 @@ prefix, returns expanded string or else original value.
 
 **** Global fact item indexing
 
-This transformer too applies to fact sub-items only (see note in
+This transform too applies to fact sub-items only (see note in
 previous section) and maps values to/from unique index IDs.
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn global-index-transformer
+  (defn global-index-transform
     []
     (let [index (atom {:fwd {} :rev {} :id 0})]
-      (reify IFactTransformer
+      (reify ITwoWayTransform
         (transform
           [_ x]
-          (if-let [x' ((@index :fwd) x)]
-            x'
-            (let [id (:id @index)]
-              (swap! index
-                     (fn [idx]
-                       (-> idx
-                           (update :id inc)
-                           (update :fwd assoc x id)
-                           (update :rev assoc id x))))
-              id)))
+          (if (or (nil? x) (qvar? x))
+            x
+            (or ((@index :fwd) x)
+                (let [id (:id @index)]
+                  (swap! index
+                         (fn [idx]
+                           (-> idx
+                               (update :id inc)
+                               (update :fwd assoc x id)
+                               (update :rev assoc id x))))
+                  id))))
         (untransform
-          [_ id] ((@index :rev) id)))))
+          [_ id] ((@index :rev) id id)))))
 #+END_SRC
 
-**** Transformer composition
+**** Higher-order transforms & composition
 
-An arbitrary number of transformers can be composed using the functions below.
+Transforms can be composed using the functions below:
 
-- =compose-transformers= applies the given transformers serially (via
+- =compose-transforms= applies the given transforms serially (via
   =reduce=) and in reverse order for =untransform=.
 
-- =fact-transformer= applies 3 or 4 transformers in parallel (one per
-  fact component)
+- =one-way-transform= takes an =ITwoWayTransform= and modifies it to
+  use =identity= as its reverse transformation, therefore keeping
+  transformed values.
+
+- =combine-transforms= applies 3 or 4 transforms in parallel (one per
+  fact component) to (un)transform a single fact
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn compose-transformers
-    [& transformers]
-    (let [rtx (reverse transformers)]
-      (reify IFactTransformer
+  (defn compose-transforms
+    [& transforms]
+    (let [rtx (reverse transforms)]
+      (reify ITwoWayTransform
         (transform [_ x]
-          (reduce #(transform %2 %) x transformers))
+          (reduce #(transform %2 %) x transforms))
         (untransform [_ x]
           (reduce #(untransform %2 %) x rtx)))))
 
-  (defn fact-transformer
+  (defn one-way-transform
+    [tx]
+    (reify ITwoWayTransform
+      (transform [_ x] (transform tx x))
+      (untransform [_ x] x)))
+
+  (defn combine-transforms
     ([txs txp txo]
-     (reify IFactTransformer
+     (reify ITwoWayTransform
        (transform [_ fact]
          [(transform txs (first fact))
           (transform txp (nth fact 1))
-          (transform txp (nth fact 2))])
+          (transform txo (nth fact 2))])
        (untransform [_ fact]
          [(untransform txs (first fact))
           (untransform txp (nth fact 1))
-          (untransform txp (nth fact 2))])))
+          (untransform txo (nth fact 2))])))
     ([txt txs txp txo]
-     (reify IFactTransformer
+     (reify ITwoWayTransform
        (transform [_ fact]
          [(transform txt (first fact))
           (transform txs (nth fact 1))
           (transform txp (nth fact 2))
-          (transform txp (nth fact 3))])
+          (transform txo (nth fact 3))])
        (untransform [_ fact]
          [(untransform txt (first fact))
           (untransform txs (nth fact 1))
@@ -296,7 +311,7 @@ cache is an atom with a nested map and these top-level keys:
     IFactGraph
     (fact-indices
       [_] indices)
-    (fact-transformer
+    (fact-transform
       [_] ftx)
     (add-fact!
       [_ f]
@@ -330,7 +345,7 @@ cache is an atom with a nested map and these top-level keys:
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
     "Creates a new FactGraph instance with configurable backing
-    IComputeGraph, fact length and fact transformer. If length is not
+    IComputeGraph, fact length and fact transform. If length is not
     specified, fact triples are used. Note that currently only triples
     or quads are supported! (len = 3 or 4)."
     ([]
@@ -338,7 +353,7 @@ cache is an atom with a nested map and these top-level keys:
     ([g]
      (fact-graph g 3))
     ([g len]
-     (fact-graph g 3 (identity-transformer)))
+     (fact-graph g 3 identity-transform))
     ([g len tx]
     (map->FactGraph
      {:indices (mapv #(index-vertex g %) (range len))
@@ -575,7 +590,7 @@ graph.
                           (if-let [res (seq (peek incoming))]
                             (into #{} res-tx res)
                             #{})))
-            sub-q      (add-query! g (raw-pattern _))
+            sub-q      (add-query! g identity-transform (raw-pattern _))
             res        (f/add-vertex!
                         g nil
                         {::f/collect-fn      collect-fn
@@ -701,23 +716,29 @@ graph.
     (into [] (map-indexed #(index-selection g [% %2])) pattern))
 
   (defn add-query!
-    [g pattern]
-    (if-let [q (cached g ::queries pattern)]
-      (do (debug :reuse-basic-query pattern) q)
-      (->> (f/add-to-graph!
-            (map->BasicFactQuery {:pattern pattern}) g)
-           (cache! g ::queries pattern))))
+    ([g pattern]
+     (add-query! g (fact-transform g) pattern))
+    ([g ptx pattern]
+     (let [pattern (transform ptx pattern)]
+       (if-let [q (cached g ::queries pattern)]
+         (do (debug :reuse-basic-query pattern) q)
+         (->> (f/add-to-graph!
+               (map->BasicFactQuery {:pattern pattern}) g)
+              (cache! g ::queries pattern))))))
 
   (defn add-param-query!
     ([g pattern]
-     (if-let [q (cached g ::queries pattern)]
-       (do (debug :reuse-param-query pattern) q)
-       (->> (f/add-to-graph!
-             (map->ParametricFactQuery {:filter-fn identity :pattern pattern}) g)
-            (cache! g ::queries pattern))))
-    ([g flt pattern]
+     (add-param-query! g (fact-transform g) pattern))
+    ([g ptx pattern]
+     (let [pattern (transform ptx pattern)]
+       (if-let [q (cached g ::queries pattern)]
+         (do (debug :reuse-param-query pattern) q)
+         (->> (f/add-to-graph!
+               (map->ParametricFactQuery {:filter-fn identity :pattern pattern}) g)
+              (cache! g ::queries pattern)))))
+    ([g ptx flt pattern]
      (f/add-to-graph!
-      (map->ParametricFactQuery {:filter-fn flt :pattern pattern}) g)))
+      (map->ParametricFactQuery {:filter-fn flt :pattern (ptx pattern)}) g)))
 
   (defn add-join!
     ([g lhs rhs]
@@ -728,25 +749,35 @@ graph.
 
   (defn add-query-join!
     [g & patterns]
-    {:pre [(<= 2 (count patterns))]}
-    (let [[a b & more :as p] (sort-patterns patterns)]
+    (let [[ptx patterns] (if (fn? (first patterns))
+                           [(first patterns) (rest patterns)]
+                           [(fact-transform g) patterns])
+          [a b & more :as p] (sort-patterns patterns)]
       (debug :sorted-join-patterns p)
       (reduce
-       (fn [acc p] (add-join! g join acc (add-param-query! g p)))
-       (add-join! g join (add-param-query! g a) (add-param-query! g b))
+       (fn [acc p] (add-join! g join acc (add-param-query! g ptx p)))
+       (add-join! g join (add-param-query! g ptx a) (add-param-query! g ptx b))
        more)))
 
   (defn add-query-join-optional!
     [g a b & more]
-    (reduce
-     (fn [acc p] (add-join! g join-optional acc (add-param-query! g p)))
-     (add-join! g join-optional (add-param-query! g a) (add-param-query! g b))
-     more))
+    (let [[ptx a b more] (if (fn? a)
+                           [a b (first more) (rest more)]
+                           [(fact-transform g) a b more])]
+      (assert b "Requires min. 2 query patterns")
+      (reduce
+       (fn [acc p] (add-join! g join-optional acc (add-param-query! g ptx p)))
+       (add-join! g join-optional (add-param-query! g ptx a) (add-param-query! g ptx b))
+       more)))
 
   (defn add-query-union!
-    [g a b & queries]
-    (f/add-to-graph!
-     (map->FactQueryUnion {:sub-queries (into [a b] queries)}) g))
+    [g a b & more]
+    (let [[ptx a b more] (if (fn? a)
+                           [a b (first more) (rest more)]
+                           [(fact-transform g) a b more])]
+      (assert b "Requires min. 2 query patterns")
+      (f/add-to-graph!
+       (map->FactQueryUnion {:sub-queries (mapv ptx (cons a (cons b more)))}) g)))
 
   (defn add-query-filter!
     [g flt q]
@@ -1107,7 +1138,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn- collect-basic-query-results
     [g]
-    (let [ftx    (fact-transformer g)
+    (let [ftx    (fact-transform g)
           agg-tx (comp (map #(f/vertex-for-id g %))
                        (filter identity)
                        (map deref)
@@ -1202,7 +1233,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
-  (declare index-selection make-index-selections add-query! add-query-join!)
+  (declare index-selection make-index-selections qvar? add-query! add-query-join!)
 
   <<protos>>
 
