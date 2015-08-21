@@ -802,7 +802,7 @@ set only contains unique bindings of query variable =?s=.
 
   (defn add-query-transitive!
     [g path-pattern mind maxd]
-    (let [patterns (resolve-path-pattern path-pattern)
+    (let [patterns (resolve-path-pattern path-pattern maxd)
           required (take mind patterns)
           opts     (take (- maxd mind) (drop mind patterns))
           _        (prn :req required :opt opts)
@@ -874,11 +874,11 @@ set only contains unique bindings of query variable =?s=.
 
         [?s [p1 p2 p3] ?o]
         => ([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o])"
-    [[s p o]]
+    [[s p o] maxd]
     (let [vars (->> auto-qvar
-                    (repeatedly (dec (count p)))
+                    (repeatedly maxd)
                     (cons s))]
-      (->> (concat (interleave vars p) [o])
+      (->> (concat (interleave vars (take maxd (cycle p))) [o])
            (partition 3 2))))
 
   (defn pattern-var-count
