@@ -206,14 +206,15 @@ behavior.
           (if (or (nil? x) (qvar? x))
             x
             (or ((@index :fwd) x)
-                (let [id (:id @index)]
+                (let [curr (volatile! nil)]
                   (swap! index
-                         (fn [idx]
-                           (-> idx
-                               (update :id inc)
-                               (update :fwd assoc x id)
-                               (update :rev assoc id x))))
-                  id))))
+                         #(let [id (:id %)]
+                            (vreset! curr id)
+                            (-> %
+                                (update :id inc)
+                                (update :fwd assoc x id)
+                                (update :rev assoc id x))))
+                  @curr))))
         (untransform
           [_ id] ((@index :rev) id id)))))
 #+END_SRC
@@ -249,6 +250,8 @@ Transforms can be composed using the functions below:
       (untransform [_ x] x)))
 
   (defn combine-transforms
+    ([tx len]
+     (apply combine-transforms (repeat len tx)))
     ([txs txp txo]
      (reify ITwoWayTransform
        (transform [_ fact]
@@ -349,23 +352,24 @@ cache is an atom with a nested map and these top-level keys:
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
-    "Creates a new FactGraph instance with configurable backing
-    IComputeGraph, fact length and fact transform. If length is not
-    specified, fact triples are used. Note that currently only triples
-    or quads are supported! (len = 3 or 4)."
+    "Creates a new FactGraph instance configured with given options map:
+    :graph     - backing IComputeGraph (default fabric.core/compute-graph)
+    :len       - fact length (default 3)
+    :index     - index vertex ctor (default index-vertex)
+    :transform - fact transform (default none)"
     ([]
-     (fact-graph (f/compute-graph)))
-    ([g]
-     (fact-graph g 3))
-    ([g len]
-     (fact-graph g 3 identity-transform))
-    ([g len tx]
-    (map->FactGraph
-     {:indices (mapv #(index-vertex g %) (range len))
-      :facts   (atom {})
-      :cache   (atom {})
-      :ftx     tx
-      :g       g})))
+     (fact-graph {}))
+    ([{:keys [graph len index transform]
+       :or   {graph     (f/compute-graph)
+              len       3
+              index     index-vertex
+              transform identity-transform}}]
+     (map->FactGraph
+      {:indices (mapv #(index graph %) (range len))
+       :facts   (atom {})
+       :cache   (atom {})
+       :ftx     transform
+       :g       graph})))
 #+END_SRC
 
 *** Index vertex
