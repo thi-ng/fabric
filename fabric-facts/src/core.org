@@ -763,7 +763,7 @@ set only contains unique bindings of query variable =?s=.
               (cache! g ::queries pattern)))))
     ([g ptx flt pattern]
      (f/add-to-graph!
-      (map->ParametricFactQuery {:filter-fn flt :pattern (ptx pattern)}) g)))
+      (map->ParametricFactQuery {:filter-fn flt :pattern (transform ptx pattern)}) g)))
 
   (defn add-join!
     ([g lhs rhs]
@@ -777,7 +777,7 @@ set only contains unique bindings of query variable =?s=.
     (let [[ptx patterns] (if (satisfies? ITwoWayTransform (first patterns))
                            [(first patterns) (rest patterns)]
                            [(fact-transform g) patterns])
-          [a b & more :as p] (sort-patterns patterns)]
+          [a b & more :as p] patterns] ;;(sort-patterns patterns)
       (debug :sorted-join-patterns p)
       (reduce
        (fn [acc p] (add-join! g join acc (add-param-query! g ptx p)))
@@ -873,23 +873,26 @@ set only contains unique bindings of query variable =?s=.
       (transient {}) xrel)))
 
   (defn join
-    "Optimized version of clojure.set/join (w/o key mapping & using
-    transients). ~20% faster than original."
+    "Optimized version of clojure.set/join. Does not join when there're
+    no shared keys (w/o key mapping & using transients). ~20% faster
+    than original."
     [xrel yrel]
     (if (and (seq xrel) (seq yrel))
-      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
-            [r s] (if (<= (count xrel) (count yrel))
-                    [xrel yrel]
-                    [yrel xrel])
-            idx (index* r ks)]
-        (persistent!
-         (reduce
-          (fn [ret x]
-            (let [found (idx (select-keys* x ks))]
-              (if found
-                (reduce #(conj! % (conj %2 x)) ret found)
-                ret)))
-          (transient #{}) s)))
+      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
+        (if (seq ks)
+          (let [[r s] (if (<= (count xrel) (count yrel))
+                        [xrel yrel]
+                        [yrel xrel])
+                idx (index* r ks)]
+            (persistent!
+             (reduce
+              (fn [ret x]
+                (let [found (idx (select-keys* x ks))]
+                  (if found
+                    (reduce #(conj! % (conj %2 x)) ret found)
+                    ret)))
+              (transient #{}) s)))
+          #{}))
       #{}))
 
   (defn join-optional

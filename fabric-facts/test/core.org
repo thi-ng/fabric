@@ -110,19 +110,27 @@
     (let [g   (ff/fact-graph)
           q1  (ff/add-param-query! g '[?a friend ?b])
           q2  (ff/add-param-query! g '[?b friend ?c])
+          q3  (ff/add-param-query! g '[?b nick ?n])
           jq1 (ff/add-join! g q1 q2)
-          jq2 (ff/add-query-join! g '[?a friend ?b] '[?b friend ?c])]
+          jq2 (ff/add-query-join! g '[?a friend ?b] '[?b friend ?c])
+          jq3 (ff/add-join! g ff/join-optional q1 q3)
+          jq4 (ff/add-query-join-optional! g '[?a friend ?b] '[?b nick ?n] '[?n name ?nn])]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
+      (ff/add-fact! g '[bob nick bobby])
       (f/execute! (f/sync-execution-context {:graph g}))
-      (is (== 3 (count @q1)))
-      (is (== 3 (count @q2)))
+      (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob}} @q1))
+      (is (= '#{{?b alice, ?c dora} {?b bob, ?c charlie} {?b alice, ?c bob}} @q2))
       (is (= '#{{?a alice ?b bob ?c charlie}} @jq1))
       (is (= @jq1 @jq2))
+      (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob, ?n bobby}} @jq3))
+      (is (= @jq3 @jq4))
       (f/remove-from-graph! jq1 g)
       (f/remove-from-graph! jq2 g)
-      (is (== (+ 3 3) (count (f/vertices g))))))
+      (f/remove-from-graph! jq3 g)
+      (f/remove-from-graph! jq4 g)
+      (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests
