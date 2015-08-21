@@ -800,6 +800,24 @@ set only contains unique bindings of query variable =?s=.
     (f/add-to-graph!
      (map->FactQueryUnion {:sub-queries  (into [a b] more)}) g))
 
+  (defn add-query-transitive!
+    [g path-pattern mind maxd]
+    (let [patterns (resolve-path-pattern path-pattern)
+          required (take mind patterns)
+          opts     (take (- maxd mind) (drop mind patterns))
+          _        (prn :req required :opt opts)
+          required (if (seq required)
+                     (if (== 1 (count required))
+                       (apply add-param-query! g required)
+                       (apply add-query-join! g required)))
+          opts     (if (seq opts)
+                     (if (== 1 (count opts))
+                       (apply add-param-query! g required)
+                       (apply add-query-join-optional! g opts)))]
+      (if (and required opts)
+        (add-join! g join-optional required opts)
+        (or required opts))))
+
   (defn add-query-filter!
     [g flt q]
     (let [res (f/add-vertex!
@@ -831,9 +849,37 @@ set only contains unique bindings of query variable =?s=.
 *** Query helpers
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
+  (def ^:dynamic *auto-qvar-prefix* "?__q")
+
   (defn- qvar?
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
+
+  (defn auto-qvar?
+    "Returns true, if x is an auto-generated qvar
+    (a symbol prefixed with *auto-qvar-prefix*)"
+    [x] (and (symbol? x) (zero? (.indexOf ^String (name x) ^String *auto-qvar-prefix*))))
+
+  (defn auto-qvar
+    "Creates a new auto-named qvar (symbol)."
+    [] (gensym *auto-qvar-prefix*))
+
+  (defn qvar-name
+    [x] (-> x name (subs 1)))
+
+  (defn resolve-path-pattern
+    "Takes a path triple pattern where the predicate is a seq of preds.
+    Returns seq of query patterns with injected temp qvars for inbetween
+    patterns. E.g.
+
+        [?s [p1 p2 p3] ?o]
+        => ([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o])"
+    [[s p o]]
+    (let [vars (->> auto-qvar
+                    (repeatedly (dec (count p)))
+                    (cons s))]
+      (->> (concat (interleave vars p) [o])
+           (partition 3 2))))
 
   (defn pattern-var-count
     [pattern]
