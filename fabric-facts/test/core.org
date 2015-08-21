@@ -46,9 +46,9 @@
 
 #+BEGIN_SRC clojure :noweb-ref helpers
   (defn test-graph3
-    []
-    (let [g            (ff/fact-graph)
-          log          (ff/add-fact-graph-logger g logger)
+    [opts]
+    (let [g            (ff/fact-graph opts)
+          ;;log          (ff/add-fact-graph-logger g logger)
           toxi         (ff/add-query! g ['toxi nil nil])
           types        (ff/add-query! g [nil 'type nil])
           projects     (ff/add-query! g [nil 'type 'project])
@@ -64,7 +64,7 @@
       (run!
        #(ff/add-fact! g %) default-facts)
       {:g            g
-       :log          log
+       ;;:log          log
        :all          all
        :toxi         toxi
        :types        types
@@ -120,8 +120,8 @@
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (defn test-sync*
-    []
-    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3)
+    [opts]
+    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
           ctx (f/sync-execution-context {:graph g})
           res (f/execute! ctx)]
       (warn :result res)
@@ -146,16 +146,20 @@
       (warn :all @all)
       (warn :jq @jq)
       (warn :tq @tq)
-      (ff/remove-fact-graph-logger log)
+      ;;(ff/remove-fact-graph-logger log)
       (assoc spec :ctx ctx)))
 
-  (deftest test-sync
-    (test-sync*))
+  (deftest test-sync-default
+    (test-sync* {}))
+
+  (deftest test-sync-gi-ftx
+    (test-sync* {:transform (ff/combine-transforms (ff/global-index-transform) 3)}))
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests
-  (deftest ^:async test-async
-    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3)
+  (defn test-async*
+    [opts]
+    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
           ctx      (f/async-execution-context {:graph g})
           ctx-chan (f/execute! ctx)
           notify   (chan)]
@@ -187,11 +191,14 @@
               (warn :jq @jq)
               (warn :tq @tq)
               (f/stop! ctx)
-              (ff/remove-fact-graph-logger log)
+              ;;(ff/remove-fact-graph-logger log)
               (warn :done)
               (>! notify :ok)))))
       #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))
       (assoc spec :ctx ctx)))
+
+  (deftest ^:async test-async
+    (test-async* {}))
 #+END_SRC
 
 ** Namespace declaration
