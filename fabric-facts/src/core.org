@@ -564,6 +564,19 @@ graph.
 
 *** Parametric query
 
+This type of query supports binding fact items to query variables.
+Instead of fact triples or quads, the result set of this query
+contains maps of unique variable bindings.
+
+E.g. given the query pattern =[?s :type ?t]= and two matching facts of
+=[:fabric :type :project]= and =[:alice :type :person]=, the result
+set is: =#{{?s :fabric ?t :project} {?s :alice ?t :person}}=.
+
+Use =nil= for a pattern position, if it should catch all values at
+this position, but not be bound to a variable. Example: =[?s :type
+nil]= will catch any facts with =:type= as predicate, but the result
+set only contains unique bindings of query variable =?s=.
+
 #+BEGIN_SRC clojure :noweb-ref queries
   (defrecord ParametricFactQuery
       [sub-query result pattern filter-fn]
@@ -772,12 +785,8 @@ graph.
 
   (defn add-query-union!
     [g a b & more]
-    (let [[ptx a b more] (if (fn? a)
-                           [a b (first more) (rest more)]
-                           [(fact-transform g) a b more])]
-      (assert b "Requires min. 2 query patterns")
-      (f/add-to-graph!
-       (map->FactQueryUnion {:sub-queries (mapv ptx (cons a (cons b more)))}) g)))
+    (f/add-to-graph!
+     (map->FactQueryUnion {:sub-queries  (into [a b] more)}) g))
 
   (defn add-query-filter!
     [g flt q]
