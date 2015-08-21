@@ -77,7 +77,8 @@ target/fabric-facts-<<conf-version()>>.js
     :dependencies [<<dep-clj>>
                    <<dep-cljs>>
                    [thi.ng/fabric-core "<<conf-version()>>"]
-                   <<dep-strf>>]
+                   <<dep-strf>>
+                   <<dep-int-map>>]
 
     :profiles     {:dev {:dependencies [<<dep-criterium>>]
                          :plugins      [<<dep-cljsbuild>>

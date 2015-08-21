@@ -191,10 +191,15 @@ prefix, returns expanded string or else original value.
 This transform too applies to fact sub-items only (see note in
 previous section) and maps values to/from unique index IDs.
 
+In Clojure, the reverse index uses Zach Tellman's
+[[https://github.com/clojure/data.int-map][org.clojure/data.int-map]] for faster and more memory efficient
+behavior.
+
 #+BEGIN_SRC clojure :noweb-ref fact-tx
   (defn global-index-transform
     []
-    (let [index (atom {:fwd {} :rev {} :id 0})]
+    (let [index (atom #?(:clj  {:fwd {} :rev (imap/int-map) :id 0}
+                         :cljs {:fwd {} :rev {} :id 0}))]
       (reify ITwoWayTransform
         (transform
           [_ x]
@@ -1231,6 +1236,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
         [(:require
           [thi.ng.fabric.core :as f]
           [clojure.set :as set]
+          [clojure.data.int-map :as imap]
           [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
           [taoensso.timbre :refer [debug info warn]])]
         :cljs
