@@ -162,8 +162,7 @@ This namespace provides...
                   (vreset! nv v)
                   (-> %
                       (update ::next-id (::id-gen-fn %))
-                      (update ::vertices assoc id v)
-                      (assoc  ::curr-vertex v))))
+                      (update ::vertices assoc id v))))
         (notify-watches @watches [:add-vertex @nv])
         @nv))
     (remove-vertex!
