@@ -155,17 +155,17 @@ This namespace provides...
     IComputeGraph
     (add-vertex!
       [_ val vspec]
-      (let [v (-> state
-                  (swap!
-                   #(let [id (::next-id %)
-                          v  (vertex id val vspec)]
-                      (-> %
-                          (update ::next-id (::id-gen-fn %))
-                          (update ::vertices assoc id v)
-                          (assoc  ::curr-vertex v))))
-                  ::curr-vertex)]
-        (notify-watches @watches [:add-vertex v])
-        v))
+      (let [nv (volatile! nil)]
+        (swap! state
+               #(let [id (::next-id %)
+                      v  (vertex id val vspec)]
+                  (vreset! nv v)
+                  (-> %
+                      (update ::next-id (::id-gen-fn %))
+                      (update ::vertices assoc id v)
+                      (assoc  ::curr-vertex v))))
+        (notify-watches @watches [:add-vertex @nv])
+        @nv))
     (remove-vertex!
       [_ v]
       (when (get-in @state [::vertices (vertex-id v)])
@@ -229,6 +229,8 @@ This namespace provides...
 #+END_SRC
 
 *** Graph
+
+**** TODO refactor ID gen and support data.int-map for vertex lookups
 
 #+BEGIN_SRC clojure :noweb-ref ctor-graph
   (defn compute-graph
