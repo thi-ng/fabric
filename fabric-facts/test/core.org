@@ -29,17 +29,24 @@
 
   (def inference-rules
     {:symmetric  ['[[?a ?prop ?b] [?prop type symmetric-prop]]
-                  (fn [{:syms [?a ?prop ?b]}] [[:+ [?b ?prop ?a]]])]
+                  (fn [g _ {:syms [?a ?prop ?b]}] (ff/add-fact! g [?b ?prop ?a]))]
+
      :domain     ['[[?a ?prop nil] [?prop domain ?d]]
-                  (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])]
+                  (fn [g _ {:syms [?a ?prop ?d]}] (ff/add-fact! g [?a 'type ?d]))]
+
      :range      ['[[nil ?prop ?a] [?prop range ?r]]
-                  (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]])]
+                  (fn [g _ {:syms [?a ?prop ?r]}] (ff/add-fact! g [?a 'type ?r]))]
+
      :transitive ['[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
-                  (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]])]
+                  (fn [g _ {:syms [?a ?prop ?c]}] (ff/add-fact! g [?a ?prop ?c]))]
+
      :sub-prop   ['[[?a ?prop ?b] [?prop sub-prop-of ?super]]
-                  (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]])]
+                  (fn [g _ {:syms [?a ?super ?b]}] (ff/add-fact! g [?a ?super ?b]))]
+
      :modified   ['[[?a modified ?t1] [?a modified ?t2]]
-                  (fn [{:syms [?a ?t1 ?t2]}] (if (not= ?t1 ?t2) [[:- [?a 'modified (min ?t1 ?t2)]]]))]})
+                  (fn [g _ {:syms [?a ?t1 ?t2]}]
+                    (when-not (= ?t1 ?t2)
+                      (ff/remove-fact! g [?a 'modified (min ?t1 ?t2)])))]})
 #+END_SRC
 
 *** Helpers functions
@@ -60,7 +67,7 @@
           jq           (ff/add-query-join! g '[?p author ?prj] '[?prj type project] '[?p type person])
           tq           (ff/add-query-join! g '[?p author ?prj] '[?prj tag ?t])]
       (run!
-       (fn [[id [q prod]]] (ff/add-rule! g id q prod)) inference-rules)
+       (fn [[id [q prod]]] (ff/add-rule! g {:id id :patterns q :production prod})) inference-rules)
       (run!
        #(ff/add-fact! g %) default-facts)
       {:g            g

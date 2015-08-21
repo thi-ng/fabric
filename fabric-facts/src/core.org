@@ -27,6 +27,8 @@
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
      - [[#complete-namespace-definition][Complete namespace definition]]
+     - [[#todo-questions][TODO Questions]]
+         - [[#maps-as-facts][maps as facts?]]
 
 * Namespace: thi.ng.fabric.facts.core
 
@@ -326,6 +328,7 @@ cache is an atom with a nested map and these top-level keys:
       (let [f' (transform ftx f)]
         (or (@facts f')
             (let [v (f/add-vertex! g f' fact-vertex-spec)]
+              (debug :add-fact f f')
               (run! #(f/add-edge! g v % signal-fact :add) indices)
               (swap! facts assoc f' v)
               v))))
@@ -334,6 +337,7 @@ cache is an atom with a nested map and these top-level keys:
       (let [f' (transform ftx f)]
         (if-let [v (@facts f')]
           (do
+            (debug :remove-fact f f')
             (run! #(f/add-edge! g v % signal-fact :remove) indices)
             (swap! facts dissoc f')
             (f/remove-vertex! g v)
@@ -384,7 +388,6 @@ create a single fact component index vertex.
    g {} {::f/collect-fn      (collect-index idx)
          ::f/score-signal-fn f/score-signal-with-new-edges}))
 #+END_SRC
-
 
 ** Queries
 
@@ -771,7 +774,7 @@ set only contains unique bindings of query variable =?s=.
 
   (defn add-query-join!
     [g & patterns]
-    (let [[ptx patterns] (if (fn? (first patterns))
+    (let [[ptx patterns] (if (satisfies? ITwoWayTransform (first patterns))
                            [(first patterns) (rest patterns)]
                            [(fact-transform g) patterns])
           [a b & more :as p] (sort-patterns patterns)]
@@ -783,7 +786,7 @@ set only contains unique bindings of query variable =?s=.
 
   (defn add-query-join-optional!
     [g a b & more]
-    (let [[ptx a b more] (if (fn? a)
+    (let [[ptx a b more] (if (satisfies? ITwoWayTransform a)
                            [a b (first more) (rest more)]
                            [(fact-transform g) a b more])]
       (assert b "Requires min. 2 query patterns")
@@ -911,10 +914,10 @@ set only contains unique bindings of query variable =?s=.
 
 **** Variable bindings injection multi-method
 
-This function (and =fact-verifier= below) are extensible mechanism to
-allow the graph to support facts of varying lengths and queries over
-them. By default this module only supports fact triples (len=3) or
-quads (len=4).
+This function (and =fact-verifier= below) are used as an extensible
+mechanism to allow the graph to support facts of varying lengths and
+queries over them. Currently, this module only supports fact triples
+(len=3) or quads (len=4).
 
 =bind-translator= is used to provide optimized functions to bind query
 variables to their fact components in the result set of a parametric
@@ -1072,17 +1075,13 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defrecord FactInferenceRule
-      [id query patterns production inf]
+      [id query collect-fn inf]
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [q   (if (< 1 (count patterns))
-                  (apply add-query-join! g patterns)
-                  (add-param-query! g (first patterns)))
-            inf (f/add-vertex!
-                 g #{} {::f/collect-fn (collect-inference g production)})]
-        (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
-        (cache! g ::rules id (assoc _ :query q :inf inf))))
+      (let [inf (f/add-vertex! g #{} {::f/collect-fn collect-fn})]
+        (f/add-edge! g (result-vertex query) inf f/signal-forward nil)
+        (cache! g ::rules id (assoc _ :inf inf))))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -1098,11 +1097,20 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defn add-rule!
-    [g id query production]
-    (f/add-to-graph!
-     (map->FactInferenceRule
-      {:id id :patterns query :production production})
-     g))
+    [g {:keys [id query patterns transform production collect-fn]}]
+    (let [id         (or id (f/random-id))
+          collect-fn (or collect-fn (collect-inference g production))
+          query      (or query
+                         (let [tx (or transform (fact-transform g))]
+                           (if (< 1 (count patterns))
+                             (apply add-query-join! g tx patterns)
+                             (add-param-query! g tx (first patterns)))))]
+      (f/add-to-graph!
+       (map->FactInferenceRule
+        {:id         id
+         :query      query
+         :collect-fn collect-fn})
+       g)))
 #+END_SRC
 
 ** Signal & collect functions
@@ -1184,16 +1192,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
     (fn [vertex]
       (let [prev @vertex
             in   (reduce into #{} (f/uncollected-signals vertex))
-            adds (set/difference in prev)
-            inf  (mapcat production adds)]
+            adds (set/difference in prev)]
         (debug (f/vertex-id vertex) :additions adds)
-        (doseq [[op t :as i] inf]
-          (case op
-            :+ (do (debug (f/vertex-id vertex) :rule-add-fact t)
-                   (add-fact! g t))
-            :- (do (debug (f/vertex-id vertex) :rule-remove-fact t)
-                   (remove-fact! g t))
-            (warn "invalid inference:" i)))
+        (run! #(production g vertex %) adds)
         (f/update-value! vertex #(set/union % adds)))))
 #+END_SRC
 
@@ -1277,4 +1278,21 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   <<inference>>
 
   <<logger>>
+#+END_SRC
+
+** TODO Questions
+
+*** maps as facts?
+
+- maybe more convenient, but not strictly facts
+- requires custom fact transforms & query patterns (also maps)
+- how to deal with adding new facts, merged into original map?
+  - just provide map translations: map->facts (use trio triple-seq conversion)
+
+#+BEGIN_SRC clojure
+;; example map
+{"P-123" {:name "karsten" :nick "toxi" :address {:country "uk", :city "london"}}}
+
+;; query: subjects with name & city
+{?n :name ?city [:address :city]}
 #+END_SRC
