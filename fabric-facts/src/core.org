@@ -20,6 +20,7 @@
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
+         - [[#path-queries][Path queries]]
          - [[#query-constructors][Query constructors]]
          - [[#query-helpers][Query helpers]]
      - [[#rulebased-inference][Rulebased inference]]
@@ -390,7 +391,6 @@ create a single fact component index vertex.
 #+END_SRC
 
 ** Queries
-
 *** Overview & example
 
 This diagram illustrates how queries are generally implemented via
@@ -724,6 +724,82 @@ set only contains unique bindings of query variable =?s=.
             false))))
 #+END_SRC
 
+*** Path queries
+
+A property path is a possible route through a graph between two nodes.
+In the most trivial case, a single fact has a path length of 1. The
+ends of the path may be constants or variables. Variables can not be
+used as part of the path (predicates) itself, only the ends.
+
+Path queries allow for more concise expressions for some graph
+patterns and they also add the ability to match connectivity of
+subjects/objects by an arbitrary length path.
+
+*Note:* Currently, path queries are only supported for triples (fact
+len = 3) and only bounded path queries are implemented, meaning both
+min/max path lengths MUST be specified.
+
+**** Bounded path query
+
+#+BEGIN_SRC clojure
+  ;; match path (of single pred) between depth 1 and 3
+  (add-path-query! g '[?s [pred] ?o] 1 3)
+
+  ;; match path (cyclically repeated) between 2 hops 4
+  (add-path-query! g '[?s [pred1 pred2] ?o] 2 4)
+
+  ;; math given path
+  (add-path-query! g '[?s [p1 p2 p3] ?o])
+
+  ;; match *any* paths starting at "node-a" with len 2 - 4
+  (add-path-query! g '[node-a [nil] ?o] 1 4)
+
+  ;; check if path exists between fixed subject/object
+  ;; this query has no variables, see note below
+  (add-path-query! g '[node-a [pred] node-b] 3 3)
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref path-query
+  (defn add-path-query!
+    ([g path-pattern]
+     (let [len (count (nth path-pattern 1))]
+       (add-path-query! g path-pattern len len)))
+    ([g path-pattern mind maxd]
+     (assert (pos? mind) "min depth must be >= 1")
+     (assert (<= mind maxd) "min depth must be <= max depth")
+     (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
+           req   (take mind patterns)
+           opt   (drop mind (take maxd patterns))
+           req   (if (seq req)
+                   (apply (if (== 1 (count req)) add-param-query! add-query-join!) g req))
+           opt   (if (seq opt)
+                   (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g req))
+           res   (if (and req opt)
+                   (add-join! g join-optional req opt)
+                   (or req opt))
+           vs?   (qvar? (first path-pattern))
+           vo?   (qvar? (last path-pattern))]
+       (cond
+         (or (= mind maxd) (and vs? (not vo?)))
+         (let [qvars (filter qvar? path-pattern)
+               tx    (map #(select-keys* % qvars))
+               res'  (f/add-vertex!
+                      g #{}
+                      {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
+           res')
+
+         (and vo? (not vs?))
+         (let [?o   (last path-pattern)
+               tx   (mapcat #(map (fn [v] {?o v}) (vals %)))
+               res' (f/add-vertex!
+                     g #{} {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
+           res')
+
+         :else res))))
+#+END_SRC
+
 *** Query constructors
 
 #+BEGIN_SRC clojure :noweb-ref query-ops
@@ -800,24 +876,6 @@ set only contains unique bindings of query variable =?s=.
     (f/add-to-graph!
      (map->FactQueryUnion {:sub-queries  (into [a b] more)}) g))
 
-  (defn add-query-transitive!
-    [g path-pattern mind maxd]
-    (let [patterns (resolve-path-pattern path-pattern maxd)
-          required (take mind patterns)
-          opts     (take (- maxd mind) (drop mind patterns))
-          _        (prn :req required :opt opts)
-          required (if (seq required)
-                     (if (== 1 (count required))
-                       (apply add-param-query! g required)
-                       (apply add-query-join! g required)))
-          opts     (if (seq opts)
-                     (if (== 1 (count opts))
-                       (apply add-param-query! g required)
-                       (apply add-query-join-optional! g opts)))]
-      (if (and required opts)
-        (add-join! g join-optional required opts)
-        (or required opts))))
-
   (defn add-query-filter!
     [g flt q]
     (let [res (f/add-vertex!
@@ -868,18 +926,20 @@ set only contains unique bindings of query variable =?s=.
     [x] (-> x name (subs 1)))
 
   (defn resolve-path-pattern
-    "Takes a path triple pattern where the predicate is a seq of preds.
-    Returns seq of query patterns with injected temp qvars for inbetween
-    patterns. E.g.
+    "Takes a path triple pattern and max depth. The pattern's predicate
+    must be a seq of preds. Returns a 2-elem vector [patterns vars],
+    where `patterns` is a seq of query patterns with injected temp qvars
+    for inbetween patterns and `vars` the autogenerated qvars themselves.
+    Example:
 
         [?s [p1 p2 p3] ?o]
-        => ([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o])"
+        => [([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o]) (?__q0 ?__q1)]"
     [[s p o] maxd]
-    (let [vars (->> auto-qvar
-                    (repeatedly maxd)
-                    (cons s))]
-      (->> (concat (interleave vars (take maxd (cycle p))) [o])
-           (partition 3 2))))
+    (let [avars (repeatedly maxd auto-qvar)
+          vars  (cons s avars)]
+      [(->> (concat (interleave vars (take maxd (cycle p))) [o])
+            (partition 3 2))
+       avars]))
 
   (defn pattern-var-count
     [pattern]
@@ -1323,6 +1383,8 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   <<queries>>
 
   <<query-ops>>
+
+  <<path-query>>
 
   <<inference>>
 
