@@ -70,10 +70,10 @@ https://github.com/thi-ng/fabric
 [thi.ng/strf "0.1.0"]
 #+END_SRC
 
-**** [[https://github.com/thi-ng/color/][thi.ng/color]]
-#+NAME: dep-color
+**** [[https://github.com/clojure/data.int-map][data.int-map]]
+#+NAME: dep-int-map
 #+BEGIN_SRC clojure
-[thi.ng/color "0.3.1"]
+[org.clojure/data.int-map "0.2.1"]
 #+END_SRC
 
 *** Development

@@ -53,6 +53,10 @@ This namespace provides...
     (add-edge! [_ src dest f opts])
     (remove-edge! [_ src dest]))
 
+  (defprotocol IStateful
+    (state [_])
+    (update-state! [_ f]))
+
   (defprotocol IWatch
     (add-watch! [_ type id f])
     (remove-watch! [_ type id]))
@@ -136,7 +140,12 @@ This namespace provides...
     (signal-map
       [_] @signal-map)
     (uncollected-signals
-      [_] @uncollected))
+      [_] @uncollected)
+    IStateful
+    (state
+      [_] @state)
+    (update-state!
+      [_ f] (swap! state f) _))
 #+END_SRC
 
 *** ComputeGraph
@@ -146,17 +155,16 @@ This namespace provides...
     IComputeGraph
     (add-vertex!
       [_ val vspec]
-      (let [v (-> state
-                  (swap!
-                   #(let [id (::next-id %)
-                          v  (vertex id val vspec)]
-                      (-> %
-                          (update ::next-id (::id-gen-fn %))
-                          (update ::vertices assoc id v)
-                          (assoc  ::curr-vertex v))))
-                  ::curr-vertex)]
-        (notify-watches @watches [:add-vertex v])
-        v))
+      (let [nv (volatile! nil)]
+        (swap! state
+               #(let [id (::next-id %)
+                      v  (vertex id val vspec)]
+                  (vreset! nv v)
+                  (-> %
+                      (update ::next-id (::id-gen-fn %))
+                      (update ::vertices assoc id v))))
+        (notify-watches @watches [:add-vertex @nv])
+        @nv))
     (remove-vertex!
       [_ v]
       (when (get-in @state [::vertices (vertex-id v)])
@@ -220,6 +228,8 @@ This namespace provides...
 #+END_SRC
 
 *** Graph
+
+**** TODO refactor ID gen and support data.int-map for vertex lookups
 
 #+BEGIN_SRC clojure :noweb-ref ctor-graph
   (defn compute-graph
@@ -285,7 +295,7 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref ctx-processing
   (defn execution-result
     [type sigs colls t0 & [opts]]
-    (let [rt #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0))]
+    (let [rt (millis-since t0)]
       (->> {:collections colls
             :signals     sigs
             :type        type
@@ -663,6 +673,9 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref helpers
   (defn now
     [] #?(:clj (System/nanoTime) :cljs (.getTime (js/Date.))))
+
+  (defn millis-since
+    [t0] #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0)))
 
   (defn notify-watches
     [watches evt]

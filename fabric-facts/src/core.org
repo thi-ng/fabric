@@ -3,9 +3,15 @@
 * Contents                                                         :toc_3_gh:
  - [[#namespace-thingfabricfactscore][Namespace: thi.ng.fabric.facts.core]]
      - [[#protocols][Protocols]]
-     - [[#basic-types][Basic types]]
+     - [[#core-types--concepts][Core types & concepts]]
          - [[#facts][Facts]]
          - [[#factgraph][FactGraph]]
+         - [[#fact-indexing][Fact indexing]]
+         - [[#fact-transformation][Fact transformation]]
+         - [[#entity-caching][Entity caching]]
+         - [[#implementation][Implementation]]
+         - [[#constructor][Constructor]]
+         - [[#index-vertex][Index vertex]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
          - [[#override-print-methods][Override print methods]]
@@ -14,6 +20,7 @@
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
+         - [[#path-queries][Path queries]]
          - [[#query-constructors][Query constructors]]
          - [[#query-helpers][Query helpers]]
      - [[#rulebased-inference][Rulebased inference]]
@@ -21,6 +28,8 @@
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
      - [[#complete-namespace-definition][Complete namespace definition]]
+     - [[#todo-questions][TODO Questions]]
+         - [[#maps-as-facts][maps as facts?]]
 
 * Namespace: thi.ng.fabric.facts.core
 
@@ -29,6 +38,7 @@
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
     (fact-indices [_])
+    (fact-transform [_])
     (add-fact! [_ t])
     (remove-fact! [_ t]))
 
@@ -40,9 +50,13 @@
   (defprotocol IFactQuery
     (raw-pattern [_])
     (result-vertex [_]))
+
+  (defprotocol ITwoWayTransform
+    (transform [_ x])
+    (untransform [_ x]))
 #+END_SRC
 
-** Basic types
+** Core types & concepts
 
 *** Facts
 
@@ -82,11 +96,7 @@ default implementation of the =FactGraph= wraps an existing
 =IComputeGraph= instance and provides an extended API via the
 =IFactGraph= and =ICache= protocols.
 
-**** Questions
-
-- Is there a point to support mixed length facts within a graph?
-
-**** Fact indexing
+*** Fact indexing
 
 The =FactGraph= indexes all facts by their individual items (e.g.
 subject, predicate and object values). These indices are special
@@ -97,7 +107,179 @@ to these indices (via intermediate index selection vertices, see
 Queries section below) and are notified each time their index
 selection is changing.
 
-**** Entity caching
+*** Fact transformation
+
+The =ITwoWayTransform= protocol allows the graph to invisibly store
+transformed facts, possibly in more compact form than specified by the
+user. When a fact is added, the =transform= method of the transform
+is applied. Queries automatically call =untransform= on their results,
+so the user will be oblivious to the changed internal representation.
+
+*Custom implementations MUST follow this rule:*
+
+- Query variables (e.g. =?a=, Clojure symbols prefixed with =?=) and
+  =nil= values MUST NOT be transformed.
+
+**** Identity transform
+
+This is a null transform (NOP), used when no fact transform is given
+for a graph.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (def identity-transform
+    (reify ITwoWayTransform
+      (transform [_ x] x)
+      (untransform [_ x] x)))
+#+END_SRC
+
+**** PName URI replacements
+
+This transform is useful when dealing with Linked Data (RDF), where
+most items are URIs. It's common practice in the LD community to
+specify prefixes for various often used vocabularies. E.g. We might
+define a prefix map and transform like this:
+
+#+BEGIN_SRC clojure
+  (def prefixes
+   {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
+   "owl"  "http://www.w3.org/2002/07/owl#"})
+
+  (def tx (prefix-transform prefixes))
+
+  (transform tx "http://www.w3.org/2002/07/owl#Ontology")
+  ;; ["owl" "Ontology"]
+
+  (untransform tx ["owl" "Ontology"])
+  ;; "http://www.w3.org/2002/07/owl#Ontology"
+#+END_SRC
+
+The transform phase takes such a prefix map and value. If value is a
+string, attempts to find prefix from map and if found returns a 2-elem
+vector of =[prefix name]=, else original.
+
+The untransformer too takes the same prefix map and a value. If the
+value is a vector as produced by the transformation fn and has a known
+prefix, returns expanded string or else original value.
+
+*Important note:* This transform only applies to single fact
+ sub-items, to apply it to full facts, wrap it with others in
+ =combine-transforms= (described below).
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn prefix-transform
+    [prefixes]
+    (reify ITwoWayTransform
+      (transform
+        [_ x]
+        (if (string? x)
+          (loop [[[pre pn] & more] (seq prefixes)]
+            (if pre
+              (if (zero? (.indexOf ^String x ^String pn))
+                [pre (subs x (count pn))]
+                (recur more))
+              x))
+          x))
+      (untransform
+        [_ x]
+        (if (vector? x)
+          (if-let [p (prefixes (first x))]
+            (str p (nth x 1))
+            x)
+          x))))
+#+END_SRC
+
+**** Global fact item indexing
+
+This transform too applies to fact sub-items only (see note in
+previous section) and maps values to/from unique index IDs.
+
+In Clojure, the reverse index uses Zach Tellman's
+[[https://github.com/clojure/data.int-map][org.clojure/data.int-map]] for faster and more memory efficient
+behavior.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn global-index-transform
+    []
+    (let [index (atom #?(:clj  {:fwd {} :rev (imap/int-map) :id 0}
+                         :cljs {:fwd {} :rev {} :id 0}))]
+      (reify ITwoWayTransform
+        (transform
+          [_ x]
+          (if (or (nil? x) (qvar? x))
+            x
+            (or ((@index :fwd) x)
+                (let [curr (volatile! nil)]
+                  (swap! index
+                         #(let [id (:id %)]
+                            (vreset! curr id)
+                            (-> %
+                                (update :id inc)
+                                (update :fwd assoc x id)
+                                (update :rev assoc id x))))
+                  @curr))))
+        (untransform
+          [_ id] ((@index :rev) id id)))))
+#+END_SRC
+
+**** Higher-order transforms & composition
+
+Transforms can be composed using the functions below:
+
+- =compose-transforms= applies the given transforms serially (via
+  =reduce=) and in reverse order for =untransform=.
+
+- =one-way-transform= takes an =ITwoWayTransform= and modifies it to
+  use =identity= as its reverse transformation, therefore keeping
+  transformed values.
+
+- =combine-transforms= applies 3 or 4 transforms in parallel (one per
+  fact component) to (un)transform a single fact
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn compose-transforms
+    [& transforms]
+    (let [rtx (reverse transforms)]
+      (reify ITwoWayTransform
+        (transform [_ x]
+          (reduce #(transform %2 %) x transforms))
+        (untransform [_ x]
+          (reduce #(untransform %2 %) x rtx)))))
+
+  (defn one-way-transform
+    [tx]
+    (reify ITwoWayTransform
+      (transform [_ x] (transform tx x))
+      (untransform [_ x] x)))
+
+  (defn combine-transforms
+    ([tx len]
+     (apply combine-transforms (repeat len tx)))
+    ([txs txp txo]
+     (reify ITwoWayTransform
+       (transform [_ fact]
+         [(transform txs (first fact))
+          (transform txp (nth fact 1))
+          (transform txo (nth fact 2))])
+       (untransform [_ fact]
+         [(untransform txs (first fact))
+          (untransform txp (nth fact 1))
+          (untransform txo (nth fact 2))])))
+    ([txt txs txp txo]
+     (reify ITwoWayTransform
+       (transform [_ fact]
+         [(transform txt (first fact))
+          (transform txs (nth fact 1))
+          (transform txp (nth fact 2))
+          (transform txo (nth fact 3))])
+       (untransform [_ fact]
+         [(untransform txt (first fact))
+          (untransform txs (nth fact 1))
+          (untransform txp (nth fact 2))
+          (untransform txo (nth fact 3))]))))
+#+END_SRC
+
+*** Entity caching
 
 The =ICache= protocol is used to cache various query related entities
 for DRY reasons. Intermediate result caching is not just done for
@@ -116,11 +298,11 @@ cache is an atom with a nested map and these top-level keys:
 - =::rules= - caches inference rules based on their ID (also
   defrecords)
 
-**** Implementation
+*** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defrecord FactGraph
-      [g indices facts cache]
+      [g indices facts cache ftx]
     f/IComputeGraph
     (add-vertex!
       [_ val vspec] (f/add-vertex! g val vspec))
@@ -140,22 +322,28 @@ cache is an atom with a nested map and these top-level keys:
     IFactGraph
     (fact-indices
       [_] indices)
+    (fact-transform
+      [_] ftx)
     (add-fact!
-      [_ t]
-      (or (@facts t)
-          (let [v (f/add-vertex! g t fact-vertex-spec)]
-            (run! #(f/add-edge! g v % signal-fact :add) indices)
-            (swap! facts assoc t v)
-            v)))
+      [_ f]
+      (let [f' (transform ftx f)]
+        (or (@facts f')
+            (let [v (f/add-vertex! g f' fact-vertex-spec)]
+              (debug :add-fact f f')
+              (run! #(f/add-edge! g v % signal-fact :add) indices)
+              (swap! facts assoc f' v)
+              v))))
     (remove-fact!
-      [_ t]
-      (if-let [v (@facts t)]
-        (do
-          (run! #(f/add-edge! g v % signal-fact :remove) indices)
-          (swap! facts dissoc t)
-          (f/remove-vertex! g v)
-          v)
-        (warn "attempting to remove unknown fact:" t)))
+      [_ f]
+      (let [f' (transform ftx f)]
+        (if-let [v (@facts f')]
+          (do
+            (debug :remove-fact f f')
+            (run! #(f/add-edge! g v % signal-fact :remove) indices)
+            (swap! facts dissoc f')
+            (f/remove-vertex! g v)
+            v)
+          (warn "attempting to remove unknown fact:" f))))
     ICache
     (cached
       [_ type k] (get-in @cache [type k]))
@@ -165,27 +353,31 @@ cache is an atom with a nested map and these top-level keys:
       [_ type k] (swap! cache update type dissoc k) nil))
 #+END_SRC
 
-**** Constructor
+*** Constructor
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn fact-graph
-    "Creates a new FactGraph instance with configurable backing
-    IComputeGraph and fact length. If length is not specified, fact
-    triples are used. Note that currently only triples or quads are
-    supported! (len = 3 or 4)."
+    "Creates a new FactGraph instance configured with given options map:
+    :graph     - backing IComputeGraph (default fabric.core/compute-graph)
+    :len       - fact length (default 3)
+    :index     - index vertex ctor (default index-vertex)
+    :transform - fact transform (default none)"
     ([]
-     (fact-graph (f/compute-graph)))
-    ([g]
-     (fact-graph g 3))
-    ([g len]
-    (map->FactGraph
-     {:indices (mapv #(index-vertex g %) (range len))
-      :facts   (atom {})
-      :cache   (atom {})
-      :g       g})))
+     (fact-graph {}))
+    ([{:keys [graph len index transform]
+       :or   {graph     (f/compute-graph)
+              len       3
+              index     index-vertex
+              transform identity-transform}}]
+     (map->FactGraph
+      {:indices (mapv #(index graph %) (range len))
+       :facts   (atom {})
+       :cache   (atom {})
+       :ftx     transform
+       :g       graph})))
 #+END_SRC
 
-**** Index vertex
+*** Index vertex
 
 This is the helper function used by the =FactGraph= constructor to
 create a single fact component index vertex.
@@ -199,7 +391,6 @@ create a single fact component index vertex.
 #+END_SRC
 
 ** Queries
-
 *** Overview & example
 
 This diagram illustrates how queries are generally implemented via
@@ -303,7 +494,6 @@ In code form this same graph could be constructed like this:
 
 #+END_SRC
 
-
 *** Index selection
 
 #+BEGIN_SRC clojure :noweb-ref queries
@@ -363,7 +553,7 @@ triple graph (or =[nil nil nil nil]= for quads).
                    g {} {::f/collect-fn collect-select})
             res   (f/add-vertex!
                    g nil
-                   {::f/collect-fn       (aggregate-select g)
+                   {::f/collect-fn       (collect-basic-query-results g)
                     ::f/score-signal-fn  f/score-signal-with-new-edges
                     ::f/score-collect-fn (score-collect-min-signal-vals (count selections))})]
         (run! #(f/add-edge! g (:vertex %) acc f/signal-forward nil) selections)
@@ -385,6 +575,19 @@ triple graph (or =[nil nil nil nil]= for quads).
 #+END_SRC
 
 *** Parametric query
+
+This type of query supports binding fact items to query variables.
+Instead of fact triples or quads, the result set of this query
+contains maps of unique variable bindings.
+
+E.g. given the query pattern =[?s :type ?t]= and two matching facts of
+=[:fabric :type :project]= and =[:alice :type :person]=, the result
+set is: =#{{?s :fabric ?t :project} {?s :alice ?t :person}}=.
+
+Use =nil= for a pattern position, if it should catch all values at
+this position, but not be bound to a variable. Example: =[?s :type
+nil]= will catch any facts with =:type= as predicate, but the result
+set only contains unique bindings of query variable =?s=.
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defrecord ParametricFactQuery
@@ -412,14 +615,13 @@ triple graph (or =[nil nil nil nil]= for quads).
                           (if-let [res (seq (peek incoming))]
                             (into #{} res-tx res)
                             #{})))
-            sub-q      (add-query! g (raw-pattern _))
+            sub-q      (add-query! g identity-transform (raw-pattern _))
             res        (f/add-vertex!
                         g nil
                         {::f/collect-fn      collect-fn
-                         ::f/score-signal-fn f/score-signal-with-new-edges})
-            this       (assoc _ :sub-query sub-q :result res)]
+                         ::f/score-signal-fn f/score-signal-with-new-edges})]
         (f/add-edge! g (result-vertex sub-q) res f/signal-forward nil)
-        this))
+        (assoc _ :sub-query sub-q :result res)))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -522,6 +724,82 @@ triple graph (or =[nil nil nil nil]= for quads).
             false))))
 #+END_SRC
 
+*** Path queries
+
+A property path is a possible route through a graph between two nodes.
+In the most trivial case, a single fact has a path length of 1. The
+ends of the path may be constants or variables. Variables can not be
+used as part of the path (predicates) itself, only the ends.
+
+Path queries allow for more concise expressions for some graph
+patterns and they also add the ability to match connectivity of
+subjects/objects by an arbitrary length path.
+
+*Note:* Currently, path queries are only supported for triples (fact
+len = 3) and only bounded path queries are implemented, meaning both
+min/max path lengths MUST be specified.
+
+**** Bounded path query
+
+#+BEGIN_SRC clojure
+  ;; match path (of single pred) between depth 1 and 3
+  (add-path-query! g '[?s [pred] ?o] 1 3)
+
+  ;; match path (cyclically repeated) between 2 hops 4
+  (add-path-query! g '[?s [pred1 pred2] ?o] 2 4)
+
+  ;; math given path
+  (add-path-query! g '[?s [p1 p2 p3] ?o])
+
+  ;; match *any* paths starting at "node-a" with len 2 - 4
+  (add-path-query! g '[node-a [nil] ?o] 1 4)
+
+  ;; check if path exists between fixed subject/object
+  ;; this query has no variables, see note below
+  (add-path-query! g '[node-a [pred] node-b] 3 3)
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref path-query
+  (defn add-path-query!
+    ([g path-pattern]
+     (let [len (count (nth path-pattern 1))]
+       (add-path-query! g path-pattern len len)))
+    ([g path-pattern mind maxd]
+     (assert (pos? mind) "min depth must be >= 1")
+     (assert (<= mind maxd) "min depth must be <= max depth")
+     (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
+           req   (take mind patterns)
+           opt   (drop mind (take maxd patterns))
+           req   (if (seq req)
+                   (apply (if (== 1 (count req)) add-param-query! add-query-join!) g req))
+           opt   (if (seq opt)
+                   (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g req))
+           res   (if (and req opt)
+                   (add-join! g join-optional req opt)
+                   (or req opt))
+           vs?   (qvar? (first path-pattern))
+           vo?   (qvar? (last path-pattern))]
+       (cond
+         (or (= mind maxd) (and vs? (not vo?)))
+         (let [qvars (filter qvar? path-pattern)
+               tx    (map #(select-keys* % qvars))
+               res'  (f/add-vertex!
+                      g #{}
+                      {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
+           res')
+
+         (and vo? (not vs?))
+         (let [?o   (last path-pattern)
+               tx   (mapcat #(map (fn [v] {?o v}) (vals %)))
+               res' (f/add-vertex!
+                     g #{} {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
+           res')
+
+         :else res))))
+#+END_SRC
+
 *** Query constructors
 
 #+BEGIN_SRC clojure :noweb-ref query-ops
@@ -539,23 +817,29 @@ triple graph (or =[nil nil nil nil]= for quads).
     (into [] (map-indexed #(index-selection g [% %2])) pattern))
 
   (defn add-query!
-    [g pattern]
-    (if-let [q (cached g ::queries pattern)]
-      (do (debug :reuse-basic-query pattern) q)
-      (->> (f/add-to-graph!
-            (map->BasicFactQuery {:pattern pattern}) g)
-           (cache! g ::queries pattern))))
+    ([g pattern]
+     (add-query! g (fact-transform g) pattern))
+    ([g ptx pattern]
+     (let [pattern (transform ptx pattern)]
+       (if-let [q (cached g ::queries pattern)]
+         (do (debug :reuse-basic-query pattern) q)
+         (->> (f/add-to-graph!
+               (map->BasicFactQuery {:pattern pattern}) g)
+              (cache! g ::queries pattern))))))
 
   (defn add-param-query!
     ([g pattern]
-     (if-let [q (cached g ::queries pattern)]
-       (do (debug :reuse-param-query pattern) q)
-       (->> (f/add-to-graph!
-             (map->ParametricFactQuery {:filter-fn identity :pattern pattern}) g)
-            (cache! g ::queries pattern))))
-    ([g flt pattern]
+     (add-param-query! g (fact-transform g) pattern))
+    ([g ptx pattern]
+     (let [pattern (transform ptx pattern)]
+       (if-let [q (cached g ::queries pattern)]
+         (do (debug :reuse-param-query pattern) q)
+         (->> (f/add-to-graph!
+               (map->ParametricFactQuery {:filter-fn identity :pattern pattern}) g)
+              (cache! g ::queries pattern)))))
+    ([g ptx flt pattern]
      (f/add-to-graph!
-      (map->ParametricFactQuery {:filter-fn flt :pattern pattern}) g)))
+      (map->ParametricFactQuery {:filter-fn flt :pattern (transform ptx pattern)}) g)))
 
   (defn add-join!
     ([g lhs rhs]
@@ -566,25 +850,31 @@ triple graph (or =[nil nil nil nil]= for quads).
 
   (defn add-query-join!
     [g & patterns]
-    {:pre [(<= 2 (count patterns))]}
-    (let [[a b & more :as p] (sort-patterns patterns)]
+    (let [[ptx patterns] (if (satisfies? ITwoWayTransform (first patterns))
+                           [(first patterns) (rest patterns)]
+                           [(fact-transform g) patterns])
+          [a b & more :as p] patterns] ;;(sort-patterns patterns)
       (debug :sorted-join-patterns p)
       (reduce
-       (fn [acc p] (add-join! g join acc (add-param-query! g p)))
-       (add-join! g join (add-param-query! g a) (add-param-query! g b))
+       (fn [acc p] (add-join! g join acc (add-param-query! g ptx p)))
+       (add-join! g join (add-param-query! g ptx a) (add-param-query! g ptx b))
        more)))
 
   (defn add-query-join-optional!
     [g a b & more]
-    (reduce
-     (fn [acc p] (add-join! g join-optional acc (add-param-query! g p)))
-     (add-join! g join-optional (add-param-query! g a) (add-param-query! g b))
-     more))
+    (let [[ptx a b more] (if (satisfies? ITwoWayTransform a)
+                           [a b (first more) (rest more)]
+                           [(fact-transform g) a b more])]
+      (assert b "Requires min. 2 query patterns")
+      (reduce
+       (fn [acc p] (add-join! g join-optional acc (add-param-query! g ptx p)))
+       (add-join! g join-optional (add-param-query! g ptx a) (add-param-query! g ptx b))
+       more)))
 
   (defn add-query-union!
-    [g a b & queries]
+    [g a b & more]
     (f/add-to-graph!
-     (map->FactQueryUnion {:sub-queries (into [a b] queries)}) g))
+     (map->FactQueryUnion {:sub-queries  (into [a b] more)}) g))
 
   (defn add-query-filter!
     [g flt q]
@@ -617,9 +907,39 @@ triple graph (or =[nil nil nil nil]= for quads).
 *** Query helpers
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
+  (def ^:dynamic *auto-qvar-prefix* "?__q")
+
   (defn- qvar?
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
+
+  (defn auto-qvar?
+    "Returns true, if x is an auto-generated qvar
+    (a symbol prefixed with *auto-qvar-prefix*)"
+    [x] (and (symbol? x) (zero? (.indexOf ^String (name x) ^String *auto-qvar-prefix*))))
+
+  (defn auto-qvar
+    "Creates a new auto-named qvar (symbol)."
+    [] (gensym *auto-qvar-prefix*))
+
+  (defn qvar-name
+    [x] (-> x name (subs 1)))
+
+  (defn resolve-path-pattern
+    "Takes a path triple pattern and max depth. The pattern's predicate
+    must be a seq of preds. Returns a 2-elem vector [patterns vars],
+    where `patterns` is a seq of query patterns with injected temp qvars
+    for inbetween patterns and `vars` the autogenerated qvars themselves.
+    Example:
+
+        [?s [p1 p2 p3] ?o]
+        => [([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o]) (?__q0 ?__q1)]"
+    [[s p o] maxd]
+    (let [avars (repeatedly maxd auto-qvar)
+          vars  (cons s avars)]
+      [(->> (concat (interleave vars (take maxd (cycle p))) [o])
+            (partition 3 2))
+       avars]))
 
   (defn pattern-var-count
     [pattern]
@@ -659,23 +979,26 @@ triple graph (or =[nil nil nil nil]= for quads).
       (transient {}) xrel)))
 
   (defn join
-    "Optimized version of clojure.set/join (w/o key mapping & using
-    transients). ~20% faster than original."
+    "Optimized version of clojure.set/join. Does not join when there're
+    no shared keys (w/o key mapping & using transients). ~20% faster
+    than original."
     [xrel yrel]
     (if (and (seq xrel) (seq yrel))
-      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))
-            [r s] (if (<= (count xrel) (count yrel))
-                    [xrel yrel]
-                    [yrel xrel])
-            idx (index* r ks)]
-        (persistent!
-         (reduce
-          (fn [ret x]
-            (let [found (idx (select-keys* x ks))]
-              (if found
-                (reduce #(conj! % (conj %2 x)) ret found)
-                ret)))
-          (transient #{}) s)))
+      (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
+        (if (seq ks)
+          (let [[r s] (if (<= (count xrel) (count yrel))
+                        [xrel yrel]
+                        [yrel xrel])
+                idx (index* r ks)]
+            (persistent!
+             (reduce
+              (fn [ret x]
+                (let [found (idx (select-keys* x ks))]
+                  (if found
+                    (reduce #(conj! % (conj %2 x)) ret found)
+                    ret)))
+              (transient #{}) s)))
+          #{}))
       #{}))
 
   (defn join-optional
@@ -700,10 +1023,10 @@ triple graph (or =[nil nil nil nil]= for quads).
 
 **** Variable bindings injection multi-method
 
-This function (and =fact-verifier= below) are extensible mechanism to
-allow the graph to support facts of varying lengths and queries over
-them. By default this module only supports fact triples (len=3) or
-quads (len=4).
+This function (and =fact-verifier= below) are used as an extensible
+mechanism to allow the graph to support facts of varying lengths and
+queries over them. Currently, this module only supports fact triples
+(len=3) or quads (len=4).
 
 =bind-translator= is used to provide optimized functions to bind query
 variables to their fact components in the result set of a parametric
@@ -861,17 +1184,13 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defrecord FactInferenceRule
-      [id query patterns production inf]
+      [id query collect-fn inf]
     f/IGraphComponent
     (add-to-graph!
       [_ g]
-      (let [q   (if (< 1 (count patterns))
-                  (apply add-query-join! g patterns)
-                  (add-param-query! g (first patterns)))
-            inf (f/add-vertex!
-                 g #{} {::f/collect-fn (collect-inference g production)})]
-        (f/add-edge! g (result-vertex q) inf f/signal-forward nil)
-        (cache! g ::rules id (assoc _ :query q :inf inf))))
+      (let [inf (f/add-vertex! g #{} {::f/collect-fn collect-fn})]
+        (f/add-edge! g (result-vertex query) inf f/signal-forward nil)
+        (cache! g ::rules id (assoc _ :inf inf))))
     (remove-from-graph!
       [_ g] (f/remove-from-graph! _ g nil))
     (remove-from-graph!
@@ -887,11 +1206,20 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defn add-rule!
-    [g id query production]
-    (f/add-to-graph!
-     (map->FactInferenceRule
-      {:id id :patterns query :production production})
-     g))
+    [g {:keys [id query patterns transform production collect-fn]}]
+    (let [id         (or id (f/random-id))
+          collect-fn (or collect-fn (collect-inference g production))
+          query      (or query
+                         (let [tx (or transform (fact-transform g))]
+                           (if (< 1 (count patterns))
+                             (apply add-query-join! g tx patterns)
+                             (add-param-query! g tx (first patterns)))))]
+      (f/add-to-graph!
+       (map->FactInferenceRule
+        {:id         id
+         :query      query
+         :collect-fn collect-fn})
+       g)))
 #+END_SRC
 
 ** Signal & collect functions
@@ -902,26 +1230,25 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn- collect-index
     [spo]
-    (f/collect-pure
-     (fn [val incoming]
-       ;;(debug :update-index spo incoming)
-       (debug :old-index val)
-       (let [val (transduce
-                  (map (fn [[op id t]] [op id (nth t spo)]))
-                  (completing
-                   (fn [acc [op id x]]
-                     (case op
-                       :add    (update acc x (fnil conj #{}) id)
-                       :remove (if-let [idx (acc x)]
-                                 (if (= #{id} idx)
-                                   (dissoc acc x)
-                                   (update acc x disj id))
-                                 acc)
-                       (do (warn "ignoring unknown index signal op:" op)
-                           acc))))
-                  val incoming)]
-         (debug :new-index val)
-         val))))
+    (let [tx (map (fn [[op id t]] [op id (nth t spo)]))
+          rf (completing
+              (fn [acc [op id x]]
+                (case op
+                  :add    (assoc acc x (conj (or (acc x) #{}) id))
+                  :remove (if-let [idx (acc x)]
+                            (if (= #{id} idx)
+                              (dissoc acc x)
+                              (assoc acc x (disj idx id)))
+                            acc)
+                  (do (warn "ignoring unknown index signal op:" op)
+                      acc))))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug :update-index spo incoming)
+         (debug :old-index val)
+         (let [val (transduce tx rf val incoming)]
+           (debug :new-index val)
+           val)))))
 
   (defn- signal-index-select
     [vertex [idx sel]]
@@ -944,45 +1271,40 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
     (fn [vertex]
       (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
-  (defn- aggregate-select
+  (defn- collect-basic-query-results
     [g]
-    (f/collect-pure
-     (fn [_ incoming]
-       (let [res (vals (peek incoming))]
-         ;;(debug :agg-incoming res)
-         (if (every? #(not= [nil] %) res)
-           (->> res
-                (into #{} (map #(disj % nil)))
-                (sort-by count)
-                (reduce set/intersection)
-                (into #{}
-                      (comp (map #(f/vertex-for-id g %))
-                            (filter identity)
-                            (map deref))))
-           #{})))))
+    (let [ftx    (fact-transform g)
+          agg-tx (comp (map #(f/vertex-for-id g %))
+                       (filter identity)
+                       (map deref)
+                       (map #(untransform ftx %)))]
+      (f/collect-pure
+       (fn [_ incoming]
+         (let [res (vals (peek incoming))]
+           ;;(debug :agg-incoming res)
+           (if (every? #(not= [nil] %) res)
+             (->> res
+                  (into #{} (map #(disj % nil)))
+                  (sort-by count)
+                  (reduce set/intersection)
+                  (into #{} agg-tx))
+             #{}))))))
 
   (defn- score-collect-join
-    [^thi.ng.fabric.core.Vertex vertex]
+    [vertex]
     (if (and (seq (f/uncollected-signals vertex))
              (== (count (f/signal-map vertex)) 2))
       1 0))
 
   (defn- collect-inference
     [g production]
-    (fn [^thi.ng.fabric.core.Vertex vertex]
+    (fn [vertex]
       (let [prev @vertex
             in   (reduce into #{} (f/uncollected-signals vertex))
-            adds (set/difference in prev)
-            inferred (mapcat production adds)]
+            adds (set/difference in prev)]
         (debug (f/vertex-id vertex) :additions adds)
-        (doseq [[op t :as inf] inferred]
-          (case op
-            :+ (do (debug (f/vertex-id vertex) :rule-add-fact t)
-                   (add-fact! g t))
-            :- (do (debug (f/vertex-id vertex) :rule-remove-fact t)
-                   (remove-fact! g t))
-            (warn "invalid inference:" inf)))
-        (swap! (.-value vertex) set/union adds))))
+        (run! #(production g vertex %) adds)
+        (f/update-value! vertex #(set/union % adds)))))
 #+END_SRC
 
 ** Graph logging
@@ -1028,6 +1350,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
         [(:require
           [thi.ng.fabric.core :as f]
           [clojure.set :as set]
+          [clojure.data.int-map :as imap]
           [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
           [taoensso.timbre :refer [debug info warn]])]
         :cljs
@@ -1039,7 +1362,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
-  (declare index-selection make-index-selections add-query! add-query-join!)
+  (declare index-selection make-index-selections qvar? add-query! add-query-join!)
 
   <<protos>>
 
@@ -1053,13 +1376,34 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   <<index-v>>
 
+  <<fact-tx>>
+
   <<graph>>
 
   <<queries>>
 
   <<query-ops>>
 
+  <<path-query>>
+
   <<inference>>
 
   <<logger>>
+#+END_SRC
+
+** TODO Questions
+
+*** maps as facts?
+
+- maybe more convenient, but not strictly facts
+- requires custom fact transforms & query patterns (also maps)
+- how to deal with adding new facts, merged into original map?
+  - just provide map translations: map->facts (use trio triple-seq conversion)
+
+#+BEGIN_SRC clojure
+;; example map
+{"P-123" {:name "karsten" :nick "toxi" :address {:country "uk", :city "london"}}}
+
+;; query: subjects with name & city
+{?n :name ?city [:address :city]}
 #+END_SRC

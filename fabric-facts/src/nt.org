@@ -67,8 +67,8 @@ typed object literals will be returned as map with these keys:
   (defmulti literal-value (fn [_ uri] uri))
 
   (defmethod literal-value :default [_ _]       nil)
-  (defmethod literal-value (:byte xsd) [x _]    (strf/parse-int x))
-  (defmethod literal-value (:short xsd) [x _]   (strf/parse-int x))
+  (defmethod literal-value (:byte xsd) [x _]    (strf/parse-int x 10))
+  (defmethod literal-value (:short xsd) [x _]   (strf/parse-int x 10))
   (defmethod literal-value (:int xsd) [x _]     (strf/parse-int x 10))
   (defmethod literal-value (:integer xsd) [x _] (strf/parse-int x 10))
   (defmethod literal-value (:long xsd) [x _]    (strf/parse-long x 10))

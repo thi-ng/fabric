@@ -270,7 +270,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 *** Automatically updating fact graph queries with rule based inferencing
 
-#+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/queries01.cljc :mkdirp yes :padline no
+#+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
 
@@ -293,25 +293,25 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
       [ancestor domain person]
       [ancestor range person]])
 
-  ;; Rule specs (join queries) and their production functions
-  ;; The keyword :+ means these facts will be added to the graph (rules
-  ;; can also retract facts)
+  ;; Rule specs (join queries) and their production functions The fns
+  ;; take 3 args: the graph, the inference vertex (for context, though
+  ;; here unused) and a single query result
 
   (def inference-rules
     {;; infer type of subject for any property which declares a domain
      :domain     {:match '[[?a ?prop nil] [?prop domain ?d]]
-                  :infer (fn [{:syms [?a ?prop ?d]}] [[:+ [?a 'type ?d]]])}
+                  :infer (fn [g _ {:syms [?a ?prop ?d]}] (ff/add-fact! g [?a 'type ?d]))}
      ;; infer type of object for any property which declared a range
      :range      {:match '[[nil ?prop ?a] [?prop range ?r]]
-                  :infer (fn [{:syms [?a ?prop ?r]}] [[:+ [?a 'type ?r]]])}
+                  :infer (fn [g _ {:syms [?a ?prop ?r]}] (ff/add-fact! g [?a 'type ?r]))}
      ;; infer transitive property relationships
      ;; e.g. ?a ancestor ?b and ?b ancestor ?c => ?a ancestor ?c
      :transitive {:match '[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
-                  :infer (fn [{:syms [?a ?prop ?c]}] [[:+ [?a ?prop ?c]]])}
+                  :infer (fn [g _ {:syms [?a ?prop ?c]}] (ff/add-fact! g [?a ?prop ?c]))}
      ;; infer super property relationships from sub-properties
      ;; e.g. parent is a specialization/sub-prop of ancestor
      :sub-prop   {:match '[[?a ?prop ?b] [?prop sub-prop-of ?super]]
-                  :infer (fn [{:syms [?a ?super ?b]}] [[:+ [?a ?super ?b]]])}})
+                  :infer (fn [g _ {:syms [?a ?super ?b]}] (ff/add-fact! g [?a ?super ?b]))}})
 
   ;; Create empty knowledge graph using default compute graph as backend
 
@@ -325,10 +325,12 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   (def all (ff/add-query! g [nil nil nil]))
 
-  ;; Add rules & facts to graph
+  ;; Add facts & rules to graph
 
-  (run! (fn [[id rule]] (ff/add-rule! g id (:match rule) (:infer rule))) inference-rules)
   (run! #(ff/add-fact! g %) facts)
+  (run!
+   (fn [[id r]] (ff/add-rule! g {:id id :patterns (:match r) :production (:infer r)}))
+   inference-rules)
 
   ;; Execute!
 
