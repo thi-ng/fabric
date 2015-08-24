@@ -47,6 +47,7 @@ This namespace provides...
 
   (defprotocol IComputeGraph
     (add-vertex! [_ val vspec])
+    (update-vertex! [_ v f])
     (remove-vertex! [_ v])
     (vertex-for-id [_ id])
     (vertices [_])
@@ -172,6 +173,11 @@ This namespace provides...
         (swap! state update ::vertices dissoc (vertex-id v))
         ;;(disconnect-all! v)
         true))
+    (update-vertex!
+      [_ v f]
+      (update-value! v f)
+      (notify-watches @watches [:update-vertex v])
+      _)
     (vertex-for-id
       [_ id] (get-in @state [::vertices id]))
     (vertices
@@ -317,17 +323,13 @@ This namespace provides...
     ([acc] acc)
     ([[act as ac] [act' s c]] [(into act act') (+ as s) (+ ac c)]))
 
-  (defn add-context-watches
-    [g watch-id queue]
-    (add-watch! g :remove-vertex watch-id
-                (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
-    (add-watch! g :add-edge watch-id
-                (fn [[__ src dest]] (swap! queue into [src dest]))))
+  (defn add-context-watches!
+    [g watch-id queue watches]
+    (run! (fn [[id f]] (add-watch! g id watch-id (f queue))) watches))
 
-  (defn remove-context-watches
-    [g watch-id]
-    (remove-watch! g :remove-vertex watch-id)
-    (remove-watch! g :add-edge watch-id))
+  (defn remove-context-watches!
+    [g watch-id watches]
+    (run! (fn [[id]] (remove-watch! g id watch-id)) watches))
 
 #+END_SRC
 
@@ -392,54 +394,64 @@ This namespace provides...
      :signal-thresh  0
      :max-iter       1e6
      :signal-fn      parallel-signal-pass-simple
-     :collect-fn     parallel-collect-pass-simple})
+     :collect-fn     parallel-collect-pass-simple
+     :watches        {:remove-vertex
+                      (fn [queue]
+                        (fn [[__ v]] (signal! v sync-vertex-signal)))}})
 
 #+END_SRC
 
 **** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref ctx-sync
-(defn sync-execution-context
-  [opts]
-  (let [ctx       (merge (default-sync-context-opts) opts)
-        g         (:graph ctx)
-        coll-fn   ((:collect-fn ctx) (:collect-thresh ctx))
-        sig-fn    ((:signal-fn ctx) (:signal-thresh ctx))
-        max-iter  (:max-iter ctx)
-        watch-id  (keyword (gensym))
-        ->result  (fn [type iter sigs colls t0]
-                    (remove-watch! g :remove-vertex watch-id)
-                    (execution-result type sigs colls t0 {:iterations iter}))]
-    (reify
-      #?@(:clj
-           [clojure.lang.IDeref
-            (deref [_] ctx)]
-           :cljs
-           [IDeref
-            (-deref [_] ctx)])
-      IGraphExecutor
-      (stop! [_] (err/unsupported!))
-      (notify! [_] (err/unsupported!))
-      (execute!
-        [_]
-        (add-watch! g :remove-vertex watch-id
-                    (fn [[__ v]] (signal! v sync-vertex-signal)))
-        (let [t0 (now)]
-          (loop [i 0, colls 0, sigs 0]
-            (if (<= i max-iter)
-              (let [verts  (vertices g)
-                    sigs'  (sig-fn verts)
-                    colls' (coll-fn verts)]
-                (if (or (pos? sigs') (pos? colls'))
-                  (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
-                  (->result :converged i sigs colls t0)))
-              (->result :max-iter-reached i sigs colls t0))))))))
+  (defn sync-execution-context
+    [opts]
+    (let [ctx       (merge (default-sync-context-opts) opts)
+          g         (:graph ctx)
+          coll-fn   ((:collect-fn ctx) (:collect-thresh ctx))
+          sig-fn    ((:signal-fn ctx) (:signal-thresh ctx))
+          max-iter  (:max-iter ctx)
+          watch-id  (keyword (gensym))
+          ->result  (fn [type iter sigs colls t0]
+                      (remove-context-watches! g watch-id (:watches ctx))
+                      (execution-result type sigs colls t0 {:iterations iter}))]
+      (reify
+        #?@(:clj
+             [clojure.lang.IDeref
+              (deref [_] ctx)]
+             :cljs
+             [IDeref
+              (-deref [_] ctx)])
+        IGraphExecutor
+        (stop! [_] (err/unsupported!))
+        (notify! [_] (err/unsupported!))
+        (execute!
+          [_]
+          (add-context-watches! g watch-id nil (:watches ctx))
+          (let [t0 (now)]
+            (loop [i 0, colls 0, sigs 0]
+              (if (<= i max-iter)
+                (let [verts  (vertices g)
+                      sigs'  (sig-fn verts)
+                      colls' (coll-fn verts)]
+                  (if (or (pos? sigs') (pos? colls'))
+                    (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
+                    (->result :converged i sigs colls t0)))
+                (->result :max-iter-reached i sigs colls t0))))))))
 #+END_SRC
 
 *** Scheduled
 
 **** Default config
 #+BEGIN_SRC clojure :noweb-ref ctx-scheduled
+  (def ^:private default-context-watches
+    {:remove-vertex
+     (fn [queue]
+       (fn [[__ v]] (swap! queue into (signal! v sync-vertex-signal))))
+     :add-edge
+     (fn [queue]
+       (fn [[__ src dest]] (swap! queue into [src dest])))})
+
   (defn default-scheduled-context-opts
     []
     {:collect-thresh 0
@@ -449,55 +461,55 @@ This namespace provides...
      ;;:processor      eager-probabilistic-single-pass-processor
      ;;:scheduler      single-pass-scheduler
      :max-ops        1e6
-     :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
-
+     :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
+     :watches        default-context-watches})
 #+END_SRC
 
 **** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref ctx-scheduled
-(defn scheduled-execution-context
-  [opts]
-  (let [ctx       (merge (default-scheduled-context-opts) opts)
-        g         (:graph ctx)
-        c-thresh  (:collect-thresh ctx)
-        s-thresh  (:signal-thresh ctx)
-        max-ops   (:max-ops ctx)
-        scheduler ((:scheduler ctx) ctx)
-        threads   (:threads ctx)
-        watch-id  (keyword (gensym))
-        v-filter  (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
-        ->result  (fn [type sigs colls t0]
-                    (remove-context-watches g watch-id)
-                    (execution-result type sigs colls t0))]
-    (reify
-      #?@(:clj
-           [clojure.lang.IDeref
-            (deref [_] ctx)]
-           :cljs
-           [IDeref
-            (-deref [_] ctx)])
-      IGraphExecutor
-      (stop! [_] (err/unsupported!))
-      (notify! [_] (err/unsupported!))
-      (execute!
-        [_]
-        (let [t0     (now)
-              active (atom (sequence v-filter (vertices g)))
-              queue  (atom #{})]
-          (add-context-watches g watch-id queue)
-          (loop [colls 0, sigs 0]
-            ;;(warn :active-count (count @active))
-            (if (seq @active)
-              (if (<= (+ colls sigs) max-ops)
-                (let [grp-size            (max 512 (long (/ (count @active) threads)))
-                      [act' sigs' colls'] (scheduler grp-size @active)]
-                  ;;(warn :auto (count @queue))
-                  (reset! active (into (into #{} v-filter act') @queue))
-                  (reset! queue #{})
-                  (recur (long (+ colls colls')) (long (+ sigs sigs'))))
-                (->result :max-ops-reached sigs colls t0))
-              (->result :converged sigs colls t0))))))))
+  (defn scheduled-execution-context
+    [opts]
+    (let [ctx       (merge (default-scheduled-context-opts) opts)
+          g         (:graph ctx)
+          c-thresh  (:collect-thresh ctx)
+          s-thresh  (:signal-thresh ctx)
+          max-ops   (:max-ops ctx)
+          scheduler ((:scheduler ctx) ctx)
+          threads   (:threads ctx)
+          watch-id  (keyword (gensym))
+          v-filter  (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
+          ->result  (fn [type sigs colls t0]
+                      (remove-context-watches! g watch-id (:watches ctx))
+                      (execution-result type sigs colls t0))]
+      (reify
+        #?@(:clj
+             [clojure.lang.IDeref
+              (deref [_] ctx)]
+             :cljs
+             [IDeref
+              (-deref [_] ctx)])
+        IGraphExecutor
+        (stop! [_] (err/unsupported!))
+        (notify! [_] (err/unsupported!))
+        (execute!
+          [_]
+          (let [t0     (now)
+                active (atom (sequence v-filter (vertices g)))
+                queue  (atom #{})]
+            (add-context-watches! g watch-id queue (:watches ctx))
+            (loop [colls 0, sigs 0]
+              ;;(warn :active-count (count @active))
+              (if (seq @active)
+                (if (<= (+ colls sigs) max-ops)
+                  (let [grp-size            (max 512 (long (/ (count @active) threads)))
+                        [act' sigs' colls'] (scheduler grp-size @active)]
+                    ;;(warn :auto (count @queue))
+                    (reset! active (into (into #{} v-filter act') @queue))
+                    (reset! queue #{})
+                    (recur (long (+ colls colls')) (long (+ sigs sigs'))))
+                  (->result :max-ops-reached sigs colls t0))
+                (->result :converged sigs colls t0))))))))
 #+END_SRC
 
 *** Async
@@ -514,7 +526,8 @@ This namespace provides...
      ;;:scheduler      single-pass-scheduler
      :max-ops        1e6
      :auto-stop      false
-     :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)})
+     :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
+     :watches        default-context-watches})
 
 #+END_SRC
 
@@ -545,7 +558,7 @@ This namespace provides...
         IGraphExecutor
         (stop!
           [_]
-          (remove-context-watches g watch-id)
+          (remove-context-watches! g watch-id (:watches ctx))
           (async/close! notify-chan))
         (notify!
           [_] (go (>! notify-chan true)) nil)
@@ -554,7 +567,7 @@ This namespace provides...
           (let [t0     (volatile! (now))
                 active (volatile! (sequence v-filter (vertices g)))
                 queue  (atom #{})]
-            (add-context-watches g watch-id queue)
+            (add-context-watches! g watch-id queue (:watches ctx))
             (go-loop [colls 0, sigs 0]
               ;;(warn :active-count (count @active))
               (if (seq @active)
