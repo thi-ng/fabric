@@ -768,36 +768,38 @@ min/max path lengths MUST be specified.
      (assert (pos? mind) "min depth must be >= 1")
      (assert (<= mind maxd) "min depth must be <= max depth")
      (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
-           req   (take mind patterns)
-           opt   (drop mind (take maxd patterns))
-           req   (if (seq req)
-                   (apply (if (== 1 (count req)) add-param-query! add-query-join!) g req))
-           opt   (if (seq opt)
-                   (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g req))
-           res   (if (and req opt)
-                   (add-join! g join-optional req opt)
-                   (or req opt))
-           vs?   (qvar? (first path-pattern))
-           vo?   (qvar? (last path-pattern))]
-       (cond
-         (or (= mind maxd) (and vs? (not vo?)))
-         (let [qvars (filter qvar? path-pattern)
-               tx    (map #(select-keys* % qvars))
-               res'  (f/add-vertex!
-                      g #{}
-                      {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
-           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
-           res')
+           req (take mind patterns)
+           opt (drop mind (take maxd patterns))
+           req (if (seq req)
+                 (apply (if (== 1 (count req)) add-param-query! add-query-join!) g req))
+           opt (if (seq opt)
+                 (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g opt))
+           res (if (and req opt)
+                 (add-join! g join-optional req opt)
+                 (or req opt))
+           vs? (qvar? (first path-pattern))
+           vo? (qvar? (last path-pattern))
+           tx  (cond
+                 (or (= mind maxd) (and vs? (not vo?)))
+                 (let [qv (filter qvar? path-pattern)]
+                   (map #(select-keys* % qv)))
 
-         (and vo? (not vs?))
-         (let [?o   (last path-pattern)
-               tx   (mapcat #(map (fn [v] {?o v}) (vals %)))
-               res' (f/add-vertex!
-                     g #{} {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
-           (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
-           res')
+                 (and vo? (not vs?))
+                 (let [?o (last path-pattern)
+                       rv (take (dec mind) avars)]
+                   (mapcat #(map (fn [v] {?o v}) (vals (apply dissoc % rv)))))
 
-         :else res))))
+                 :else
+                 (let [?s (first path-pattern)
+                       ?o (last path-pattern)
+                       rv (cons ?s (take (dec mind) avars))]
+                   (mapcat
+                    #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
+           res' (f/add-vertex!
+                 g #{}
+                 {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+       (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
+       res')))
 #+END_SRC
 
 *** Query constructors

@@ -133,6 +133,52 @@
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
 
+#+BEGIN_SRC dot :tangle ../babel/test-paths.dot
+digraph g {
+a -> b [label="p1"];
+b -> c [label="p1"];
+b -> c [label="p2"];
+c -> d [label="p1"];
+c -> e [label="p2"];
+}
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-paths
+    (let [g   (ff/fact-graph)
+          ctx (f/sync-execution-context {:graph g})
+          pq1 (ff/add-path-query! g '[?s [p1] ?o] 3 3)
+          pq2 (ff/add-path-query! g '[?s [p1] ?o] 1 3)
+          pq3 (ff/add-path-query! g '[?s [p1 p2] ?o] 2 3)
+          pq4 (ff/add-path-query! g '[a [p1 p2] ?o] 2 3)
+          pq5 (ff/add-path-query! g '[?s [p1 p2] e] 2 3)
+          pq6 (ff/add-path-query! g '[?s [nil] ?o] 1 5)]
+      (ff/add-fact! g '[a p1 b])
+      (ff/add-fact! g '[b p1 c])
+      (ff/add-fact! g '[b p2 c])
+      (ff/add-fact! g '[c p1 d])
+      (ff/add-fact! g '[c p2 e])
+      (f/execute! ctx)
+      (is (= '#{{?s a ?o d}} @pq1))
+      (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d}
+                {?s b, ?o c} {?s b, ?o d}
+                {?s c, ?o d}}
+             @pq2))
+      (is (= '#{{?s a, ?o c} {?s a, ?o d} {?s b, ?o e}} @pq3))
+      (is (= '#{{?o c} {?o d}} @pq4))
+      (is (= '#{{?s a} {?s b}} @pq5))
+      (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d} {?s a, ?o e}
+                {?s b, ?o c} {?s b, ?o d} {?s b, ?o e}
+                {?s c, ?o d} {?s c, ?o e}}
+             @pq6))
+      (warn :pq1 @pq1)
+      (warn :pq2 @pq2)
+      (warn :pq3 @pq3)
+      (warn :pq4 @pq4)
+      (warn :pq5 @pq5)
+      (warn :pq6 @pq6)))
+#+END_SRC
+
 #+BEGIN_SRC clojure :noweb-ref tests
   (defn test-sync*
     [opts]
@@ -236,7 +282,7 @@
          [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
           [cljs.core.async :refer [chan close! <! >! take!]]])))
 
-  ;; #?(:clj (taoensso.timbre/set-level! :warn))
+  #?(:clj (taoensso.timbre/set-level! :warn))
 
   <<const>>
 
