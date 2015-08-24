@@ -14,7 +14,6 @@
          - [[#index-vertex][Index vertex]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
-         - [[#override-print-methods][Override print methods]]
          - [[#index-selection][Index selection]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
@@ -23,7 +22,7 @@
          - [[#path-queries][Path queries]]
          - [[#todo-query-result-modifiers][TODO Query result modifiers]]
          - [[#query-helpers][Query helpers]]
-     - [[#todo-rulebased-inference][TODO Rulebased inference]]
+     - [[#rulebased-inference][Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
@@ -485,13 +484,6 @@ In code form this same graph could be constructed like this:
   ;; #{[alice friend dora] [bob friend charlie] [alice friend bob]}
   @alice
   ;; #{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}}
-#+END_SRC
-
-*** Override print methods
-
-#+BEGIN_SRC clojure :noweb-ref queries
-#?(:clj (prefer-method print-method clojure.lang.IRecord clojure.lang.IDeref))
-
 #+END_SRC
 
 *** Index selection
@@ -1191,48 +1183,45 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
       :else                   nil))
 #+END_SRC
 
-** TODO Rulebased inference
-
-TODO add reify
-
-#+BEGIN_SRC clojure :noweb-ref inference
-  (defrecord FactInferenceRule
-      [id query collect-fn inf]
-    f/IGraphComponent
-    (add-to-graph!
-      [_ g]
-      (let [inf (f/add-vertex! g #{} {::f/collect-fn collect-fn})]
-        (f/add-edge! g (result-vertex query) inf f/signal-forward nil)
-        (cache! g ::rules id (assoc _ :inf inf))))
-    (remove-from-graph!
-      [_ g] (f/remove-from-graph! _ g nil))
-    (remove-from-graph!
-      [_ g parent]
-      (if (f/none-or-single-user? inf parent)
-        (do (warn :remove-rule id)
-            (f/remove-vertex! g inf)
-            (f/remove-from-graph! query g inf)
-            true)
-        (do (f/disconnect-neighbor! inf parent)
-            false))))
-#+END_SRC
+** Rulebased inference
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defn add-rule!
     [g {:keys [id query patterns transform production collect-fn]}]
-    (let [id         (or id (f/random-id))
-          collect-fn (or collect-fn (collect-inference g production))
-          query      (or query
-                         (let [tx (or transform (fact-transform g))]
-                           (if (< 1 (count patterns))
-                             (apply add-query-join! g tx patterns)
-                             (add-param-query! g tx (first patterns)))))]
-      (f/add-to-graph!
-       (map->FactInferenceRule
-        {:id         id
-         :query      query
-         :collect-fn collect-fn})
-       g)))
+    (let [id      (or id (f/random-id))
+          coll-fn (or collect-fn (collect-inference g production))
+          query   (or query
+                      (let [tx (or transform (fact-transform g))]
+                        (if (< 1 (count patterns))
+                          (apply add-query-join! g tx patterns)
+                          (add-param-query! g tx (first patterns)))))
+          inf     (f/add-vertex! g #{} {::f/collect-fn coll-fn})
+          rule    (reify
+                    #?@(:clj
+                         [clojure.lang.IDeref (deref [_] @query)]
+                         :cljs
+                         [IDeref (-deref [_] @query)])
+                    IFactQuery
+                    (raw-pattern
+                      [_] nil)
+                    (result-vertex
+                      [_] (result-vertex query))
+                    f/IGraphComponent
+                    (add-to-graph!
+                      [_ g] (err/unsupported!))
+                    (remove-from-graph!
+                      [_ g] (f/remove-from-graph! _ g nil))
+                    (remove-from-graph!
+                      [_ g parent]
+                      (if (f/none-or-single-user? inf parent)
+                        (do (warn :remove-rule id)
+                            (f/remove-vertex! g inf)
+                            (f/remove-from-graph! query g inf)
+                            true)
+                        (do (f/disconnect-neighbor! inf parent)
+                            false))))]
+      (f/add-edge! g (result-vertex query) inf f/signal-forward nil)
+      (cache! g ::rules id rule)))
 #+END_SRC
 
 ** Signal & collect functions
