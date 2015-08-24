@@ -176,7 +176,14 @@ c -> e [label="p2"];
       (warn :pq3 @pq3)
       (warn :pq4 @pq4)
       (warn :pq5 @pq5)
-      (warn :pq6 @pq6)))
+      (warn :pq6 @pq6)
+      (f/remove-from-graph! pq1 g)
+      (f/remove-from-graph! pq2 g)
+      (f/remove-from-graph! pq3 g)
+      (f/remove-from-graph! pq4 g)
+      (f/remove-from-graph! pq5 g)
+      (f/remove-from-graph! pq6 g)
+      (is (== (+ 3 5) (count (f/vertices g))))))
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests

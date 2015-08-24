@@ -727,9 +727,9 @@ set only contains unique bindings of query variable =?s=.
 *** Path queries
 
 A property path is a possible route through a graph between two nodes.
-In the most trivial case, a single fact has a path length of 1. The
+The most trivial case, a single fact, has a path length of 1. The
 ends of the path may be constants or variables. Variables can not be
-used as part of the path (predicates) itself, only the ends.
+used as part of the path (predicates) itself, only at the ends.
 
 Path queries allow for more concise expressions for some graph
 patterns and they also add the ability to match connectivity of
@@ -760,46 +760,81 @@ min/max path lengths MUST be specified.
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref path-query
+  (defrecord FactPathQuery
+      [query result pattern range avars]
+    #?@(:clj
+         [clojure.lang.IDeref (deref [_] (when result @result))]
+         :cljs
+         [IDeref (-deref [_] (when result @result))])
+    IFactQuery
+    (raw-pattern
+      [_] nil)
+    (result-vertex
+      [_] result)
+    f/IGraphComponent
+    (add-to-graph!
+      [this g]
+      (let [[mind maxd] range
+            [?s _ ?o] pattern
+            vs? (qvar? ?s)
+            vo? (qvar? ?o)
+            tx  (cond
+                  (or (= mind maxd) (and vs? (not vo?)))
+                  (let [qv (filter qvar? pattern)]
+                    (map #(select-keys* % qv)))
+
+                  (and vo? (not vs?))
+                  (let [rv (take (dec mind) avars)]
+                    (mapcat #(map (fn [v] {?o v}) (vals (apply dissoc % rv)))))
+
+                  :else
+                  (let [rv (cons ?s (take (dec mind) avars))]
+                    (mapcat
+                     #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
+            res (f/add-vertex!
+                 g #{}
+                 {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
+        (f/add-edge! g (result-vertex query) res f/signal-forward nil)
+        (assoc this :result res)))
+    (remove-from-graph!
+      [_ g] (f/remove-from-graph! _ g nil))
+    (remove-from-graph!
+      [_ g parent]
+      (if (f/none-or-single-user? result parent)
+        (do (warn :remove-path-query)
+            (f/remove-vertex! g result)
+            (f/remove-from-graph! query g result)
+            true)
+        (do (f/disconnect-neighbor! result parent)
+            false))))
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref path-query
   (defn add-path-query!
     ([g path-pattern]
      (let [len (count (nth path-pattern 1))]
        (add-path-query! g path-pattern len len)))
     ([g path-pattern mind maxd]
+     (add-path-query! g (fact-transform g) path-pattern mind maxd))
+    ([g ftx path-pattern mind maxd]
      (assert (pos? mind) "min depth must be >= 1")
      (assert (<= mind maxd) "min depth must be <= max depth")
      (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
            req (take mind patterns)
            opt (drop mind (take maxd patterns))
            req (if (seq req)
-                 (apply (if (== 1 (count req)) add-param-query! add-query-join!) g req))
+                 (apply (if (== 1 (count req)) add-param-query! add-query-join!) g ftx req))
            opt (if (seq opt)
-                 (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g opt))
-           res (if (and req opt)
+                 (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g ftx opt))
+           q   (if (and req opt)
                  (add-join! g join-optional req opt)
-                 (or req opt))
-           vs? (qvar? (first path-pattern))
-           vo? (qvar? (last path-pattern))
-           tx  (cond
-                 (or (= mind maxd) (and vs? (not vo?)))
-                 (let [qv (filter qvar? path-pattern)]
-                   (map #(select-keys* % qv)))
-
-                 (and vo? (not vs?))
-                 (let [?o (last path-pattern)
-                       rv (take (dec mind) avars)]
-                   (mapcat #(map (fn [v] {?o v}) (vals (apply dissoc % rv)))))
-
-                 :else
-                 (let [?s (first path-pattern)
-                       ?o (last path-pattern)
-                       rv (cons ?s (take (dec mind) avars))]
-                   (mapcat
-                    #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
-           res' (f/add-vertex!
-                 g #{}
-                 {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})]
-       (f/add-edge! g (result-vertex res) res' f/signal-forward nil)
-       res')))
+                 (or req opt))]
+       (f/add-to-graph!
+        (map->FactPathQuery
+         {:query   q
+          :pattern path-pattern
+          :range   [mind maxd]
+          :avars   avars}) g))))
 #+END_SRC
 
 *** Query constructors
@@ -856,9 +891,9 @@ min/max path lengths MUST be specified.
                            [(first patterns) (rest patterns)]
                            [(fact-transform g) patterns])
           [a b & more :as p] patterns] ;;(sort-patterns patterns)
-      (debug :sorted-join-patterns p)
+      ;;(debug :sorted-join-patterns p)
       (reduce
-       (fn [acc p] (add-join! g join acc (add-param-query! g ptx p)))
+       #(add-join! g join % (add-param-query! g ptx %2))
        (add-join! g join (add-param-query! g ptx a) (add-param-query! g ptx b))
        more)))
 
@@ -876,7 +911,7 @@ min/max path lengths MUST be specified.
   (defn add-query-union!
     [g a b & more]
     (f/add-to-graph!
-     (map->FactQueryUnion {:sub-queries  (into [a b] more)}) g))
+     (map->FactQueryUnion {:sub-queries (into [a b] more)}) g))
 
   (defn add-query-filter!
     [g flt q]
@@ -1246,10 +1281,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                       acc))))]
       (f/collect-pure
        (fn [val incoming]
-         ;;(debug :update-index spo incoming)
-         (debug :old-index val)
+         ;;(debug :old-index val)
          (let [val (transduce tx rf val incoming)]
-           (debug :new-index val)
+           ;;(debug :new-index val)
            val)))))
 
   (defn- signal-index-select
@@ -1403,9 +1437,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   - just provide map translations: map->facts (use trio triple-seq conversion)
 
 #+BEGIN_SRC clojure
-;; example map
-{"P-123" {:name "karsten" :nick "toxi" :address {:country "uk", :city "london"}}}
+  ;; example map
+  {"P-123" {:name "karsten" :nick "toxi" :address {:country "uk", :city "london"}}}
 
-;; query: subjects with name & city
-{?n :name ?city [:address :city]}
+  ;; query: subjects with name & city
+  {?n :name ?city [:address :city]}
 #+END_SRC
