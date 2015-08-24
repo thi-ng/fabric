@@ -34,6 +34,7 @@ graph setup:
   - Unions
   - Arbitrary filters
   - Arbitrary result grouping
+  - Bounded length path queries (min/max limits)
 - Extensive query & sub-query reuse/caching
 - Intelligent recursive query removal
 - Queries are only computed once, results are cached and updated

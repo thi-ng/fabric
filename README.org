@@ -60,6 +60,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 - Knowledge graphs (triples & quads)
 - Fully featured, efficient query engine (variables, joins, optional
   joins, unions, filters, grouping)
+- Bounded length path queries (min/max limits)
 - Rulebased fact inferencing (additions & retractions)
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
