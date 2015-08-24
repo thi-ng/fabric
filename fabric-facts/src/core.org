@@ -21,9 +21,9 @@
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
          - [[#path-queries][Path queries]]
-         - [[#query-result-modifiers][Query result modifiers]]
+         - [[#todo-query-result-modifiers][TODO Query result modifiers]]
          - [[#query-helpers][Query helpers]]
-     - [[#rulebased-inference][Rulebased inference]]
+     - [[#todo-rulebased-inference][TODO Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
@@ -574,7 +574,7 @@ triple graph (or =[nil nil nil nil]= for quads).
                         [_] res)
                       f/IGraphComponent
                       (add-to-graph!
-                        [_ g] _)
+                        [_ g] (err/unsupported!))
                       (remove-from-graph!
                         [_ g] (f/remove-from-graph! _ g nil))
                       (remove-from-graph!
@@ -647,7 +647,7 @@ set only contains unique bindings of query variable =?s=.
                            [_] result)
                          f/IGraphComponent
                          (add-to-graph!
-                           [_ g])
+                           [_ g] (err/unsupported!))
                          (remove-from-graph!
                            [_ g] (f/remove-from-graph! _ g nil))
                          (remove-from-graph!
@@ -698,8 +698,7 @@ set only contains unique bindings of query variable =?s=.
                       [_] result)
                     f/IGraphComponent
                     (add-to-graph!
-                      [_ g]
-                      )
+                      [_ g] (err/unsupported!))
                     (remove-from-graph!
                       [_ g] (f/remove-from-graph! _ g nil))
                     (remove-from-graph!
@@ -765,7 +764,7 @@ set only contains unique bindings of query variable =?s=.
                   [_] res)
                 f/IGraphComponent
                 (add-to-graph!
-                  [_ g])
+                  [_ g] (err/unsupported!))
                 (remove-from-graph!
                   [_ g] (f/remove-from-graph! _ g nil))
                 (remove-from-graph!
@@ -867,7 +866,7 @@ min/max path lengths MUST be specified.
                    [_] res)
                  f/IGraphComponent
                  (add-to-graph!
-                   [_ g] _)
+                   [_ g] (err/unsupported!))
                  (remove-from-graph!
                    [_ g] (f/remove-from-graph! _ g nil))
                  (remove-from-graph!
@@ -883,7 +882,9 @@ min/max path lengths MUST be specified.
        pq)))
 #+END_SRC
 
-*** Query result modifiers
+*** TODO Query result modifiers
+
+TODO add reify
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-query-filter!
@@ -990,8 +991,8 @@ min/max path lengths MUST be specified.
 
   (defn join
     "Optimized version of clojure.set/join. Does not join when there're
-    no shared keys (w/o key mapping & using transients). ~20% faster
-    than original."
+    no shared keys and no key mapping, uses transients. ~20% faster than
+    original."
     [xrel yrel]
     (if (and (seq xrel) (seq yrel))
       (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
@@ -1190,7 +1191,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
       :else                   nil))
 #+END_SRC
 
-** Rulebased inference
+** TODO Rulebased inference
+
+TODO add reify
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defrecord FactInferenceRule
@@ -1358,6 +1361,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
     #?@(:clj
         [(:require
           [thi.ng.fabric.core :as f]
+          [thi.ng.xerror.core :as err]
           [clojure.set :as set]
           [clojure.data.int-map :as imap]
           [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
@@ -1368,6 +1372,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           [cljs-log.core :refer [debug info warn]])
          (:require
           [thi.ng.fabric.core :as f]
+          [thi.ng.xerror.core :as err]
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
