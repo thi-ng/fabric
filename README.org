@@ -37,7 +37,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.144"]
+  [thi.ng/fabric "0.0.167"]
 #+END_SRC
 
 ** Overview
@@ -497,13 +497,14 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*                                                |
-|-----------+------------+--------------------------------------------------------------|
-|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support |
-|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                       |
-|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                 |
-|   0.0.116 | 2015-08-15 | more reusable fact queries                                   |
-|   0.0.108 | 2015-08-14 | 1st public release                                           |
+| *Version* | *Released* | *Description*                                                       |
+|-----------+------------+---------------------------------------------------------------------|
+|   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring |
+|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support        |
+|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                              |
+|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                        |
+|   0.0.116 | 2015-08-15 | more reusable fact queries                                          |
+|   0.0.108 | 2015-08-14 | 1st public release                                                  |
 
 ** Contributors
 
