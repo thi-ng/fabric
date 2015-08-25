@@ -48,6 +48,9 @@
 
   (defprotocol IFactQuery
     (raw-pattern [_])
+    (query-spec [_]))
+
+  (defprotocol IQueryResult
     (result-vertex [_]))
 
   (defprotocol ITwoWayTransform
@@ -499,9 +502,7 @@ In code form this same graph could be constructed like this:
                     {::f/score-signal-fn f/score-signal-with-new-edges
                      ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})
             isel   (reify
-                     IFactQuery
-                     (raw-pattern
-                       [_] nil)
+                     IQueryResult
                      (result-vertex
                        [_] vertex)
                      f/IGraphComponent
@@ -539,9 +540,9 @@ triple graph (or =[nil nil nil nil]= for quads).
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-query!
-    ([g pattern]
-     (add-query! g (fact-transform g) pattern))
-    ([g ptx pattern]
+    ([g pattern opts]
+     (add-query! g (fact-transform g) pattern opts))
+    ([g ptx pattern opts]
      (let [pattern (transform ptx pattern)]
        (if-let [q (cached g ::queries pattern)]
          (do (debug :reuse-basic-query pattern) q)
@@ -551,17 +552,20 @@ triple graph (or =[nil nil nil nil]= for quads).
                      g {} {::f/collect-fn collect-select})
                res  (f/add-vertex!
                      g nil
-                     {::f/collect-fn       (collect-basic-query-results g)
+                     {::f/collect-fn       (collect-basic-query-results g opts)
                       ::f/score-signal-fn  f/score-signal-with-new-edges
                       ::f/score-collect-fn (score-collect-min-signal-vals (count sels))})
                q    (reify
                       #?@(:clj
-                           [clojure.lang.IDeref (deref [_] (when res @res))]
+                           [clojure.lang.IDeref (deref [_] @res)]
                            :cljs
-                           [IDeref (-deref [_] (when res @res))])
+                           [IDeref (-deref [_] @res)])
                       IFactQuery
                       (raw-pattern
                         [_] pattern)
+                      (query-spec
+                        [_] (merge {:select :* :q [{:where pattern}]} opts))
+                      IQueryResult
                       (result-vertex
                         [_] res)
                       f/IGraphComponent
@@ -602,11 +606,11 @@ set only contains unique bindings of query variable =?s=.
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-param-query!
-    ([g pattern]
-     (add-param-query! g (fact-transform g) pattern))
-    ([g ptx pattern]
-     (add-param-query! g ptx identity pattern))
-    ([g ptx flt pattern]
+    ([g pattern opts]
+     (add-param-query! g (fact-transform g) pattern opts))
+    ([g ptx pattern opts]
+     (add-param-query! g ptx identity pattern opts))
+    ([g ptx flt pattern opts]
      (let [pattern (transform ptx pattern)]
        (if-let [q (cached g ::queries pattern)]
          (do (debug :reuse-param-query pattern) q)
@@ -617,24 +621,28 @@ set only contains unique bindings of query variable =?s=.
                res-tx  (if verify
                          (comp (map #(if (verify %) (vmap %))) (filter flt))
                          (comp (map vmap) (filter flt)))
+               res-tx  (comp res-tx (take (or (:limit opts) MAX_LIMIT)))
                coll-fn (f/collect-pure
                         (fn [_ incoming]
                           (if-let [res (seq (peek incoming))]
                             (into #{} res-tx res)
                             #{})))
-               sub-q   (add-query! g identity-transform raw)
+               sub-q   (add-query! g identity-transform raw {})
                result  (f/add-vertex!
                         g nil
                         {::f/collect-fn      coll-fn
                          ::f/score-signal-fn f/score-signal-with-new-edges})
                q       (reify
                          #?@(:clj
-                              [clojure.lang.IDeref (deref [_] (when result @result))]
+                              [clojure.lang.IDeref (deref [_] @result)]
                               :cljs
-                              [IDeref (-deref [_] (when result @result))])
+                              [IDeref (-deref [_] @result)])
                          IFactQuery
                          (raw-pattern
                            [_] raw)
+                         (query-spec
+                           [_]) ;; TODO
+                         IQueryResult
                          (result-vertex
                            [_] result)
                          f/IGraphComponent
@@ -660,13 +668,14 @@ set only contains unique bindings of query variable =?s=.
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-join!
-    ([g lhs rhs]
-     (add-join! g join lhs rhs))
-    ([g join-fn lhs rhs]
+    ([g lhs rhs opts]
+     (add-join! g join lhs rhs opts))
+    ([g join-fn lhs rhs opts]
      (let [lhs-v  (result-vertex lhs)
            rhs-v  (result-vertex rhs)
            lhs-id (f/vertex-id lhs-v)
            rhs-id (f/vertex-id rhs-v)
+           limit  (or (:limit opts) MAX_LIMIT)
            result (f/add-vertex!
                    g nil
                    {::f/collect-fn
@@ -675,17 +684,20 @@ set only contains unique bindings of query variable =?s=.
                             a (sig-map lhs-id)
                             b (sig-map rhs-id)]
                         (debug (f/vertex-id vertex) :join-sets a b)
-                        (f/set-value! vertex (join-fn a b))))
+                        (f/set-value! vertex (join-fn a b limit))))
                     ::f/score-collect-fn score-collect-join
                     ::f/score-signal-fn  f/score-signal-with-new-edges})
            jq     (reify
                     #?@(:clj
-                         [clojure.lang.IDeref (deref [_] (when result @result))]
+                         [clojure.lang.IDeref (deref [_] @result)]
                          :cljs
-                         [IDeref (-deref [_] (when result @result))])
+                         [IDeref (-deref [_] @result)])
                     IFactQuery
                     (raw-pattern
                       [_] nil)
+                    (query-spec
+                      [_]) ;; TODO
+                    IQueryResult
                     (result-vertex
                       [_] result)
                     f/IGraphComponent
@@ -708,50 +720,66 @@ set only contains unique bindings of query variable =?s=.
        jq)))
 
   (defn add-query-join!
-    [g & patterns]
-    (let [[ptx patterns] (if (satisfies? ITwoWayTransform (first patterns))
-                           [(first patterns) (rest patterns)]
-                           [(fact-transform g) patterns])
-          [a b & more :as p] patterns] ;;(sort-patterns patterns)
-      ;;(debug :sorted-join-patterns p)
-      (reduce
-       #(add-join! g join % (add-param-query! g ptx %2))
-       (add-join! g join (add-param-query! g ptx a) (add-param-query! g ptx b))
-       more)))
+    ([g patterns opts]
+     (add-query-join! g (fact-transform g) patterns opts))
+    ([g ptx patterns opts]
+     (let [[a b & more :as p] patterns ;;(sort-patterns patterns)
+           _  (assert (and a b) "Requires min. 2 query patterns")
+           jq (reduce
+               #(add-join! g join % (add-param-query! g ptx %2 {}) {})
+               (add-join!
+                g join
+                (add-param-query! g ptx a {})
+                (add-param-query! g ptx b {})
+                (if (< 1 (count more)) {} opts))
+               (butlast more))]
+       (if-let [p (last more)]
+         (add-join! g join jq (add-param-query! g ptx p {}) opts)
+         jq))))
 
   (defn add-query-join-optional!
-    [g a b & more]
-    (let [[ptx a b more] (if (satisfies? ITwoWayTransform a)
-                           [a b (first more) (rest more)]
-                           [(fact-transform g) a b more])]
-      (assert b "Requires min. 2 query patterns")
-      (reduce
-       (fn [acc p] (add-join! g join-optional acc (add-param-query! g ptx p)))
-       (add-join! g join-optional (add-param-query! g ptx a) (add-param-query! g ptx b))
-       more)))
+    ([g patterns opts]
+     (add-query-join-optional! g (fact-transform g) patterns opts))
+    ([g ptx patterns opts]
+     (let [[a b & more] patterns
+           _  (assert (and a b) "Requires min. 2 query patterns")
+           jq (reduce
+               #(add-join! g join-optional % (add-param-query! g ptx %2 {}) {})
+               (add-join!
+                g join-optional
+                (add-param-query! g ptx a {})
+                (add-param-query! g ptx b {})
+                (if (< 1 (count more)) {} opts))
+               (butlast more))]
+       (if-let [p (last more)]
+         (add-join! g join-optional jq (add-param-query! g ptx p {}) opts)
+         jq))))
 #+END_SRC
 
 *** Query union
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-query-union!
-    [g & queries]
+    [g queries opts]
     (assert (< 1 (count queries)) "min. 2 queries required")
     (let [res (f/add-vertex!
                g nil
                {::f/collect-fn
                 (fn [vertex]
                   (let [subs (vals (f/signal-map vertex))]
-                    (f/set-value! vertex (reduce (fn [acc res] (if (seq res) (into acc res) acc)) subs))))
+                    (f/set-value! vertex (reduce #(if (seq %2) (into % %2) %) subs))))
                 ::f/score-signal-fn f/score-signal-with-new-edges})
           q   (reify
                 #?@(:clj
-                     [clojure.lang.IDeref (deref [_] (when res @res))]
+                     [clojure.lang.IDeref (deref [_] @res)]
                      :cljs
-                     [IDeref (-deref [_] (when res @res))])
+                     [IDeref (-deref [_] @res)])
                 IFactQuery
                 (raw-pattern
                   [_] nil)
+                (query-spec
+                  [_]) ;; TODO
+                IQueryResult
                 (result-vertex
                   [_] res)
                 f/IGraphComponent
@@ -814,7 +842,7 @@ min/max path lengths MUST be specified.
        (add-path-query! g path-pattern len len)))
     ([g path-pattern mind maxd]
      (add-path-query! g (fact-transform g) path-pattern mind maxd))
-    ([g ftx path-pattern mind maxd]
+    ([g ptx path-pattern mind maxd]
      (assert (pos? mind) "min depth must be >= 1")
      (assert (<= mind maxd) "min depth must be <= max depth")
      (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
@@ -824,11 +852,15 @@ min/max path lengths MUST be specified.
            req (take mind patterns)
            opt (drop mind (take maxd patterns))
            req (if (seq req)
-                 (apply (if (== 1 (count req)) add-param-query! add-query-join!) g ftx req))
+                 (if (== 1 (count req))
+                   (add-param-query! g ptx (first req) {})
+                   (add-query-join! g ptx req {})))
            opt (if (seq opt)
-                 (apply (if (== 1 (count opt)) add-param-query! add-query-join-optional!) g ftx opt))
+                 (if (== 1 (count opt))
+                   (add-param-query! g ptx (first opt) {})
+                   (add-query-join-optional! g ptx opt {})))
            q   (if (and req opt)
-                 (add-join! g join-optional req opt)
+                 (add-join! g join-optional req opt {}) ;; TODO opts
                  (or req opt))
            tx  (cond
                  (or (= mind maxd) (and vs? (not vo?)))
@@ -848,12 +880,15 @@ min/max path lengths MUST be specified.
                 {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})
            pq  (reify
                  #?@(:clj
-                      [clojure.lang.IDeref (deref [_] (when res @res))]
+                      [clojure.lang.IDeref (deref [_] @res)]
                       :cljs
-                      [IDeref (-deref [_] (when res @res))])
+                      [IDeref (-deref [_] @res)])
                  IFactQuery
                  (raw-pattern
                    [_] nil)
+                 (query-spec
+                   [_]) ;; TODO
+                 IQueryResult
                  (result-vertex
                    [_] res)
                  f/IGraphComponent
@@ -982,37 +1017,40 @@ TODO add reify
       (transient {}) xrel)))
 
   (defn join
-    "Optimized version of clojure.set/join. Does not join when there're
-    no shared keys and no key mapping, uses transients. ~20% faster than
-    original."
-    [xrel yrel]
+    "Based on clojure.set/join. Does not join when there're no shared
+    keys and no key mapping, enforced result set limit, uses transients."
+    [xrel yrel limit]
     (if (and (seq xrel) (seq yrel))
       (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
         (if (seq ks)
           (let [[r s] (if (<= (count xrel) (count yrel))
                         [xrel yrel]
                         [yrel xrel])
-                idx (index* r ks)]
+                idx (index* r ks)
+                cnt (volatile! 0)]
             (persistent!
              (reduce
               (fn [ret x]
                 (let [found (idx (select-keys* x ks))]
                   (if found
-                    (reduce #(conj! % (conj %2 x)) ret found)
+                    (if (<= (vreset! cnt (+ @cnt (count found))) limit)
+                      (reduce #(conj! % (conj %2 x)) ret found)
+                      (reduced (reduce #(conj! % (conj %2 x)) ret (take (- @cnt limit) found))))
                     ret)))
               (transient #{}) s)))
           #{}))
       #{}))
 
+  ;; TODO enforce limit
   (defn join-optional
-    [a b]
+    [a b limit]
     (loop [old (transient #{}), new (transient #{}), kb b]
       (if kb
         (let [kb'       [(first kb)]
               [old new] (loop [old old, new new, ka a]
                           (if ka
                             (let [ka' (first ka)
-                                  j   (first (join [ka'] kb'))]
+                                  j   (first (join [ka'] kb' limit))]
                               (if j
                                 (recur (conj! old ka') (conj! new j) (next ka))
                                 (recur old new (next ka))))
@@ -1193,8 +1231,8 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           query   (or query
                       (let [tx (or transform (fact-transform g))]
                         (if (< 1 (count patterns))
-                          (apply add-query-join! g tx patterns)
-                          (add-param-query! g tx (first patterns)))))
+                          (add-query-join! g tx patterns {})
+                          (add-param-query! g tx (first patterns) {}))))
           inf     (f/add-vertex! g #{} {::f/collect-fn coll-fn})
           rule    (reify
                     #?@(:clj
@@ -1204,6 +1242,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                     IFactQuery
                     (raw-pattern
                       [_] nil)
+                    (query-spec
+                      [_]) ;; TODO
+                    IQueryResult
                     (result-vertex
                       [_] (result-vertex query))
                     f/IGraphComponent
@@ -1273,10 +1314,11 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
       (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
   (defn- collect-basic-query-results
-    [g]
+    [g {:keys [filter limit]}]
     (let [ftx    (fact-transform g)
           agg-tx (comp (map #(f/vertex-for-id g %))
-                       (filter identity)
+                       (clojure.core/filter (or filter identity))
+                       (take (or limit MAX_LIMIT))
                        (map deref)
                        (map #(untransform ftx %)))]
       (f/collect-pure
@@ -1364,6 +1406,8 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           [thi.ng.xerror.core :as err]
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
+
+  (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
   (declare index-selection make-index-selections qvar? add-query! add-query-join!)
 

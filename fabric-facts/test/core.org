@@ -56,16 +56,16 @@
     [opts]
     (let [g            (ff/fact-graph opts)
           ;;log          (ff/add-fact-graph-logger g logger)
-          toxi         (ff/add-query! g ['toxi nil nil])
-          types        (ff/add-query! g [nil 'type nil])
-          projects     (ff/add-query! g [nil 'type 'project])
-          knows        (ff/add-query! g [nil 'knows nil])
-          all          (ff/add-query! g [nil nil nil])
+          toxi         (ff/add-query! g ['toxi nil nil] {})
+          types        (ff/add-query! g [nil 'type nil] {})
+          projects     (ff/add-query! g [nil 'type 'project] {})
+          knows        (ff/add-query! g [nil 'knows nil] {})
+          all          (ff/add-query! g [nil nil nil] {})
           num-projects (ff/add-counter! g (ff/result-vertex projects))
           num-types    (ff/add-counter! g (ff/result-vertex types))
-          knows-pq     (ff/add-param-query! g '[?s knows ?o])
-          jq           (ff/add-query-join! g '[?p author ?prj] '[?prj type project] '[?p type person])
-          tq           (ff/add-query-join! g '[?p author ?prj] '[?prj tag ?t])]
+          knows-pq     (ff/add-param-query! g '[?s knows ?o] {})
+          jq           (ff/add-query-join! g '[[?p author ?prj] [?prj type project] [?p type person]] {})
+          tq           (ff/add-query-join! g '[[?p author ?prj] [?prj tag ?t]] {})]
       (run!
        (fn [[id [q prod]]] (ff/add-rule! g {:id id :patterns q :production prod})) inference-rules)
       (run!
@@ -89,8 +89,8 @@
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-query-basic3
     (let [g       (ff/fact-graph)
-          friends (ff/add-query! g '[nil friend nil])
-          alice   (ff/add-param-query! g '[alice ?p ?o])]
+          friends (ff/add-query! g '[nil friend nil] {})
+          alice   (ff/add-param-query! g '[alice ?p ?o] {})]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
@@ -108,13 +108,13 @@
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-query-join3
     (let [g   (ff/fact-graph)
-          q1  (ff/add-param-query! g '[?a friend ?b])
-          q2  (ff/add-param-query! g '[?b friend ?c])
-          q3  (ff/add-param-query! g '[?b nick ?n])
-          jq1 (ff/add-join! g q1 q2)
-          jq2 (ff/add-query-join! g '[?a friend ?b] '[?b friend ?c])
-          jq3 (ff/add-join! g ff/join-optional q1 q3)
-          jq4 (ff/add-query-join-optional! g '[?a friend ?b] '[?b nick ?n] '[?n name ?nn])]
+          q1  (ff/add-param-query! g '[?a friend ?b] {})
+          q2  (ff/add-param-query! g '[?b friend ?c] {})
+          q3  (ff/add-param-query! g '[?b nick ?n] {})
+          jq1 (ff/add-join! g q1 q2 {})
+          jq2 (ff/add-query-join! g '[[?a friend ?b] [?b friend ?c]] {})
+          jq3 (ff/add-join! g ff/join-optional q1 q3 {})
+          jq4 (ff/add-query-join-optional! g '[[?a friend ?b] [?b nick ?n] [?n name ?nn]] {})]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
@@ -265,8 +265,7 @@ c -> e [label="p2"];
       #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))
       (assoc spec :ctx ctx)))
 
-  (deftest ^:async test-async
-    (test-async* {}))
+  #?(:clj (deftest test-async (test-async* {})))
 #+END_SRC
 
 ** Namespace declaration
