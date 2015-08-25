@@ -88,20 +88,25 @@
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-query-basic3
-    (let [g       (ff/fact-graph)
-          friends (ff/add-query! g '[nil friend nil] {})
-          alice   (ff/add-param-query! g '[alice ?p ?o] {})]
+    (let [g  (ff/fact-graph)
+          q1 (ff/add-query! g '[nil friend nil] {})
+          q2 (ff/add-param-query! g '[alice ?p ?o] {})
+          q3 (ff/add-query! g '[nil friend nil] {:limit 1})
+          q4 (ff/add-query! g '[nil friend nil] {:filter (fn [[s]] (= 'bob s))})
+          q5 (ff/add-param-query! g '[alice ?p ?o] {:limit 1 :filter #(= 'friend (% '?p))})]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
       (ff/add-fact! g '[alice email "a@b.com"])
       (f/execute! (f/sync-execution-context {:graph g}))
-      (is (set? @friends))
-      (is (set? @alice))
-      (is (= '#{[alice friend dora] [bob friend charlie] [alice friend bob]} @friends))
-      (is (= '#{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}} @alice))
-      (f/remove-from-graph! friends g)
-      (f/remove-from-graph! alice g)
+      (is (every? set? [@q1 @q2 @q3 @q4]))
+      (is (= '#{[alice friend dora] [bob friend charlie] [alice friend bob]} @q1))
+      (is (= '#{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}} @q2))
+      (is (== 1 (count @q3)))
+      (is (= '#{[bob friend charlie]} @q4))
+      (is (== 1 (count @q5)))
+      (is ('#{bob dora} ((first @q5) '?o)))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
 
@@ -114,7 +119,12 @@
           jq1 (ff/add-join! g q1 q2 {})
           jq2 (ff/add-query-join! g '[[?a friend ?b] [?b friend ?c]] {})
           jq3 (ff/add-join! g ff/join-optional q1 q3 {})
-          jq4 (ff/add-query-join-optional! g '[[?a friend ?b] [?b nick ?n] [?n name ?nn]] {})]
+          jq4 (ff/add-query-join-optional! g '[[?a friend ?b] [?b nick ?n] [?n name ?nn]] {})
+          jq5 (ff/add-join! g q2 q1 {:limit 1 :filter #(= 'alice (% '?a))})
+          jq6 (ff/add-query-join! g '[[?a friend ?b] [?b friend ?c]]
+                                  {:limit 1 :filter #(= 'alice (% '?a))})
+          jq7 (ff/add-query-join-optional! g '[[?a friend ?b] [?b nick ?n] [?n name ?nn]]
+                                           {:limit 1 :filter #(= 'alice (% '?a))})]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
@@ -126,10 +136,10 @@
       (is (= @jq1 @jq2))
       (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob, ?n bobby}} @jq3))
       (is (= @jq3 @jq4))
-      (f/remove-from-graph! jq1 g)
-      (f/remove-from-graph! jq2 g)
-      (f/remove-from-graph! jq3 g)
-      (f/remove-from-graph! jq4 g)
+      (is (= '#{{?a alice ?b bob ?c charlie}} @jq5))
+      (is (= @jq5 @jq6))
+      (is (and (every? #(= 'alice (% '?a)) @jq7) (every? #('#{dora bob} (% '?b)) @jq7)))
+      (run! #(f/remove-from-graph! % g) [jq1 jq2 jq3 jq4 jq5 jq6 jq7])
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
 

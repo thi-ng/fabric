@@ -478,8 +478,8 @@ In code form this same graph could be constructed like this:
   (ff/add-fact! g '[alice friend dora])
   (ff/add-fact! g '[alice email "a@b.com"])
 
-  (def friends (ff/add-query! g '[nil friend nil]))
-  (def alice   (ff/add-param-query! g '[alice ?p ?o]))
+  (def friends (ff/add-query! g '[nil friend nil] {}))
+  (def alice   (ff/add-param-query! g '[alice ?p ?o] {}))
 
   (f/execute! (f/sync-execution-context {:graph g}))
 
@@ -513,7 +513,7 @@ In code form this same graph could be constructed like this:
                      (remove-from-graph!
                        [_ g parent]
                        (if (f/none-or-single-user? vertex parent)
-                         (do (warn :remove-index-sel sel)
+                         (do (debug :remove-index-sel sel)
                              (f/disconnect-neighbor! index vertex)
                              (f/remove-vertex! g vertex)
                              true)
@@ -544,7 +544,7 @@ triple graph (or =[nil nil nil nil]= for quads).
      (add-query! g (fact-transform g) pattern opts))
     ([g ptx pattern opts]
      (let [pattern (transform ptx pattern)]
-       (if-let [q (cached g ::queries pattern)]
+       (if-let [q (and (empty? opts) (cached g ::queries pattern))]
          (do (debug :reuse-basic-query pattern) q)
          (let [[s p o] pattern
                sels (make-index-selections g pattern)
@@ -576,7 +576,7 @@ triple graph (or =[nil nil nil nil]= for quads).
                       (remove-from-graph!
                         [_ g parent]
                         (if (f/none-or-single-user? res parent)
-                          (do (warn :remove-query pattern)
+                          (do (debug :remove-query pattern)
                               (expire! g ::queries pattern)
                               (f/remove-vertex! g res)
                               (f/remove-vertex! g acc)
@@ -586,7 +586,9 @@ triple graph (or =[nil nil nil nil]= for quads).
                               false))))]
            (run! #(f/add-edge! g (result-vertex %) acc f/signal-forward nil) sels)
            (f/add-edge! g acc res f/signal-forward nil)
-           (cache! g ::queries pattern q))))))
+           (if-not (seq opts)
+             (cache! g ::queries pattern q)
+             q))))))
 #+END_SRC
 
 *** Parametric query
@@ -609,23 +611,27 @@ set only contains unique bindings of query variable =?s=.
     ([g pattern opts]
      (add-param-query! g (fact-transform g) pattern opts))
     ([g ptx pattern opts]
-     (add-param-query! g ptx identity pattern opts))
-    ([g ptx flt pattern opts]
      (let [pattern (transform ptx pattern)]
-       (if-let [q (cached g ::queries pattern)]
+       (if-let [q (and (empty? opts) (cached g ::queries pattern))]
          (do (debug :reuse-param-query pattern) q)
          (let [qvars?  (mapv qvar? pattern)
                raw     (mapv #(if-not (qvar? %) %) pattern)
                vmap    (bind-translator qvars? pattern)
                verify  (fact-verifier qvars? pattern)
-               res-tx  (if verify
-                         (comp (map #(if (verify %) (vmap %))) (filter flt))
-                         (comp (map vmap) (filter flt)))
-               res-tx  (comp res-tx (take (or (:limit opts) MAX_LIMIT)))
+               tx      (if verify
+                         (map #(if (verify %) (vmap %)))
+                         (map vmap))
+               tx      (comp tx (filter identity))
+               tx      (if-let [flt (:filter opts)]
+                         (comp tx (filter flt))
+                         tx)
+               tx      (if-let [lim (:limit opts)]
+                         (comp tx (take lim))
+                         tx)
                coll-fn (f/collect-pure
                         (fn [_ incoming]
                           (if-let [res (seq (peek incoming))]
-                            (into #{} res-tx res)
+                            (into #{} tx res)
                             #{})))
                sub-q   (add-query! g identity-transform raw {})
                result  (f/add-vertex!
@@ -653,7 +659,7 @@ set only contains unique bindings of query variable =?s=.
                          (remove-from-graph!
                            [_ g parent]
                            (if (f/none-or-single-user? result parent)
-                             (do (warn :remove-param-query pattern)
+                             (do (debug :remove-param-query pattern)
                                  (expire! g ::queries pattern)
                                  (f/remove-vertex! g result)
                                  (f/remove-from-graph! sub-q g result)
@@ -661,7 +667,9 @@ set only contains unique bindings of query variable =?s=.
                              (do (f/disconnect-neighbor! result parent)
                                  false))))]
            (f/add-edge! g (result-vertex sub-q) result f/signal-forward nil)
-           (cache! g ::queries pattern q))))))
+           (if-not (seq opts)
+             (cache! g ::queries pattern q)
+             q))))))
 #+END_SRC
 
 *** Query join
@@ -675,7 +683,13 @@ set only contains unique bindings of query variable =?s=.
            rhs-v  (result-vertex rhs)
            lhs-id (f/vertex-id lhs-v)
            rhs-id (f/vertex-id rhs-v)
-           limit  (or (:limit opts) MAX_LIMIT)
+           tx     (if-let [flt (:filter opts)]
+                    (filter flt))
+           tx     (if-let [lim (:limit opts)]
+                    (let [tx' (take lim)]
+                      (if tx (comp tx tx') tx'))
+                    tx)
+           cfn    (if tx #(into #{} tx (join-fn % %2)) join-fn)
            result (f/add-vertex!
                    g nil
                    {::f/collect-fn
@@ -684,7 +698,7 @@ set only contains unique bindings of query variable =?s=.
                             a (sig-map lhs-id)
                             b (sig-map rhs-id)]
                         (debug (f/vertex-id vertex) :join-sets a b)
-                        (f/set-value! vertex (join-fn a b limit))))
+                        (f/set-value! vertex (cfn a b))))
                     ::f/score-collect-fn score-collect-join
                     ::f/score-signal-fn  f/score-signal-with-new-edges})
            jq     (reify
@@ -708,7 +722,7 @@ set only contains unique bindings of query variable =?s=.
                     (remove-from-graph!
                       [_ g parent]
                       (if (f/none-or-single-user? result parent)
-                        (do (warn :remove-query-join)
+                        (do (debug :remove-query-join)
                             (f/remove-vertex! g result)
                             (f/remove-from-graph! lhs g result)
                             (f/remove-from-graph! rhs g result)
@@ -762,12 +776,19 @@ set only contains unique bindings of query variable =?s=.
   (defn add-query-union!
     [g queries opts]
     (assert (< 1 (count queries)) "min. 2 queries required")
-    (let [res (f/add-vertex!
+    (let [tx  (if-let [flt (:filter opts)]
+                (filter flt))
+          tx  (if-let [lim (:limit opts)]
+                (let [tx' (take lim)]
+                  (if tx (comp tx tx') tx'))
+                tx)
+          res (f/add-vertex!
                g nil
                {::f/collect-fn
                 (fn [vertex]
-                  (let [subs (vals (f/signal-map vertex))]
-                    (f/set-value! vertex (reduce #(if (seq %2) (into % %2) %) subs))))
+                  (let [subs (vals (f/signal-map vertex))
+                        res  (reduce #(if (seq %2) (into % %2) %) subs)]
+                    (f/set-value! vertex (if tx (into #{} tx res) res))))
                 ::f/score-signal-fn f/score-signal-with-new-edges})
           q   (reify
                 #?@(:clj
@@ -790,7 +811,7 @@ set only contains unique bindings of query variable =?s=.
                 (remove-from-graph!
                   [_ g parent]
                   (if (f/none-or-single-user? res parent)
-                    (do (warn :remove-query-union)
+                    (do (debug :remove-query-union)
                         (f/remove-vertex! g res)
                         (run! #(f/remove-from-graph! % g res) queries)
                         true)
@@ -899,7 +920,7 @@ min/max path lengths MUST be specified.
                  (remove-from-graph!
                    [_ g parent]
                    (if (f/none-or-single-user? res parent)
-                     (do (warn :remove-path-query)
+                     (do (debug :remove-path-query)
                          (f/remove-vertex! g res)
                          (f/remove-from-graph! q g res)
                          true)
@@ -1019,38 +1040,34 @@ TODO add reify
   (defn join
     "Based on clojure.set/join. Does not join when there're no shared
     keys and no key mapping, enforced result set limit, uses transients."
-    [xrel yrel limit]
+    [xrel yrel]
     (if (and (seq xrel) (seq yrel))
       (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
         (if (seq ks)
           (let [[r s] (if (<= (count xrel) (count yrel))
                         [xrel yrel]
                         [yrel xrel])
-                idx (index* r ks)
-                cnt (volatile! 0)]
+                idx (index* r ks)] 
             (persistent!
              (reduce
               (fn [ret x]
                 (let [found (idx (select-keys* x ks))]
                   (if found
-                    (if (<= (vreset! cnt (+ @cnt (count found))) limit)
-                      (reduce #(conj! % (conj %2 x)) ret found)
-                      (reduced (reduce #(conj! % (conj %2 x)) ret (take (- @cnt limit) found))))
+                    (reduce #(conj! % (conj %2 x)) ret found)
                     ret)))
               (transient #{}) s)))
           #{}))
       #{}))
 
-  ;; TODO enforce limit
   (defn join-optional
-    [a b limit]
+    [a b]
     (loop [old (transient #{}), new (transient #{}), kb b]
       (if kb
         (let [kb'       [(first kb)]
               [old new] (loop [old old, new new, ka a]
                           (if ka
                             (let [ka' (first ka)
-                                  j   (first (join [ka'] kb' limit))]
+                                  j   (first (join [ka'] kb'))]
                               (if j
                                 (recur (conj! old ka') (conj! new j) (next ka))
                                 (recur old new (next ka))))
@@ -1225,14 +1242,15 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 #+BEGIN_SRC clojure :noweb-ref inference
   (defn add-rule!
-    [g {:keys [id query patterns transform production collect-fn]}]
+    [g {:keys [id query patterns transform production collect-fn] :as opts}]
     (let [id      (or id (f/random-id))
           coll-fn (or collect-fn (collect-inference g production))
           query   (or query
-                      (let [tx (or transform (fact-transform g))]
+                      (let [tx (or transform (fact-transform g))
+                            q-opts (select-keys opts [:filter :limit])]
                         (if (< 1 (count patterns))
-                          (add-query-join! g tx patterns {})
-                          (add-param-query! g tx (first patterns) {}))))
+                          (add-query-join! g tx patterns q-opts)
+                          (add-param-query! g tx (first patterns) q-opts))))
           inf     (f/add-vertex! g #{} {::f/collect-fn coll-fn})
           rule    (reify
                     #?@(:clj
@@ -1255,7 +1273,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                     (remove-from-graph!
                       [_ g parent]
                       (if (f/none-or-single-user? inf parent)
-                        (do (warn :remove-rule id)
+                        (do (debug :remove-rule id)
                             (f/remove-vertex! g inf)
                             (f/remove-from-graph! query g inf)
                             true)
@@ -1314,13 +1332,15 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
       (if (> num (count (f/uncollected-signals vertex))) 0 1)))
 
   (defn- collect-basic-query-results
-    [g {:keys [filter limit]}]
-    (let [ftx    (fact-transform g)
-          agg-tx (comp (map #(f/vertex-for-id g %))
-                       (clojure.core/filter (or filter identity))
-                       (take (or limit MAX_LIMIT))
-                       (map deref)
-                       (map #(untransform ftx %)))]
+    [g opts]
+    (let [ftx (fact-transform g)
+          tx  (map #(untransform ftx @(f/vertex-for-id g %)))
+          tx  (if-let [flt (:filter opts)]
+                (comp tx (filter flt))
+                tx)
+          tx  (if-let [lim (:limit opts)]
+                (comp tx (take lim))
+                tx)]
       (f/collect-pure
        (fn [_ incoming]
          (let [res (vals (peek incoming))]
@@ -1330,7 +1350,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                   (into #{} (map #(disj % nil)))
                   (sort-by count)
                   (reduce set/intersection)
-                  (into #{} agg-tx))
+                  (into #{} tx))
              #{}))))))
 
   (defn- score-collect-join
