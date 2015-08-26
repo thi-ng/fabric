@@ -32,14 +32,16 @@ graph setup:
   - Joins
   - Optional joins
   - Unions
-  - Arbitrary filters
-  - Arbitrary result grouping
+  - Arbitrary filters at any query level
+  - Nested result sorting
+  - Nested result grouping
   - Bounded length path queries (min/max limits)
 - Extensive query & sub-query reuse/caching
-- Intelligent recursive query removal
+- Intelligent recursive query tree removal
+- Map based query expression DSL (EDN serializable)
 - Queries are only computed once, results are cached and updated
   automatically when underlying fact set is changing
-- Rule based inferencing
+- Rule based inferencing based on any query
 - RDF N-Triple parser
 
 ** Status
@@ -55,6 +57,7 @@ programming FTW!
 * Namespaces
 
 - [[./src/core.org][thi.ng.fabric.facts.core]]
+- [[./src/dsl.org][thi.ng.fabric.facts.dsl]]
 - [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]]
 
 * Tests
