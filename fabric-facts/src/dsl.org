@@ -4,8 +4,6 @@
 
 - add support for path queries
 - add result aggregation
-- EDN compatible filter expressions
-- translate group-by and order expressions
 
 ** Examples
 
@@ -22,13 +20,37 @@
 ** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref dsl
+  (defn compile-query-filter
+    [flt] (if (fn? flt) flt (compile-expr flt)))
+
+  (defn compile-result-order
+    [order]
+    (if (fn? order)
+      order
+      (if (sequential? order)
+        (fn [r] (reduce #(conj % (get r %2)) [] order))
+        (fn [r] (get r order)))))
+
+  (defn compile-result-grouping
+    [group]
+    (if (fn? group)
+      group
+      (if (sequential? group)
+        (fn [r] (reduce #(conj % (get r %2)) [] group))
+        (fn [r] [(get r group)]))))
+
+  (defn sub-query-options
+    [{:keys [filter limit]}]
+    {:filter (if filter (compile-query-filter filter))
+     :limit  limit})
+
   (defmulti compile-sub-query
     (fn [g parent q spec] (some #{:where :optional :union} (keys q))))
 
   (defmethod compile-sub-query :where
     [g parent q spec]
     (let [pat  (:where q)
-          opts (select-keys q [:filter :limit])
+          opts (sub-query-options q)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -39,7 +61,7 @@
   (defmethod compile-sub-query :optional
     [g parent q spec]
     (let [pat  (:optional q)
-          opts (select-keys q [:filter :limit])
+          opts (sub-query-options q)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -50,7 +72,7 @@
   (defmethod compile-sub-query :union
     [g parent q spec]
     (let [pat  (:union q)
-          opts (select-keys q [:filter :limit])
+          opts (sub-query-options q)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -68,12 +90,60 @@
 
   (defn compile-select-qvars
     [result g spec]
-    (ff/add-query-result! g spec result))
+    (let [spec (cond-> spec
+                 (:filter spec)   (update :filter compile-query-filter)
+                 (:order spec)    (update :order compile-result-order)
+                 (:group-by spec) (update :group-by compile-result-grouping))]
+      (ff/add-query-result! g spec result)))
 
   (defn add-query-from-spec!
     [g spec]
     (-> (compile-query g spec)
         (compile-select-qvars g spec)))
+#+END_SRC
+
+** Expressions
+
+#+BEGIN_SRC clojure :noweb-ref expr
+  (def vararg-ops
+    {:= = :< < :> > :<= <= :>= >= :!= not=
+     :+ + :- - :* * :div /})
+
+  (defmulti compile-expr
+    (fn [expr]
+      (let [op (cond
+                 (sequential? expr) (let [op (first expr)] (if (vararg-ops op) :varargs op))
+                 (ff/qvar? expr)    :qvar
+                 :else              :const)]
+        (prn op)
+        op)))
+
+  (defmethod compile-expr :const
+    [const] (fn [_] const))
+
+  (defmethod compile-expr :qvar
+    [qvar] #(% qvar))
+
+  (defmethod compile-expr :varargs
+    [[op & more]]
+    (let [op   (vararg-ops op)
+          args (mapv compile-expr more)]
+      (fn [res] (apply op (map #(% res) args)))))
+
+  (defmethod compile-expr :and
+    [[_ & more]]
+    (let [args (mapv compile-expr more)]
+      (fn [res] (every? #(% res) args))))
+
+  (defmethod compile-expr :or
+    [[_ & more]]
+    (let [args (mapv compile-expr more)]
+      (fn [res] (some #(% res) args))))
+
+  (defmethod compile-expr :match
+    [[_ re x]]
+    (let [x (compile-expr x)]
+      (fn [res] (re-find re (x res)))))
 #+END_SRC
 
 ** Complete namespace definition
@@ -97,7 +167,7 @@
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
 
-  <<helpers>>
+  <<expr>>
 
   <<dsl>>
 #+END_SRC

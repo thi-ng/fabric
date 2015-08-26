@@ -904,7 +904,7 @@ min/max path lengths MUST be specified.
 #+BEGIN_SRC clojure :noweb-ref query-helpers
   (def ^:dynamic *auto-qvar-prefix* "?__q")
 
-  (defn- qvar?
+  (defn qvar?
     "Returns true, if x is a qvar (a symbol prefixed with '?')"
     [x] (and (symbol? x) (= \? (.charAt ^String (name x) 0))))
 
@@ -1039,7 +1039,7 @@ min/max path lengths MUST be specified.
     (fn
       ([] {})
       ([res] res)
-      ([res input] (update res (grp input) #(conj (or % []) input)))))
+      ([res input] (update-in res (grp input) #(conj (or % []) input)))))
 
   (defn remove-recursively
     [g res parent deps type]

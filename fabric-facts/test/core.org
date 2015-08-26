@@ -121,27 +121,31 @@ c -> e [label="p2"];
   (deftest test-qspec-1
     (let [g  (ff/fact-graph)
           q1 (dsl/add-query-from-spec!
-              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
-                     {:optional '[[?a q ?aq]]}
-                     {:optional '[[?b q ?bq]]}]})
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}
+                      {:optional [[?a q ?aq]]}
+                      {:optional [[?b q ?bq]]}]})
           q2 (dsl/add-query-from-spec!
-              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
-                     {:optional '[[?a q ?aq]]}
-                     {:optional '[[?b q ?bq]]}]
-                 :filter #(= 'c (% '?a))})
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}
+                      {:optional [[?a q ?aq]]}
+                      {:optional [[?b q ?bq]]}]
+                  :filter (:= c ?a)})
           q3 (dsl/add-query-from-spec!
-              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
-                     {:optional '[[?a q ?aq]]}
-                     {:optional '[[?b q ?bq]]}]
-                 :filter #(= 'a (% '?a))
-                 :limit 1})
+              g '{:q [{:where [[?a p ?b] [?b p ?c]] :filter (:= a ?a)}
+                      {:optional [[?a q ?aq]]}
+                      {:optional [[?b q ?bq]]}]
+                  :limit 1})
           q4 (dsl/add-query-from-spec!
-              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
-                     {:optional '[[?a q ?aq]]}
-                     {:optional '[[?b q ?bq]]}]
-                 :filter #(= 'a (% '?a))
-                 :order #(% '?c)
-                 :select '?c})]
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}
+                      {:optional [[?a q ?aq]]}
+                      {:optional [[?b q ?bq]]}]
+                  :filter (:= a ?a)
+                  :order ?c
+                  :select ?c})
+          q5 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}]
+                  :order ?c
+                  :group-by [?a ?b]
+                  :select :*})]
       (run! #(ff/add-fact! g %)
             '[[a p b]
               [a p c]
@@ -166,7 +170,12 @@ c -> e [label="p2"];
            (first @q3)))
       (is (== 3 (count @q4)))
       (is (= '[{?c d} {?c e} {?c e}] @q4))
-      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4])
+      (is (= '{a {b [{?a a ?b b ?c d} {?a a ?b b ?c e}]
+                  c [{?a a ?b c ?c e}]}
+               c {e [{?a c ?b e ?c f}]}
+               b {e [{?a b ?b e ?c f}]}}
+             @q5))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
       (is (== (+ 3 8) (count (f/vertices g))))))
 #+END_SRC
 
