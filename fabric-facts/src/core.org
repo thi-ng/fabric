@@ -20,7 +20,7 @@
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
          - [[#path-queries][Path queries]]
-         - [[#todo-query-result-modifiers][TODO Query result modifiers]]
+         - [[#query-result-modifiers][Query result modifiers]]
          - [[#query-helpers][Query helpers]]
      - [[#rulebased-inference][Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
@@ -721,14 +721,7 @@ set only contains unique bindings of query variable =?s=.
                       [_ g] (f/remove-from-graph! _ g nil))
                     (remove-from-graph!
                       [_ g parent]
-                      (if (f/none-or-single-user? result parent)
-                        (do (debug :remove-query-join)
-                            (f/remove-vertex! g result)
-                            (f/remove-from-graph! lhs g result)
-                            (f/remove-from-graph! rhs g result)
-                            true)
-                        (do (f/disconnect-neighbor! result parent)
-                            false))))]
+                      (remove-recursively g result parent [lhs rhs] :remove-query-join)))]
        (f/add-edge! g lhs-v result f/signal-forward nil)
        (f/add-edge! g rhs-v result f/signal-forward nil)
        jq)))
@@ -810,13 +803,7 @@ set only contains unique bindings of query variable =?s=.
                   [_ g] (f/remove-from-graph! _ g nil))
                 (remove-from-graph!
                   [_ g parent]
-                  (if (f/none-or-single-user? res parent)
-                    (do (debug :remove-query-union)
-                        (f/remove-vertex! g res)
-                        (run! #(f/remove-from-graph! % g res) queries)
-                        true)
-                    (do (f/disconnect-neighbor! res parent)
-                        false))))]
+                  (remove-recursively g res parent queries :remove-query-union)))]
       (run! #(f/add-edge! g (result-vertex %) res f/signal-forward nil) queries)
       q))
 #+END_SRC
@@ -919,52 +906,107 @@ min/max path lengths MUST be specified.
                    [_ g] (f/remove-from-graph! _ g nil))
                  (remove-from-graph!
                    [_ g parent]
-                   (if (f/none-or-single-user? res parent)
-                     (do (debug :remove-path-query)
-                         (f/remove-vertex! g res)
-                         (f/remove-from-graph! q g res)
-                         true)
-                     (do (f/disconnect-neighbor! res parent)
-                         false))))]
+                   (remove-recursively g res parent [q] :remove-path-query)))]
        (f/add-edge! g (result-vertex q) res f/signal-forward nil)
        pq)))
 #+END_SRC
 
-*** TODO Query result modifiers
-
-TODO add reify
+*** Query result modifiers
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-qvar-selection!
-    [g select result]
+    [g select q]
     (if (= :* select)
-      result
+      q
       (let [select (if (sequential? select) select [select])
             tx     (comp (map #(select-keys % select)) (filter seq))
-            vertex (f/add-vertex!
+            res    (f/add-vertex!
                     g nil
                     {::f/collect-fn      (collect-into-set tx)
-                     ::f/score-signal-fn f/score-signal-with-new-edges})]
-        (f/add-edge! g (result-vertex result) vertex f/signal-forward nil)
-        vertex)))
+                     ::f/score-signal-fn f/score-signal-with-new-edges})
+            sel    (reify
+                     #?@(:clj
+                          [clojure.lang.IDeref (deref [_] @res)]
+                          :cljs
+                          [IDeref (-deref [_] @res)])
+                     IFactQuery
+                     (raw-pattern
+                       [_] nil)
+                     (query-spec
+                       [_]) ;; TODO
+                     IQueryResult
+                     (result-vertex
+                       [_] res)
+                     f/IGraphComponent
+                     (add-to-graph!
+                       [_ g] (err/unsupported!))
+                     (remove-from-graph!
+                       [_ g] (f/remove-from-graph! _ g nil))
+                     (remove-from-graph!
+                       [_ g parent]
+                       (remove-recursively g res parent [q] :remove-qvar-selection)))]
+        (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+        sel)))
 
   (defn add-query-filter!
     [g flt q]
     (let [res (f/add-vertex!
                g nil
                {::f/collect-fn      (collect-into-set (filter flt))
-                ::f/score-signal-fn f/score-signal-with-new-edges})]
+                ::f/score-signal-fn f/score-signal-with-new-edges})
+          flt (reify
+                #?@(:clj
+                     [clojure.lang.IDeref (deref [_] @res)]
+                     :cljs
+                     [IDeref (-deref [_] @res)])
+                IFactQuery
+                (raw-pattern
+                  [_] nil)
+                (query-spec
+                  [_]) ;; TODO
+                IQueryResult
+                (result-vertex
+                  [_] res)
+                f/IGraphComponent
+                (add-to-graph!
+                  [_ g] (err/unsupported!))
+                (remove-from-graph!
+                  [_ g] (f/remove-from-graph! _ g nil))
+                (remove-from-graph!
+                  [_ g parent]
+                  (remove-recursively g res parent [q] :remove-query-filter)))]
       (f/add-edge! g (result-vertex q) res f/signal-forward nil)
-      res))
+      flt))
 
   (defn add-query-group-by!
     [g gfn q]
     (let [res (f/add-vertex!
                g nil
                {::f/collect-fn      (f/collect-pure (fn [_ in] (group-by gfn (peek in))))
-                ::f/score-signal-fn f/score-signal-with-new-edges})]
+                ::f/score-signal-fn f/score-signal-with-new-edges})
+          grp (reify
+                #?@(:clj
+                     [clojure.lang.IDeref (deref [_] @res)]
+                     :cljs
+                     [IDeref (-deref [_] @res)])
+                IFactQuery
+                (raw-pattern
+                  [_] nil)
+                (query-spec
+                  [_]) ;; TODO
+                IQueryResult
+                (result-vertex
+                  [_] res)
+                f/IGraphComponent
+                (add-to-graph!
+                  [_ g] (err/unsupported!))
+                (remove-from-graph!
+                  [_ g] (f/remove-from-graph! _ g nil))
+                (remove-from-graph!
+                  [_ g parent]
+                  (remove-recursively g res parent [q] :remove-group-by)))]
       (f/add-edge! g (result-vertex q) res f/signal-forward nil)
-      res))
+      grp))
 
   (defn add-counter!
     [g src]
@@ -1384,6 +1426,16 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn collect-into-set
     [tx] (f/collect-pure (fn [_ in] (into #{} tx (peek in)))))
+
+  (defn remove-recursively
+    [g res parent deps type]
+    (if (f/none-or-single-user? res parent)
+      (do (debug type)
+          (f/remove-vertex! g res)
+          (run! #(f/remove-from-graph! % g res) deps)
+          true)
+      (do (f/disconnect-neighbor! res parent)
+          false)))
 #+END_SRC
 
 ** Graph logging
