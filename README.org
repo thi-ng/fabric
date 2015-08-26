@@ -271,9 +271,15 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 *** Automatically updating fact graph queries with rule based inferencing
 
+Note: This example uses two forms of queries: low-level and the more
+userfriendly and EDN serializable query specs via the
+[[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace. The query specs are compiled into
+these low-level forms.
+
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
+  (require '[thi.ng.fabric.facts.dsl :as fq])
 
   ;; turn off verbose logging
 
@@ -324,7 +330,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   ;; Define a query returning *all* facts (nil catches any subject, pred, object)
 
-  (def all (ff/add-query! g [nil nil nil]))
+  (def all (ff/add-query! g [nil nil nil] {}))
 
   ;; Add facts & rules to graph
 
@@ -340,7 +346,7 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; The `all` var is a defrecord holding all related process
   ;; vertices of the query. Its result can obtained by dereferencing...
 
-  (sort @all)
+  (prn (sort @all))
   ;; ([ancestor domain person]
   ;;  [ancestor range person]
   ;;  [ancestor type transitive-prop]
@@ -362,10 +368,10 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
   ;; Add another query, this time with variable bindings
 
-  (def people (ff/add-param-query! g '[?p type person]))
+  (def people (ff/add-param-query! g '[?p type person] {}))
   (f/execute! ctx)
 
-  @people
+  (prn @people)
   ;; #{{?p toxi} {?p noah} {?p ingo}}
 
   ;; queries are composable:
@@ -373,34 +379,31 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; people with age < 20
 
   (def children
-    (->> (ff/add-param-query! g '[?p age ?age])
-         (ff/add-join! g people)
-         (ff/add-query-filter! g #(< (% '?age) 20))))
+    (fq/add-query-from-spec!
+     g {:q [{:where '[[?p age ?age] [?p type person]]
+             :filter #(< (% '?age) 20)}]}))
 
   (ff/add-fact! g '[noah age 13])
   (ff/add-fact! g '[toxi age 40])
 
   (f/execute! ctx)
-  @children
+  (prn @children)
   ;; #{{?p noah ?age 13}}
 
   ;; join queries can also be constructed directly:
   ;; a query returning all creative-works w/ their authors & urls
   (def projects
     (ff/add-query-join!
-     g
-     '[?prj type creative-work]
-     '[?prj url ?homepage]
-     '[?author author ?prj]))
+     g '[[?prj type creative-work] [?prj url ?uri] [?auth author ?prj]] {}))
 
   (f/execute! ctx)
-  @projects
-  ;; #{{?prj fabric, ?homepage "http://thi.ng/fabric", ?author toxi}}
+  (prn @projects)
+  ;; #{{?prj fabric, ?uri "http://thi.ng/fabric", ?auth toxi}}
 
   ;; add result transformations (e.g. a counter)
   (def num-people (ff/add-counter! g (ff/result-vertex people)))
   (f/execute! ctx)
-  @num-people
+  (prn @num-people)
   ;; 3
 #+END_SRC
 
