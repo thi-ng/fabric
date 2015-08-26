@@ -1,0 +1,77 @@
+* Namespace: thi.ng.fabric.facts.dsl
+
+#+BEGIN_SRC clojure
+  {:select   '[?a ?b ...]
+   :q        [{:where '[[?res "dct:title" ?t] [?res "rdf:type" ?type]]}
+              {:optional '[[?res "ea:schema" ?schema]]}]
+   :filter   '[:or [:= ?res "ea:toxi"] [:= ?type "foaf:Person"]]
+   :group-by '[?res]}
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref dsl
+  (defmulti parse-sub-query
+    (fn [g parent q spec] (some #{:where :optional :union} (keys q))))
+
+  (defmethod parse-sub-query :where
+    [g parent q spec]
+    (let [q (ff/add-query-join! g (:where q) (select-keys q [:filter :limit]))]
+      (if parent
+        (ff/add-join! g parent q {})
+        q)))
+
+  (defmethod parse-sub-query :optional
+    [g parent q spec]
+    (let [q (ff/add-query-join! g (:optional q) (select-keys q [:filter :limit]))]
+      (if parent
+        (ff/add-join! g ff/join-optional parent q {})
+        q)))
+
+  (defmethod parse-sub-query :union
+    [g parent q spec]
+    (let [q (ff/add-query-join! g (:union q) (select-keys q [:filter :limit]))]
+      (if parent
+        (ff/add-query-union! g [parent q] {})
+        q)))
+
+  (defn parse-query*
+    [g {:keys [q] :as spec}]
+    (reduce
+     (fn [acc sq] (parse-sub-query g acc sq spec))
+     (parse-sub-query g nil (first q) spec)
+     (rest q)))
+
+  (defn select-qvars
+    [result g select]
+    (ff/add-qvar-selection! g select result))
+
+  (defn parse-query
+    [g {:keys [select q] :as spec}]
+    (cond-> (parse-query* g spec)
+      select (select-qvars g select)))
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/dsl.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.facts.dsl
+    #?@(:clj
+        [(:require
+          [thi.ng.fabric.core :as f]
+          [thi.ng.fabric.facts.core :as ff]
+          [clojure.set :as set]
+          [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
+          [taoensso.timbre :refer [debug info warn]])]
+        :cljs
+        [(:require-macros
+          [cljs.core.async.macros :refer [go go-loop]]
+          [cljs-log.core :refer [debug info warn]])
+         (:require
+          [thi.ng.fabric.core :as f]
+          [thi.ng.fabric.facts.core :as ff]
+          [clojure.set :as set]
+          [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
+
+  <<helpers>>
+
+  <<dsl>>
+#+END_SRC
