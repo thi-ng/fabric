@@ -2,89 +2,9 @@
 
 * thi.ng.fabric.facts.test.core
 
-** Facts, pattern based queries & rule based inferencing
-
-*** Inference rules
-
-#+BEGIN_SRC clojure :noweb-ref const
-  (def logger
-    #?(:clj
-       #(spit "fact-log.edn" (str (pr-str %) "\n") :append true)
-       :cljs
-       #(.log js/console (pr-str %))))
-
-  (def default-facts
-    '[[knows type symmetric-prop]
-      [knows domain person]
-      [author domain person]
-      [author range creative-work]
-      [parent sub-prop-of ancestor]
-      [ancestor type transitive-prop]
-      [ancestor domain person]
-      [ancestor range person]
-      [toxi author fabric]
-      [fabric type project]
-      [toxi modified 23]
-      [toxi modified 42]])
-
-  (def inference-rules
-    {:symmetric  ['[[?a ?prop ?b] [?prop type symmetric-prop]]
-                  (fn [g _ {:syms [?a ?prop ?b]}] (ff/add-fact! g [?b ?prop ?a]))]
-
-     :domain     ['[[?a ?prop nil] [?prop domain ?d]]
-                  (fn [g _ {:syms [?a ?prop ?d]}] (ff/add-fact! g [?a 'type ?d]))]
-
-     :range      ['[[nil ?prop ?a] [?prop range ?r]]
-                  (fn [g _ {:syms [?a ?prop ?r]}] (ff/add-fact! g [?a 'type ?r]))]
-
-     :transitive ['[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
-                  (fn [g _ {:syms [?a ?prop ?c]}] (ff/add-fact! g [?a ?prop ?c]))]
-
-     :sub-prop   ['[[?a ?prop ?b] [?prop sub-prop-of ?super]]
-                  (fn [g _ {:syms [?a ?super ?b]}] (ff/add-fact! g [?a ?super ?b]))]
-
-     :modified   ['[[?a modified ?t1] [?a modified ?t2]]
-                  (fn [g _ {:syms [?a ?t1 ?t2]}]
-                    (when-not (= ?t1 ?t2)
-                      (ff/remove-fact! g [?a 'modified (min ?t1 ?t2)])))]})
-#+END_SRC
-
-*** Helpers functions
-
-#+BEGIN_SRC clojure :noweb-ref helpers
-  (defn test-graph3
-    [opts]
-    (let [g            (ff/fact-graph opts)
-          ;;log          (ff/add-fact-graph-logger g logger)
-          toxi         (ff/add-query! g ['toxi nil nil] {})
-          types        (ff/add-query! g [nil 'type nil] {})
-          projects     (ff/add-query! g [nil 'type 'project] {})
-          knows        (ff/add-query! g [nil 'knows nil] {})
-          all          (ff/add-query! g [nil nil nil] {})
-          num-projects (ff/add-counter! g (ff/result-vertex projects))
-          num-types    (ff/add-counter! g (ff/result-vertex types))
-          knows-pq     (ff/add-param-query! g '[?s knows ?o] {})
-          jq           (ff/add-query-join! g '[[?p author ?prj] [?prj type project] [?p type person]] {})
-          tq           (ff/add-query-join! g '[[?p author ?prj] [?prj tag ?t]] {})]
-      (run!
-       (fn [[id [q prod]]] (ff/add-rule! g {:id id :patterns q :production prod})) inference-rules)
-      (run!
-       #(ff/add-fact! g %) default-facts)
-      {:g            g
-       ;;:log          log
-       :all          all
-       :toxi         toxi
-       :types        types
-       :projects     projects
-       :knows        knows
-       :knows-pq     knows-pq
-       :jq           jq
-       :tq           tq
-       :num-projects num-projects
-       :num-types    num-types}))
-#+END_SRC
-
 ** Tests
+
+*** Basic queries
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-query-basic3
@@ -109,6 +29,8 @@
       (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
+
+*** Join queries
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-query-join3
@@ -142,6 +64,8 @@
       (run! #(f/remove-from-graph! % g) [jq1 jq2 jq3 jq4 jq5 jq6 jq7])
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
+
+*** Path queries
 
 #+BEGIN_SRC dot :tangle ../babel/test-paths.dot
 digraph g {
@@ -187,96 +111,227 @@ c -> e [label="p2"];
       (warn :pq4 @pq4)
       (warn :pq5 @pq5)
       (warn :pq6 @pq6)
-      (f/remove-from-graph! pq1 g)
-      (f/remove-from-graph! pq2 g)
-      (f/remove-from-graph! pq3 g)
-      (f/remove-from-graph! pq4 g)
-      (f/remove-from-graph! pq5 g)
-      (f/remove-from-graph! pq6 g)
+      (run! #(f/remove-from-graph! % g) [pq1 pq2 pq3 pq4 pq5 pq6])
       (is (== (+ 3 5) (count (f/vertices g))))))
 #+END_SRC
 
-#+BEGIN_SRC clojure :noweb-ref tests
-  (defn test-sync*
-    [opts]
-    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
-          ctx (f/sync-execution-context {:graph g})
-          res (f/execute! ctx)]
-      (warn :result res)
-      (warn (sort @all))
-      (run!
-       #(ff/add-fact! g %)
-       '[[toxi parent noah]
-         [ingo parent toxi]
-         [geom type project]
-         [toxi author geom]
-         [toxi knows noah]
-         [geom tag clojure]
-         [fabric tag clojure]])
-      (warn :result2 (f/execute! ctx))
-      (warn :all (sort @all))
-      (warn :knows @knows-pq)
-      (warn :jq @jq)
-      (warn :tq @tq)
-      (f/signal! (ff/remove-fact! g '[geom tag clojure]) f/sync-vertex-signal)
-      (f/signal! (ff/remove-fact! g '[fabric tag clojure]) f/sync-vertex-signal)
-      (warn :result3 (f/execute! ctx))
-      (warn :all @all)
-      (warn :jq @jq)
-      (warn :tq @tq)
-      ;;(ff/remove-fact-graph-logger log)
-      (assoc spec :ctx ctx)))
-
-  (deftest test-sync-default
-    (test-sync* {}))
-
-  (deftest test-sync-gi-ftx
-    (test-sync* {:transform (ff/combine-transforms (ff/global-index-transform) 3)}))
-#+END_SRC
+*** Queries from spec & result transformations
 
 #+BEGIN_SRC clojure :noweb-ref tests
-  (defn test-async*
-    [opts]
-    (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
-          ctx      (f/async-execution-context {:graph g})
-          ctx-chan (f/execute! ctx)
-          notify   (chan)]
-      (go
-        (let [res (<! ctx-chan)]
-          (warn :result res)
-          (warn (sort @all))
-          (run!
-           #(ff/add-fact! g %)
-           '[[toxi parent noah]
-             [ingo parent toxi]
-             [geom type project]
-             [toxi author geom]
-             [toxi knows noah]
-             [geom tag clojure]
-             [fabric tag clojure]])
-          (f/notify! ctx)
-          (let [res (<! ctx-chan)]
-            (warn :result2 res)
-            (warn :all (sort @all))
-            (warn :knows @knows-pq)
-            (warn :jq @jq)
-            (warn :tq @tq)
-            (ff/remove-fact! g '[geom tag clojure])
-            (ff/remove-fact! g '[fabric tag clojure])
-            (f/notify! ctx)
-            (let [res (<! ctx-chan)]
-              (warn :result3 res)
-              (warn :jq @jq)
-              (warn :tq @tq)
-              (f/stop! ctx)
-              ;;(ff/remove-fact-graph-logger log)
-              (warn :done)
-              (>! notify :ok)))))
-      #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))
-      (assoc spec :ctx ctx)))
-
-  #?(:clj (deftest test-async (test-async* {})))
+  (deftest test-qspec-1
+    (let [g  (ff/fact-graph)
+          q1 (dsl/add-query-from-spec!
+              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
+                     {:optional '[[?a q ?aq]]}
+                     {:optional '[[?b q ?bq]]}]})
+          q2 (dsl/add-query-from-spec!
+              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
+                     {:optional '[[?a q ?aq]]}
+                     {:optional '[[?b q ?bq]]}]
+                 :filter #(= 'c (% '?a))})
+          q3 (dsl/add-query-from-spec!
+              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
+                     {:optional '[[?a q ?aq]]}
+                     {:optional '[[?b q ?bq]]}]
+                 :filter #(= 'a (% '?a))
+                 :limit 1})
+          q4 (dsl/add-query-from-spec!
+              g {:q [{:where '[[?a p ?b] [?b p ?c]]}
+                     {:optional '[[?a q ?aq]]}
+                     {:optional '[[?b q ?bq]]}]
+                 :filter #(= 'a (% '?a))
+                 :order #(% '?c)
+                 :select '?c})]
+      (run! #(ff/add-fact! g %)
+            '[[a p b]
+              [a p c]
+              [b p d]
+              [b p e]
+              [c p e]
+              [e p f]
+              [a q aa]
+              [c q cc]])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= '#{{?a a, ?b b, ?c e, ?aq aa}
+                {?a a, ?b c, ?c e, ?aq aa, ?bq cc}
+                {?a a, ?b b, ?c d, ?aq aa}
+                {?a c, ?b e, ?c f, ?aq cc}
+                {?a b, ?b e, ?c f}}
+             @q1))
+      (is (= '#{{?a c, ?b e, ?c f, ?aq cc}} @q2))
+      (is (== 1 (count @q3)))
+      (is ('#{{?a a, ?b b, ?c e, ?aq aa}
+              {?a a, ?b c, ?c e, ?aq aa, ?bq cc}
+              {?a a, ?b b, ?c d, ?aq aa}}
+           (first @q3)))
+      (is (== 3 (count @q4)))
+      (is (= '[{?c d} {?c e} {?c e}] @q4))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4])
+      (is (== (+ 3 8) (count (f/vertices g))))))
 #+END_SRC
+
+*** Combined example w/ rule based inferencing
+**** Inference rules
+
+ #+BEGIN_SRC clojure :noweb-ref const
+   (def logger
+     #?(:clj
+        #(spit "fact-log.edn" (str (pr-str %) "\n") :append true)
+        :cljs
+        #(.log js/console (pr-str %))))
+
+   (def default-facts
+     '[[knows type symmetric-prop]
+       [knows domain person]
+       [author domain person]
+       [author range creative-work]
+       [parent sub-prop-of ancestor]
+       [ancestor type transitive-prop]
+       [ancestor domain person]
+       [ancestor range person]
+       [toxi author fabric]
+       [fabric type project]
+       [toxi modified 23]
+       [toxi modified 42]])
+
+   (def inference-rules
+     {:symmetric  ['[[?a ?prop ?b] [?prop type symmetric-prop]]
+                   (fn [g _ {:syms [?a ?prop ?b]}] (ff/add-fact! g [?b ?prop ?a]))]
+
+      :domain     ['[[?a ?prop nil] [?prop domain ?d]]
+                   (fn [g _ {:syms [?a ?prop ?d]}] (ff/add-fact! g [?a 'type ?d]))]
+
+      :range      ['[[nil ?prop ?a] [?prop range ?r]]
+                   (fn [g _ {:syms [?a ?prop ?r]}] (ff/add-fact! g [?a 'type ?r]))]
+
+      :transitive ['[[?a ?prop ?b] [?b ?prop ?c] [?prop type transitive-prop]]
+                   (fn [g _ {:syms [?a ?prop ?c]}] (ff/add-fact! g [?a ?prop ?c]))]
+
+      :sub-prop   ['[[?a ?prop ?b] [?prop sub-prop-of ?super]]
+                   (fn [g _ {:syms [?a ?super ?b]}] (ff/add-fact! g [?a ?super ?b]))]
+
+      :modified   ['[[?a modified ?t1] [?a modified ?t2]]
+                   (fn [g _ {:syms [?a ?t1 ?t2]}]
+                     (when-not (= ?t1 ?t2)
+                       (ff/remove-fact! g [?a 'modified (min ?t1 ?t2)])))]})
+ #+END_SRC
+
+**** Helpers functions
+
+ #+BEGIN_SRC clojure :noweb-ref helpers
+   (defn test-graph3
+     [opts]
+     (let [g            (ff/fact-graph opts)
+           ;;log          (ff/add-fact-graph-logger g logger)
+           toxi         (ff/add-query! g ['toxi nil nil] {})
+           types        (ff/add-query! g [nil 'type nil] {})
+           projects     (ff/add-query! g [nil 'type 'project] {})
+           knows        (ff/add-query! g [nil 'knows nil] {})
+           all          (ff/add-query! g [nil nil nil] {})
+           num-projects (ff/add-counter! g (ff/result-vertex projects))
+           num-types    (ff/add-counter! g (ff/result-vertex types))
+           knows-pq     (ff/add-param-query! g '[?s knows ?o] {})
+           jq           (ff/add-query-join! g '[[?p author ?prj] [?prj type project] [?p type person]] {})
+           tq           (ff/add-query-join! g '[[?p author ?prj] [?prj tag ?t]] {})]
+       (run!
+        (fn [[id [q prod]]] (ff/add-rule! g {:id id :patterns q :production prod})) inference-rules)
+       (run!
+        #(ff/add-fact! g %) default-facts)
+       {:g            g
+        ;;:log          log
+        :all          all
+        :toxi         toxi
+        :types        types
+        :projects     projects
+        :knows        knows
+        :knows-pq     knows-pq
+        :jq           jq
+        :tq           tq
+        :num-projects num-projects
+        :num-types    num-types}))
+ #+END_SRC
+
+ #+BEGIN_SRC clojure :noweb-ref tests
+   (defn test-sync*
+     [opts]
+     (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
+           ctx (f/sync-execution-context {:graph g})
+           res (f/execute! ctx)]
+       (warn :result res)
+       (warn (sort @all))
+       (run!
+        #(ff/add-fact! g %)
+        '[[toxi parent noah]
+          [ingo parent toxi]
+          [geom type project]
+          [toxi author geom]
+          [toxi knows noah]
+          [geom tag clojure]
+          [fabric tag clojure]])
+       (warn :result2 (f/execute! ctx))
+       (warn :all (sort @all))
+       (warn :knows @knows-pq)
+       (warn :jq @jq)
+       (warn :tq @tq)
+       (f/signal! (ff/remove-fact! g '[geom tag clojure]) f/sync-vertex-signal)
+       (f/signal! (ff/remove-fact! g '[fabric tag clojure]) f/sync-vertex-signal)
+       (warn :result3 (f/execute! ctx))
+       (warn :all @all)
+       (warn :jq @jq)
+       (warn :tq @tq)
+       ;;(ff/remove-fact-graph-logger log)
+       (assoc spec :ctx ctx)))
+
+   (deftest test-sync-default
+     (test-sync* {}))
+
+   (deftest test-sync-gi-ftx
+     (test-sync* {:transform (ff/combine-transforms (ff/global-index-transform) 3)}))
+ #+END_SRC
+
+ #+BEGIN_SRC clojure :noweb-ref tests
+   (defn test-async*
+     [opts]
+     (let [{:keys [g log all knows-pq jq tq] :as spec} (test-graph3 opts)
+           ctx      (f/async-execution-context {:graph g})
+           ctx-chan (f/execute! ctx)
+           notify   (chan)]
+       (go
+         (let [res (<! ctx-chan)]
+           (warn :result res)
+           (warn (sort @all))
+           (run!
+            #(ff/add-fact! g %)
+            '[[toxi parent noah]
+              [ingo parent toxi]
+              [geom type project]
+              [toxi author geom]
+              [toxi knows noah]
+              [geom tag clojure]
+              [fabric tag clojure]])
+           (f/notify! ctx)
+           (let [res (<! ctx-chan)]
+             (warn :result2 res)
+             (warn :all (sort @all))
+             (warn :knows @knows-pq)
+             (warn :jq @jq)
+             (warn :tq @tq)
+             (ff/remove-fact! g '[geom tag clojure])
+             (ff/remove-fact! g '[fabric tag clojure])
+             (f/notify! ctx)
+             (let [res (<! ctx-chan)]
+               (warn :result3 res)
+               (warn :jq @jq)
+               (warn :tq @tq)
+               (f/stop! ctx)
+               ;;(ff/remove-fact-graph-logger log)
+               (warn :done)
+               (>! notify :ok)))))
+       #?(:clj (<!! notify) :cljs (take! notify (fn [_] (done))))
+       (assoc spec :ctx ctx)))
+
+   #?(:clj (deftest test-async (test-async* {})))
+ #+END_SRC
 
 ** Namespace declaration
 
@@ -289,6 +344,7 @@ c -> e [label="p2"];
     (:require
      [thi.ng.fabric.core :as f]
      [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.fabric.facts.dsl :as dsl]
      [thi.ng.fabric.core.utils :as fu]
      #?@(:clj
          [[clojure.test :refer :all]
@@ -298,7 +354,7 @@ c -> e [label="p2"];
          [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
           [cljs.core.async :refer [chan close! <! >! take!]]])))
 
-  #?(:clj (taoensso.timbre/set-level! :warn))
+  #?(:clj (taoensso.timbre/set-level! :debug))
 
   <<const>>
 
