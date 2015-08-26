@@ -380,8 +380,8 @@ these low-level forms.
 
   (def children
     (fq/add-query-from-spec!
-     g {:q [{:where '[[?p age ?age] [?p type person]]
-             :filter #(< (% '?age) 20)}]}))
+     g '{:q [{:where [[?p age ?age] [?p type person]]
+              :filter (:< ?age 20)}]}))
 
   (ff/add-fact! g '[noah age 13])
   (ff/add-fact! g '[toxi age 40])

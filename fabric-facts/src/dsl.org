@@ -8,13 +8,13 @@
 ** Examples
 
 #+BEGIN_SRC clojure
-  {:select    '[?a ?b ...]
-   :transform ... ;; optional
-   :q         [{:where '[[?res "dct:title" ?t] [?res "rdf:type" ?type]]}
-               {:optional '[[?res "ea:schema" ?schema]]}]
-   :filter    '[:or [:= ?res "ea:toxi"] [:= ?type "foaf:Person"]] ;; TODO
-   :group-by  '[?type ?res] ;; TODO
-   :order     '?type} ;; TODO
+  '{:select   [?res ?type ...]
+    :transform ... ;; optional
+    :q         [{:where [[?res "dct:title" ?t] [?res "rdf:type" ?type]]}
+                {:optional [[?res "ea:schema" ?schema]]}]
+    :filter    [:or [:= ?res "ea:toxi"] [:= ?type "foaf:Person"]] ;; TODO
+    :group-by  [?type ?res] ;; TODO
+    :order     ?type} ;; TODO
 #+END_SRC
 
 ** Implementation
@@ -115,7 +115,7 @@
                  (sequential? expr) (let [op (first expr)] (if (vararg-ops op) :varargs op))
                  (ff/qvar? expr)    :qvar
                  :else              :const)]
-        (prn op)
+        ;;(prn op)
         op)))
 
   (defmethod compile-expr :const
