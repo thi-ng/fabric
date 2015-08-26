@@ -935,11 +935,24 @@ min/max path lengths MUST be specified.
 TODO add reify
 
 #+BEGIN_SRC clojure :noweb-ref queries
+  (defn add-qvar-selection!
+    [g select result]
+    (if (= :* select)
+      result
+      (let [select (if (sequential? select) select [select])
+            tx     (comp (map #(select-keys % select)) (filter seq))
+            vertex (f/add-vertex!
+                    g nil
+                    {::f/collect-fn      (collect-into-set tx)
+                     ::f/score-signal-fn f/score-signal-with-new-edges})]
+        (f/add-edge! g (result-vertex result) vertex f/signal-forward nil)
+        vertex)))
+
   (defn add-query-filter!
     [g flt q]
     (let [res (f/add-vertex!
                g nil
-               {::f/collect-fn      (f/collect-pure (fn [_ in] (filter flt (peek in))))
+               {::f/collect-fn      (collect-into-set (filter flt))
                 ::f/score-signal-fn f/score-signal-with-new-edges})]
       (f/add-edge! g (result-vertex q) res f/signal-forward nil)
       res))
@@ -1368,6 +1381,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
         (debug (f/vertex-id vertex) :additions adds)
         (run! #(production g vertex %) adds)
         (f/update-value! vertex #(set/union % adds)))))
+
+  (defn collect-into-set
+    [tx] (f/collect-pure (fn [_ in] (into #{} tx (peek in)))))
 #+END_SRC
 
 ** Graph logging
