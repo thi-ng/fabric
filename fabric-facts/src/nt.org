@@ -17,10 +17,10 @@ This namespace provides a simple [[http://www.w3.org/TR/n-triples/][NTriples]] p
 
 - All subjects & predicates are always returned as strings
 - Object URIs and string literals are returned as strings
-- Object string literals with language tag or type URI will be returned as map
+- Object string literals with language tag or unknown type URI will be returned as map
 - BNodes IDs are returned as is (as strings), i.e. no ID mangling
   takes place, BNodes can be identified via =:= char prefix
-- Line comments are supported (=# comment text....=)
+- Line comments are supported (=# comment text...=)
 
 ** Object string literal handling
 
