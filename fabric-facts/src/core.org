@@ -9,7 +9,7 @@
          - [[#fact-indexing][Fact indexing]]
          - [[#fact-transformation][Fact transformation]]
          - [[#entity-caching][Entity caching]]
-         - [[#implementation][Implementation]]
+         - [[#graph-implementation][Graph implementation]]
          - [[#constructor][Constructor]]
          - [[#index-vertex][Index vertex]]
      - [[#queries][Queries]]
@@ -85,9 +85,65 @@ Example facts:
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref fact-v
-  (def ^:private fact-vertex-spec
-    {::f/score-collect-fn (constantly 0)
-     ::f/score-signal-fn  f/score-signal-with-new-edges})
+  (deftype FactVertex
+      [id fact new-edges outs]
+    #?@(:clj
+         [clojure.lang.IDeref
+          (deref
+           [_] fact)]
+         :cljs
+         [IDeref
+          (-deref
+           [_] fact)])
+    f/IVertex
+    (vertex-id
+      [_] id)
+    (set-value!
+      [_ val] (err/unsupported!))
+    (update-value!
+      [_ f] (err/unsupported!))
+    (previous-value
+      [_] fact)
+    (collect!
+      [_] (err/unsupported!))
+    (score-collect
+      [_] 0)
+    (connect-to!
+      [_ v sig-fn opts]
+      (swap! outs assoc v [sig-fn opts])
+      (swap! new-edges inc)
+      (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
+      _)
+    (neighbors
+      [_] (keys @outs))
+    (disconnect-neighbor!
+      [_ v]
+      (when v
+        (debug id "disconnect from" (f/vertex-id v))
+        (swap! outs dissoc v))
+      _)
+    (disconnect-all!
+      [_]
+      (run! #(f/disconnect-neighbor! _ %) (keys @outs))
+      _)
+    (new-edge-count
+      [_] @new-edges)
+    (score-signal
+      [_] @new-edges)
+    (signal!
+      [_ handler]
+      (reset! new-edges 0)
+      (handler _ @outs))
+    (receive-signal
+      [_ src sig] (err/unsupported!))
+    (signal-map
+      [_] (err/unsupported!))
+    (uncollected-signals
+      [_] (err/unsupported!)))
+
+  (defn fact-vertex
+    [id fact _]
+    (FactVertex. id fact (atom 0) (atom {})))
 #+END_SRC
 
 *** FactGraph
@@ -300,7 +356,7 @@ cache is an atom with a nested map and these top-level keys:
 - =::rules= - caches inference rules based on their ID (also
   defrecords)
 
-*** Implementation
+*** Graph implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defrecord FactGraph
@@ -330,7 +386,7 @@ cache is an atom with a nested map and these top-level keys:
       [_ f]
       (let [f' (transform ftx f)]
         (or (@facts f')
-            (let [v (f/add-vertex! g f' fact-vertex-spec)]
+            (let [v (f/add-vertex! g f' nil fact-vertex)]
               (debug :add-fact f f')
               (run! #(f/add-edge! g v % signal-fact :add) indices)
               (swap! facts assoc f' v)
