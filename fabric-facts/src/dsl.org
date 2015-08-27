@@ -139,7 +139,7 @@
     [[op & more]]
     (let [op   (vararg-ops op)
           args (mapv compile-expr more)]
-      (fn [res] (apply op (map #(% res) args)))))
+      (fn [res] (apply op (sequence (comp (map #(% res)) (filter identity)) args)))))
 
   (defmethod compile-expr :and
     [[_ & more]]
@@ -154,7 +154,7 @@
   (defmethod compile-expr :match
     [[_ re x]]
     (let [x (compile-expr x)]
-      (fn [res] (re-find re (x res)))))
+      (fn [res] (when-let [x' (x res)] (re-find re x')))))
 #+END_SRC
 
 *** Aggregation expressions
@@ -185,16 +185,20 @@
 
   (defmethod compile-expr :avg
     [[_ x]]
-    (let [x (compile-expr x)]
+    (let [x  (compile-expr x)
+          tx (comp (map x) (filter identity))]
       (fn [results]
-        (when (seq results)
-          (double (/ (transduce (map x) + results) (count results)))))))
+        (let [res (sequence tx results)]
+          (when (seq res)
+            (double (/ (reduce + res) (count res))))))))
 
   (defmethod compile-expr :mean
     [[_ x]]
-    (let [x (compile-expr x)]
+    (let [x  (compile-expr x)
+          tx (comp (map x) (filter identity))]
       (fn [results]
-        (nth (sort (map x results)) (bit-shift-right (count results) 1) nil))))
+        (let [res (sequence tx results)]
+          (nth (sort res) (bit-shift-right (count res) 1) nil)))))
 
   (defmethod compile-expr :count
     [_] (fn [results] (count results)))
