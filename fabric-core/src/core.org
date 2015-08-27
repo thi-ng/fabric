@@ -539,13 +539,14 @@ This namespace provides...
   (defn async-execution-context
     [opts]
     (let [ctx         (merge (default-async-context-opts) opts)
+          ctx         (update ctx :result #(or % (async/chan)))
           g           (:graph ctx)
           c-thresh    (:collect-thresh ctx)
           s-thresh    (:signal-thresh ctx)
           max-ops     (:max-ops ctx)
           scheduler   ((:scheduler ctx) ctx)
           threads     (:threads ctx)
-          res-chan    (or (:result ctx) (async/chan))
+          res-chan    (:result ctx)
           notify-chan (async/chan (async/dropping-buffer 1))
           watch-id    (keyword (gensym))
           v-filter    (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
