@@ -190,7 +190,7 @@ for a graph.
       (untransform [_ x] x)))
 #+END_SRC
 
-**** PName URI replacements
+**** String prefix replacements
 
 This transform is useful when dealing with Linked Data (RDF), where
 most items are URIs. It's common practice in the LD community to
@@ -199,9 +199,9 @@ define a prefix map and transform like this:
 
 #+BEGIN_SRC clojure
   (def prefixes
-   {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
-   "owl"  "http://www.w3.org/2002/07/owl#"})
+    {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
+     "owl"  "http://www.w3.org/2002/07/owl#"})
 
   (def tx (prefix-transform prefixes))
 
@@ -225,7 +225,7 @@ prefix, returns expanded string or else original value.
  =combine-transforms= (described below).
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn prefix-transform
+  (defn prefix-vector-transform
     [prefixes]
     (reify ITwoWayTransform
       (transform
@@ -550,8 +550,8 @@ In code form this same graph could be constructed like this:
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn index-selection
     [g sel]
-    (if-let [sel (cached g ::index-sel sel)]
-      (do (debug :reuse-index-sel (:sel sel)) sel)
+    (if-let [sel' (cached g ::index-sel sel)]
+      (do (debug :reuse-index-sel sel) sel')
       (let [index  ((fact-indices g) (first sel))
             vertex (f/add-vertex!
                     g nil
@@ -570,6 +570,7 @@ In code form this same graph could be constructed like this:
                        [_ g parent]
                        (if (f/none-or-single-user? vertex parent)
                          (do (debug :remove-index-sel sel)
+                             (expire! g ::index-sel sel)
                              (f/disconnect-neighbor! index vertex)
                              (f/remove-vertex! g vertex)
                              true)
