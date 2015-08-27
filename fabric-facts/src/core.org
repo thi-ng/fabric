@@ -881,13 +881,13 @@ min/max path lengths MUST be specified.
                   (if in-tx
                     (fn [_ in] (into (if order [] #{}) tx (in-tx (peek in))))
                     (fn [_ in] (into #{} tx (peek in)))))
-          cfn    (if (and aggregate group-by)
-                   (result-post-aggregator aggregate cfn)
-                   cfn)
-          res    (f/add-vertex!
-                  g nil
-                  {::f/collect-fn      (f/collect-pure cfn)
-                   ::f/score-signal-fn f/score-signal-with-new-edges})
+          cfn   (if (and aggregate group-by)
+                  (result-post-aggregator aggregate cfn)
+                  cfn)
+          res   (f/add-vertex!
+                 g nil
+                 {::f/collect-fn      (f/collect-pure cfn)
+                  ::f/score-signal-fn f/score-signal-with-new-edges})
           qres (as-query-entity res nil [q] :remove-result)]
       (f/add-edge! g (result-vertex q) res f/signal-forward nil)
       qres))

@@ -3,7 +3,6 @@
 ** TODOs
 
 - add support for path queries
-- add result aggregation
 
 ** Examples
 
@@ -30,6 +29,17 @@
       (if (sequential? order)
         (fn [r] (reduce #(conj % (get r %2)) [] order))
         (fn [r] (get r order)))))
+
+  (defn compile-result-aggregation
+    [agg]
+    (let [agg (reduce-kv
+               (fn [acc k v] (assoc acc k (compile-expr v)))
+               {} agg)]
+      (fn [results]
+        (reduce-kv
+         (fn [acc k afn]
+           (assoc acc k (afn results)))
+         {} agg))))
 
   (defn compile-result-grouping
     [group]
@@ -91,9 +101,10 @@
   (defn compile-select-qvars
     [result g spec]
     (let [spec (cond-> spec
-                 (:filter spec)   (update :filter compile-query-filter)
-                 (:order spec)    (update :order compile-result-order)
-                 (:group-by spec) (update :group-by compile-result-grouping))]
+                 (:filter spec)    (update :filter compile-query-filter)
+                 (:order spec)     (update :order compile-result-order)
+                 (:group-by spec)  (update :group-by compile-result-grouping)
+                 (:aggregate spec) (update :aggregate compile-result-aggregation))]
       (ff/add-query-result! g spec result)))
 
   (defn add-query-from-spec!
@@ -144,6 +155,49 @@
     [[_ re x]]
     (let [x (compile-expr x)]
       (fn [res] (re-find re (x res)))))
+#+END_SRC
+
+*** Aggregation expressions
+
+#+BEGIN_SRC clojure :noweb-ref expr
+  (defn aggregation-with
+    [op x]
+    (let [x  (compile-expr x)
+          tx (comp (map x) (filter identity))]
+      (fn [results]
+        (when (seq results)
+          (transduce tx op results)))))
+
+  (def min* (fn ([] nil) ([x] x) ([x y] (if x (min x y) y))))
+  (def max* (fn ([] nil) ([x] x) ([x y] (if x (max x y) y))))
+
+  (defmethod compile-expr :sum
+    [[_ x]]
+    (aggregation-with + x))
+
+  (defmethod compile-expr :min
+    [[_ x]]
+    (aggregation-with min* x))
+
+  (defmethod compile-expr :max
+    [[_ x]]
+    (aggregation-with max* x))
+
+  (defmethod compile-expr :avg
+    [[_ x]]
+    (let [x (compile-expr x)]
+      (fn [results]
+        (when (seq results)
+          (double (/ (transduce (map x) + results) (count results)))))))
+
+  (defmethod compile-expr :mean
+    [[_ x]]
+    (let [x (compile-expr x)]
+      (fn [results]
+        (nth (sort (map x results)) (bit-shift-right (count results) 1) nil))))
+
+  (defmethod compile-expr :count
+    [_] (fn [results] (count results)))
 #+END_SRC
 
 ** Complete namespace definition
