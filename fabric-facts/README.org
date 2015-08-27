@@ -26,7 +26,7 @@ graph setup:
 
 - Triple or Quad fact graphs
 - Fact indexing
-- Fact graph logging (via [[https://github.com/clojure/core.async][core.async]])
+- Fact graph logging / fact persistence (via [[https://github.com/clojure/core.async][core.async]])
 - Query tree construction (vertex based)
   - Query variable bindings (SPARQL / Datalog style pattern queries)
   - Joins
@@ -35,11 +35,12 @@ graph setup:
   - Arbitrary filters at any query level
   - Nested result sorting
   - Nested result grouping
+  - Grouped & un-grouped result aggregation fns & expressions
   - Bounded length path queries (min/max limits)
 - Extensive query & sub-query reuse/caching
 - Intelligent recursive query tree removal
 - Map based query expression DSL (EDN serializable)
-- Queries are only computed once, results are cached and updated
+- Queries are only computed once, results are cached and only updated
   automatically when underlying fact set is changing
 - Rule based inferencing based on any query
 - RDF N-Triple parser

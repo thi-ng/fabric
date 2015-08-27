@@ -59,22 +59,35 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
 - Knowledge graphs (triples & quads)
 - Fully featured, efficient query engine (variables, joins, optional
-  joins, unions, filters, grouping)
+  joins, unions, filters, grouping, aggregation)
+- Optional map based query DSL (EDN serializable)
 - Bounded length path queries (min/max limits)
-- Rulebased fact inferencing (additions & retractions)
+- Query & rule based fact inferencing (additions & retractions)
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
 
+See the [[./fabric-facts/README.org][README]] of the *fabric-facts* module for full feature set.
+
 *** Motivation & use cases
+**** Alternative programming model
 
-**** Reactive programming
+Some algorithms can be expressed more simply using the Signal/Collect
+model and allow for parallel execution.
 
-- truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
-  mandatory integration or reliance on React.js or DOM rendering cycle
+**** Pervasive caching, easy introspection, algorithm visualization
+
+Intermediate results can be easily reused by multiple consumbers and
+retrieved through vertex inspection. Compute graphs can also be
+visualized, allowing for the development of visual programming tools.
+
+**** Reactive programming (WIP)
+
+Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
+mandatory integration or reliance on React.js or DOM rendering cycle
 
 **** Single machine or distributed processing
 
-- multi-machine graphs not yet implemented (WIP)
+Multi-environment graphs not yet implemented (WIP)
 
 **** Self-organizing workflows
 
@@ -96,11 +109,12 @@ operate when a minimum number of new signals has been received
 
 - Implement Rete-style rule engines, using vertices for pervasive
   intermediate result caching and define custom signal and scoring
-  functions to inhibit obsolete work in the graph (see fabric-facts
+  functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
   module)
 
 **** Toolkit w/ Clojurescript support
 
+- Provide same functionality for both Clojure & Clojurescript
 
 *** Differences to Map-Reduce and dataflow DAGs
 
@@ -112,6 +126,9 @@ operate when a minimum number of new signals has been received
 - Cycles (recursion) allowed and needed for some problems
 - Vertices only hold state, processing done in edges (i.e. single
   values can be transformed in parallel via different signal functions from same vertex)
+- Graph processing stops after user defined threshold or when graph
+  has converged (i.e. no more active signals or outstanding
+  collections)
 
 *** Resources / related work
 
@@ -224,11 +241,8 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; The nil arg is because signal-foward doesn't use any signal arguments
   ;; but other signal functions could make use of this extra arg (see SSSP example above)
 
-  (f/connect-to! A1 NET    f/signal-forward nil)
-  (f/connect-to! A2 NET    f/signal-forward nil)
-  (f/connect-to! A3 NET    f/signal-forward nil)
-  (f/connect-to! NET TOTAL f/signal-forward nil)
-  (f/connect-to! VAT TOTAL f/signal-forward nil)
+  (run! (fn [[a b]] (f/connect-to! a b f/signal-forward nil))
+        [[A1 NET] [A2 NET] [A3 NET] [NET TOTAL] [VAT TOTAL]])
 
   ;; Everytime the graph converges into a stable/unchanging state
   ;; the async execution context will pause & push a result map to the channel provided
@@ -271,15 +285,15 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 *** Automatically updating fact graph queries with rule based inferencing
 
-Note: This example uses two forms of queries: low-level and the more
-userfriendly and EDN serializable query specs via the
-[[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace. The query specs are compiled into
-these low-level forms.
+Note: This example uses two forms of queries: low-level query node
+construction and the more userfriendly and EDN serializable query
+specs via the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace. The query specs are
+compiled into these low-level forms.
 
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
   (require '[thi.ng.fabric.facts.core :as ff])
-  (require '[thi.ng.fabric.facts.dsl :as fq])
+  (require '[thi.ng.fabric.facts.dsl :as dsl])
 
   ;; turn off verbose logging
 
@@ -379,7 +393,7 @@ these low-level forms.
   ;; people with age < 20
 
   (def children
-    (fq/add-query-from-spec!
+    (dsl/add-query-from-spec!
      g '{:q [{:where [[?p age ?age] [?p type person]]
               :filter (:< ?age 20)}]}))
 
