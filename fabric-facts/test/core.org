@@ -118,7 +118,7 @@ c -> e [label="p2"];
 *** Queries from spec & result transformations
 
 #+BEGIN_SRC clojure :noweb-ref tests
-  (deftest test-qspec-1
+  (deftest test-qspec
     (let [g  (ff/fact-graph)
           q1 (dsl/add-query-from-spec!
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}
@@ -177,6 +177,33 @@ c -> e [label="p2"];
              @q5))
       (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
       (is (== (+ 3 8) (count (f/vertices g))))))
+
+  (deftest test-qspec-aggregation
+    (let [g    (ff/fact-graph)
+          spec '{:q [{:where [[?b price ?p]]}]
+                 :aggregate {?total [:sum ?p]
+                             ?avg [:avg ?p]
+                             ?mean [:mean ?p]
+                             ?num [:count]
+                             ?min [:min ?p]
+                             ?max [:max ?p]}}
+          q1   (dsl/add-query-from-spec! g spec)
+          q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))]
+      (run! #(ff/add-fact! g %)
+            '[[b1 price 10] [b2 price 20] [b1 price 70] [b1 price 20]])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (warn :agg1 @q1)
+      (warn :agg2 @q2)
+      (is (= '#{{?b b1, ?p 10, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b1, ?p 70, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b2, ?p 20, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b1, ?p 20, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}}
+             @q1))
+      (is (= '{b1 [{?b b1, ?p 10, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}
+                   {?b b1, ?p 20, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}
+                   {?b b1, ?p 70, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}]
+               b2 [{?b b2, ?p 20, ?total 20, ?avg 20.0, ?mean 20, ?num 1, ?min 20, ?max 20}]}
+             @q2))))
 #+END_SRC
 
 *** Combined example w/ rule based inferencing
@@ -363,7 +390,7 @@ c -> e [label="p2"];
          [[cemerick.cljs.test :refer-macros [is deftest with-test testing done]]
           [cljs.core.async :refer [chan close! <! >! take!]]])))
 
-  #?(:clj (taoensso.timbre/set-level! :debug))
+  #?(:clj (taoensso.timbre/set-level! :warn))
 
   <<const>>
 
