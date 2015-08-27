@@ -46,7 +46,7 @@ This namespace provides...
     (previous-value [_]))
 
   (defprotocol IComputeGraph
-    (add-vertex! [_ val vspec])
+    (add-vertex! [_ val vspec] [_ val vspec ctor])
     (update-vertex! [_ v f])
     (remove-vertex! [_ v])
     (vertex-for-id [_ id])
@@ -73,7 +73,6 @@ This namespace provides...
 #+END_SRC
 
 ** Type implementations
-
 *** Vertex
 
 #+BEGIN_SRC clojure :noweb-ref vertex
@@ -156,10 +155,13 @@ This namespace provides...
     IComputeGraph
     (add-vertex!
       [_ val vspec]
+      (add-vertex! _ val vspec vertex))
+    (add-vertex!
+      [_ val vspec ctor]
       (let [nv (volatile! nil)]
         (swap! state
                #(let [id (::next-id %)
-                      v  (vertex id val vspec)]
+                      v  (ctor id val vspec)]
                   (vreset! nv v)
                   (-> %
                       (update ::next-id (::id-gen-fn %))
