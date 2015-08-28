@@ -118,17 +118,15 @@
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
-    {:= = :< < :> > :<= <= :>= >= :!= not=
-     :+ + :- - :* * :div /})
+    {'= = '< < '> > '<= <= '>= >= 'not= not=
+     '+ + '- - '* * '/ /})
 
   (defmulti compile-expr
     (fn [expr]
-      (let [op (cond
-                 (sequential? expr) (let [op (first expr)] (if (vararg-ops op) :varargs op))
-                 (ff/qvar? expr)    :qvar
-                 :else              :const)]
-        ;;(prn op)
-        op)))
+      (cond
+        (sequential? expr) (let [op (first expr)] (if (vararg-ops op) :varargs op))
+        (ff/qvar? expr)    :qvar
+        :else              :const)))
 
   (defmethod compile-expr :const
     [const] (fn [_] const))

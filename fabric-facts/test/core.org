@@ -115,7 +115,7 @@ c -> e [label="p2"];
       (is (== (+ 3 5) (count (f/vertices g))))))
 #+END_SRC
 
-*** Queries from spec & result transformations
+*** DSL queries & result transformations
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-qspec
@@ -128,9 +128,9 @@ c -> e [label="p2"];
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}
                       {:optional [[?a q ?aq]]}
                       {:optional [[?b q ?bq]]}]
-                  :filter (:= c ?a)})
+                  :filter (= c ?a)})
           q3 (dsl/add-query-from-spec!
-              g '{:q [{:where [[?a p ?b] [?b p ?c]] :filter (:= a ?a)}
+              g '{:q [{:where [[?a p ?b] [?b p ?c]] :filter (= a ?a)}
                       {:optional [[?a q ?aq]]}
                       {:optional [[?b q ?bq]]}]
                   :limit 1})
@@ -138,7 +138,7 @@ c -> e [label="p2"];
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}
                       {:optional [[?a q ?aq]]}
                       {:optional [[?b q ?bq]]}]
-                  :filter (:= a ?a)
+                  :filter (= a ?a)
                   :order ?c
                   :select ?c})
           q5 (dsl/add-query-from-spec!
