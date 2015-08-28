@@ -145,7 +145,12 @@ c -> e [label="p2"];
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}]
                   :order ?c
                   :group-by [?a ?b]
-                  :select :*})]
+                  :select :*})
+          q6 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}
+                      {:optional [[?a q ?aq]]}
+                      {:optional [[?b q ?bq]]}]
+                  :filter (in-set? ?a b c)})]
       (run! #(ff/add-fact! g %)
             '[[a p b]
               [a p c]
@@ -175,18 +180,25 @@ c -> e [label="p2"];
                [b e] [{?a b ?b e ?c f}]
                [c e] [{?a c ?b e ?c f}]}
              @q5))
-      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
+      (is (= '#{{?a b, ?b e, ?c f}
+                {?a c, ?b e, ?c f, ?aq cc}}
+             @q6))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6])
       (is (== (+ 3 8) (count (f/vertices g))))))
+#+END_SRC
 
+*** DSL aggregation
+
+#+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-qspec-aggregation
     (let [g    (ff/fact-graph)
           spec '{:q [{:where [[?b price ?p]]}]
-                 :aggregate {?total [:sum ?p]
-                             ?avg [:round [:avg ?p]]
-                             ?mean [:mean ?p]
-                             ?num [:count]
-                             ?min [:min ?p]
-                             ?max [:max ?p]}
+                 :aggregate {?total (agg-sum ?p)
+                             ?avg (round (agg-avg ?p))
+                             ?mean (agg-mean ?p)
+                             ?num (agg-count)
+                             ?min (agg-min ?p)
+                             ?max (agg-max ?p)}
                  :order [?b ?p]}
           q1   (dsl/add-query-from-spec! g spec)
           q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))
@@ -207,6 +219,46 @@ c -> e [label="p2"];
              @q2))
       (is (= '[{?total 120 ?avg 30}] @q3))
       (is (= '{b1 {?total 100, ?avg 33}, b2 {?total 20, ?avg 20}} @q4))))
+#+END_SRC
+
+*** DSL expressions
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-expressions
+    (is (== 23 ((dsl/compile-expr '?a) '{?a 23})))
+    (is (== 133 ((dsl/compile-expr '(+ ?a ?b 100)) '{?a 23 ?b 10})))
+    (is (== -87 ((dsl/compile-expr '(- ?a ?b 100)) '{?a 23 ?b 10})))
+    (is (== 23000 ((dsl/compile-expr '(* ?a ?b 100)) '{?a 23 ?b 10})))
+    (is (== 0.023 ((dsl/compile-expr '(float (/ ?a ?b 100))) '{?a 23 ?b 10})))
+    (is (== 0 ((dsl/compile-expr '(int (/ ?a ?b 100))) '{?a 23 ?b 10})))
+    (is (== 1023 ((dsl/compile-expr '(+ ?a (* ?b 100))) '{?a 23 ?b 10})))
+    (is (== 13 ((dsl/compile-expr '(abs (- ?b ?a))) '{?a 23 ?b 10})))
+    (is (== (Math/sqrt 500) ((dsl/compile-expr '(sqrt (+ (* ?a ?a) (* ?b ?b)))) '{?a 20 ?b 10})))
+    (is (== 1024 ((dsl/compile-expr '(int (pow ?a ?b))) '{?a 2 ?b 10})))
+    (is (== 10 ((dsl/compile-expr '(int (logn ?a ?b))) '{?a 1024 ?b 2})))
+    (is ((dsl/compile-expr '(match #"\w+" ?a)) '{?a "hello123"}))
+    (is (not ((dsl/compile-expr '(match #"\w+" ?a)) {})))
+    (is ((dsl/compile-expr '(and ?a ?b)) '{?a 1024 ?b 2}))
+    (is (not ((dsl/compile-expr '(and ?a ?b ?c)) '{?a 1024 ?b 2})))
+    (is ((dsl/compile-expr '(or ?a ?b)) '{?a 1024}))
+    (is ((dsl/compile-expr '(or ?a ?b)) '{?b 1024}))
+    (is (not ((dsl/compile-expr '(or ?a ?b)) {})))
+    (is ((dsl/compile-expr '(not ?a)) {}))
+    (is (not ((dsl/compile-expr '(not ?a)) '{?a 23})))
+    (is ((dsl/compile-expr '(in-set? ?a 1 2 3)) '{?a 3}))
+    (is (not ((dsl/compile-expr '(in-set? ?a 1 2 3)) '{?a 0})))
+    (is (not ((dsl/compile-expr '(in-set? ?a 1 2 3)) {})))
+    (is (== 60 ((dsl/compile-expr '(agg-sum ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
+    (is (== 30 ((dsl/compile-expr '(agg-sum ?b)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
+    (is (not ((dsl/compile-expr '(agg-sum ?a)) [])))
+    (is (== 30 ((dsl/compile-expr '(agg-avg ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
+    (is (not ((dsl/compile-expr '(agg-avg ?a)) '[{} {} {}])))
+    (is (not ((dsl/compile-expr '(agg-avg ?a)) '[])))
+    (is (== 10 ((dsl/compile-expr '(agg-min ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
+    (is (== 50 ((dsl/compile-expr '(agg-max ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
+    (is (== 3 ((dsl/compile-expr '(agg-count)) '[{} {} {}])))
+    (is (== 0 ((dsl/compile-expr '(agg-count)) nil)))
+    )
 #+END_SRC
 
 *** Combined example w/ rule based inferencing

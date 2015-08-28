@@ -11,9 +11,10 @@
     :transform ... ;; optional
     :q         [{:where [[?res "dct:title" ?t] [?res "rdf:type" ?type]]}
                 {:optional [[?res "ea:schema" ?schema]]}]
-    :filter    [:or [:= ?res "ea:toxi"] [:= ?type "foaf:Person"]] ;; TODO
-    :group-by  [?type ?res] ;; TODO
-    :order     ?type} ;; TODO
+    :filter    (or (= ?res "ea:toxi") (= ?type "foaf:Person"))
+    :group-by  [?type ?res]
+    :aggregate {?num (count)}
+    :order     ?type}
 #+END_SRC
 
 ** Implementation
@@ -119,56 +120,101 @@
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
     {'= = '< < '> > '<= <= '>= >= 'not= not=
-     '+ + '- - '* * '/ /})
+     '+ + '- - '* * '/ /
+     'str str})
+
+  (def unary-ops
+    {'not   [nil not]
+     'int   [number? int]
+     'float [number? double]
+     'abs   [number? #(Math/abs %)]
+     'sqrt  [number? #(Math/sqrt %)]
+     'exp   [number? #(Math/exp %)]
+     'sin   [number? #(Math/sin %)]
+     'asin  [number? #(Math/asin %)]
+     'cos   [number? #(Math/cos %)]
+     'acos  [number? #(Math/acos %)]
+     'tan   [number? #(Math/tan %)]
+     'atan  [number? #(Math/atan %)]
+     'floor [number? #(long (Math/floor %))]
+     'ceil  [number? #(long (Math/ceil %))]
+     'round [number? #(Math/round (double %))]})
+
+  (def binary-ops
+    {'match [regexp?* string? re-find]
+     'pow   [number? number? #(Math/pow % %2)]
+     'atan2 [number? number? #(Math/atan2 % %2)]
+     'logn  [number? number? #(/ (Math/log %) (Math/log %2))]})
 
   (defmulti compile-expr
     (fn [expr]
       (cond
-        (sequential? expr) (let [op (first expr)] (if (vararg-ops op) :varargs op))
-        (ff/qvar? expr)    :qvar
-        :else              :const)))
+        (sequential? expr) (let [op (first expr)]
+                             (cond
+                               (vararg-ops op) ::varargs
+                               (unary-ops op)  ::unary
+                               (binary-ops op) ::binary
+                               :else           op))
+        (ff/qvar? expr)    ::qvar
+        :else              ::const)))
 
-  (defmethod compile-expr :const
+  (defmethod compile-expr ::const
     [const] (fn [_] const))
 
-  (defmethod compile-expr :qvar
+  (defmethod compile-expr ::qvar
     [qvar] #(% qvar))
 
-  (defmethod compile-expr :varargs
+  (defmethod compile-expr ::varargs
     [[op & more]]
     (let [op   (vararg-ops op)
           args (mapv compile-expr more)]
       (fn [res] (apply op (sequence (comp (map #(% res)) (filter identity)) args)))))
 
-  (defmethod compile-expr :and
+  (defmethod compile-expr ::unary
+    [[op x]]
+    (let [[check op] (unary-ops op)
+          x (compile-expr x)]
+      (if check
+        (fn [res] (let [x' (x res)] (when (check x') (op x'))))
+        (fn [res] (op (x res))))))
+
+  (defmethod compile-expr ::binary
+    [[op x y]]
+    (let [[checkx checky op] (binary-ops op)
+          x (compile-expr x)
+          y (compile-expr y)]
+      (cond
+        (and checkx checky) (fn [res]
+                              (let [x' (x res) y' (y res)]
+                                (when (and (checkx x') (checky y')) (op x' y'))))
+        checkx              (fn [res]
+                              (let [x' (x res) y' (y res)]
+                                (when (checkx x') (op x' y'))))
+        checky              (fn [res]
+                              (let [x' (x res) y' (y res)]
+                                (when (checky y') (op x' y'))))
+        :else               (fn [res] (op (x res) (y res))))))
+
+  (defmethod compile-expr 'and
     [[_ & more]]
     (let [args (mapv compile-expr more)]
       (fn [res] (every? #(% res) args))))
 
-  (defmethod compile-expr :or
+  (defmethod compile-expr 'or
     [[_ & more]]
     (let [args (mapv compile-expr more)]
       (fn [res] (some #(% res) args))))
 
-  (defmethod compile-expr :floor
-    [[_ x]]
-    (let [x (compile-expr x)]
-      (fn [res] (let [x' (x res)] (when (number? x') (long (Math/floor x')))))))
-
-  (defmethod compile-expr :ceil
-    [[_ x]]
-    (let [x (compile-expr x)]
-      (fn [res] (let [x' (x res)] (when (number? x') (long (Math/ceil x')))))))
-
-  (defmethod compile-expr :round
-    [[_ x]]
-    (let [x (compile-expr x)]
-      (fn [res] (let [x' (x res)] (when (number? x') (Math/round (double x')))))))
-
-  (defmethod compile-expr :match
+  (defmethod compile-expr 'match
     [[_ re x]]
     (let [x (compile-expr x)]
-      (fn [res] (when-let [x' (x res)] (re-find re x')))))
+      (fn [res] (let [x' (x res)] (when (string? x') (re-find re x'))))))
+
+  (defmethod compile-expr 'in-set?
+    [[_ x & more]]
+    (let [x       (compile-expr x)
+          choices (mapv compile-expr more)]
+      (fn [res] (let [x' (x res)] (some #(= (% res) x') choices)))))
 #+END_SRC
 
 *** Aggregation expressions
@@ -185,19 +231,19 @@
   (def min* (fn ([] nil) ([x] x) ([x y] (if x (min x y) y))))
   (def max* (fn ([] nil) ([x] x) ([x y] (if x (max x y) y))))
 
-  (defmethod compile-expr :sum
+  (defmethod compile-expr 'agg-sum
     [[_ x]]
     (aggregation-with + x))
 
-  (defmethod compile-expr :min
+  (defmethod compile-expr 'agg-min
     [[_ x]]
     (aggregation-with min* x))
 
-  (defmethod compile-expr :max
+  (defmethod compile-expr 'agg-max
     [[_ x]]
     (aggregation-with max* x))
 
-  (defmethod compile-expr :avg
+  (defmethod compile-expr 'agg-avg
     [[_ x]]
     (let [x  (compile-expr x)
           tx (comp (map x) (filter identity))]
@@ -206,7 +252,7 @@
           (when (seq res)
             (double (/ (reduce + res) (count res))))))))
 
-  (defmethod compile-expr :mean
+  (defmethod compile-expr 'agg-mean
     [[_ x]]
     (let [x  (compile-expr x)
           tx (comp (map x) (filter identity))]
@@ -214,8 +260,15 @@
         (let [res (sequence tx results)]
           (nth (sort res) (bit-shift-right (count res) 1) nil)))))
 
-  (defmethod compile-expr :count
+  (defmethod compile-expr 'agg-count
     [_] (fn [results] (count results)))
+#+END_SRC
+
+** Helper functions
+
+#+BEGIN_SRC clojure :noweb-ref helpers
+  (defn regexp?*
+    [x] #?(:clj (= java.util.regex.Pattern (type x)) :cljs (regexp? x)))
 #+END_SRC
 
 ** Complete namespace definition
@@ -238,6 +291,8 @@
           [thi.ng.fabric.facts.core :as ff]
           [clojure.set :as set]
           [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
+
+  <<helpers>>
 
   <<expr>>
 
