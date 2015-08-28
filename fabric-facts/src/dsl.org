@@ -104,7 +104,8 @@
                  (:filter spec)    (update :filter compile-query-filter)
                  (:order spec)     (update :order compile-result-order)
                  (:group-by spec)  (update :group-by compile-result-grouping)
-                 (:aggregate spec) (update :aggregate compile-result-aggregation))]
+                 (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
+                                       (update :aggregate compile-result-aggregation)))]
       (ff/add-query-result! g spec result)))
 
   (defn add-query-from-spec!

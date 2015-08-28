@@ -939,7 +939,7 @@ min/max path lengths MUST be specified.
                     (fn [_ in] (into (if order [] #{}) tx (in-tx (peek in))))
                     (fn [_ in] (into #{} tx (peek in)))))
           cfn   (if (and aggregate group-by)
-                  (result-post-aggregator aggregate cfn)
+                  (result-post-aggregator aggregate cfn spec)
                   cfn)
           res   (f/add-vertex!
                  g nil
@@ -1084,13 +1084,18 @@ min/max path lengths MUST be specified.
         (map #(merge % ares) results))))
 
   (defn result-post-aggregator
-    [agg cfn]
-    (fn [_ in]
-      (reduce-kv
-       (fn [acc k res]
-         (let [ares (agg res)]
-           (assoc acc k (mapv #(merge % ares) res))))
-       {} (cfn _ in))))
+    [agg cfn spec]
+    (let [sel (:select spec)
+          rfn (if (= :* sel)
+                (let [sel (if (sequential? sel) sel [sel])]
+                  (fn [acc k res]
+                    (let [ares (agg res)]
+                      (assoc acc k (mapv #(merge % ares) res)))))
+                (fn [acc k res]
+                  (let [ares (agg res)]
+                    (assoc acc k (mapv #(select-keys (merge % ares) sel) res)))))]
+      (fn [_ in]
+        (reduce-kv rfn {} (cfn _ in)))))
 
   (defn result-transducer
     [spec tx]
@@ -1105,7 +1110,10 @@ min/max path lengths MUST be specified.
           tx (if-let [sel (:select spec)]
                (if-not (= :* sel)
                  (let [sel (if (sequential? sel) sel [sel])
-                       tx' (comp (map #(select-keys % sel)) (filter seq))]
+                       tx' (comp (map #(select-keys % sel)) (filter seq))
+                       agg (set (keys (:aggregate* spec)))
+                       tx' (if (and (seq agg) (every? agg sel))
+                             (comp tx' (take 1)) tx')]
                    (if tx (comp tx tx') tx'))
                  tx)
                tx)]
