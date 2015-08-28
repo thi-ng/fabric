@@ -189,12 +189,12 @@ c -> e [label="p2"];
                              ?max [:max ?p]}
                  :order [?b ?p]}
           q1   (dsl/add-query-from-spec! g spec)
-          q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))]
+          q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))
+          q3   (dsl/add-query-from-spec! g (assoc spec :select '[?total ?avg]))
+          q4   (dsl/add-query-from-spec! g (assoc spec :select '[?total ?avg] :group-by '?b))]
       (run! #(ff/add-fact! g %)
             '[[b1 price 10] [b2 price 20] [b1 price 70] [b1 price 20]])
       (f/execute! (f/sync-execution-context {:graph g}))
-      (warn :agg1 @q1)
-      (warn :agg2 @q2)
       (is (= '[{?b b1, ?p 10, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
                {?b b1, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
                {?b b1, ?p 70, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
@@ -204,7 +204,9 @@ c -> e [label="p2"];
                    {?b b1, ?p 20, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
                    {?b b1, ?p 70, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}]
                b2 [{?b b2, ?p 20, ?total 20, ?avg 20, ?mean 20, ?num 1, ?min 20, ?max 20}]}
-             @q2))))
+             @q2))
+      (is (= '[{?total 120 ?avg 30}] @q3))
+      (is (= '{b1 {?total 100, ?avg 33}, b2 {?total 20, ?avg 20}} @q4))))
 #+END_SRC
 
 *** Combined example w/ rule based inferencing

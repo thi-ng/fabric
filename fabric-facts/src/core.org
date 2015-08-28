@@ -1091,9 +1091,13 @@ min/max path lengths MUST be specified.
                   (fn [acc k res]
                     (let [ares (agg res)]
                       (assoc acc k (mapv #(merge % ares) res)))))
-                (fn [acc k res]
-                  (let [ares (agg res)]
-                    (assoc acc k (mapv #(select-keys (merge % ares) sel) res)))))]
+                (let [avars (set (keys (:aggregate* spec)))]
+                  (if (and (seq avars) (every? avars sel))
+                    (fn [acc k res]
+                      (assoc acc k (select-keys (merge (first res) (agg res)) sel)))
+                    (fn [acc k res]
+                      (let [ares (agg res)]
+                        (assoc acc k (mapv #(select-keys (merge % ares) sel) res)))))))]
       (fn [_ in]
         (reduce-kv rfn {} (cfn _ in)))))
 
@@ -1107,7 +1111,7 @@ min/max path lengths MUST be specified.
                (let [tx' (take lim)]
                  (if tx (comp tx tx') tx'))
                tx)
-          tx (if-let [sel (:select spec)]
+          tx (if-let [sel (and (not (:group-by spec)) (:select spec))]
                (if-not (= :* sel)
                  (let [sel (if (sequential? sel) sel [sel])
                        tx' (comp (map #(select-keys % sel)) (filter seq))
