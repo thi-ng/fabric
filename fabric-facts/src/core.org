@@ -1086,7 +1086,7 @@ min/max path lengths MUST be specified.
   (defn result-post-aggregator
     [agg cfn spec]
     (let [sel (:select spec)
-          rfn (if (= :* sel)
+          rfn (if (or (nil? sel) (= :* sel))
                 (let [sel (if (sequential? sel) sel [sel])]
                   (fn [acc k res]
                     (let [ares (agg res)]
