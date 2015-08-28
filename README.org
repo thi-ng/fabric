@@ -37,7 +37,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.189"]
+  [thi.ng/fabric "0.0.204"]
 #+END_SRC
 
 ** Overview
@@ -395,7 +395,7 @@ compiled into these low-level forms.
   (def children
     (dsl/add-query-from-spec!
      g '{:q [{:where [[?p age ?age] [?p type person]]
-              :filter (:< ?age 20)}]}))
+              :filter (< ?age 20)}]}))
 
   (ff/add-fact! g '[noah age 13])
   (ff/add-fact! g '[toxi age 40])
@@ -516,6 +516,7 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                       |
 |-----------+------------+---------------------------------------------------------------------|
+|   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type             |
 |   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                      |
 |   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring |
 |   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support        |

@@ -13,7 +13,7 @@
                 {:optional [[?res "ea:schema" ?schema]]}]
     :filter    (or (= ?res "ea:toxi") (= ?type "foaf:Person"))
     :group-by  [?type ?res]
-    :aggregate {?num (count)}
+    :aggregate {?num (agg-count)}
     :order     ?type}
 #+END_SRC
 
