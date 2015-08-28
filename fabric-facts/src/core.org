@@ -1124,7 +1124,7 @@ min/max path lengths MUST be specified.
     (fn
       ([] {})
       ([res] res)
-      ([res input] (update-in res (grp input) #(conj (or % []) input)))))
+      ([res input] (update res (grp input) #(conj (or % []) input)))))
 
   (defn remove-recursively
     [g res parent deps type]

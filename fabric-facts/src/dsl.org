@@ -47,7 +47,7 @@
       group
       (if (sequential? group)
         (fn [r] (reduce #(conj % (get r %2)) [] group))
-        (fn [r] [(get r group)]))))
+        (fn [r] (get r group)))))
 
   (defn sub-query-options
     [{:keys [filter limit]}]

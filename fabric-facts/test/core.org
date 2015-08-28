@@ -170,10 +170,10 @@ c -> e [label="p2"];
            (first @q3)))
       (is (== 3 (count @q4)))
       (is (= '[{?c d} {?c e} {?c e}] @q4))
-      (is (= '{a {b [{?a a ?b b ?c d} {?a a ?b b ?c e}]
-                  c [{?a a ?b c ?c e}]}
-               c {e [{?a c ?b e ?c f}]}
-               b {e [{?a b ?b e ?c f}]}}
+      (is (= '{[a b] [{?a a ?b b ?c d} {?a a ?b b ?c e}]
+               [a c] [{?a a ?b c ?c e}]
+               [b e] [{?a b ?b e ?c f}]
+               [c e] [{?a c ?b e ?c f}]}
              @q5))
       (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
       (is (== (+ 3 8) (count (f/vertices g))))))
@@ -186,7 +186,8 @@ c -> e [label="p2"];
                              ?mean [:mean ?p]
                              ?num [:count]
                              ?min [:min ?p]
-                             ?max [:max ?p]}}
+                             ?max [:max ?p]}
+                 :order [?b ?p]}
           q1   (dsl/add-query-from-spec! g spec)
           q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))]
       (run! #(ff/add-fact! g %)
@@ -194,10 +195,10 @@ c -> e [label="p2"];
       (f/execute! (f/sync-execution-context {:graph g}))
       (warn :agg1 @q1)
       (warn :agg2 @q2)
-      (is (= '#{{?b b1, ?p 10, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b1, ?p 70, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b2, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b1, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}}
+      (is (= '[{?b b1, ?p 10, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+               {?b b1, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+               {?b b1, ?p 70, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+               {?b b2, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}]
              @q1))
       (is (= '{b1 [{?b b1, ?p 10, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
                    {?b b1, ?p 20, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
