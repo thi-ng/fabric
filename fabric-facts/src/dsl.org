@@ -119,9 +119,17 @@
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
-    {'= = '< < '> > '<= <= '>= >= 'not= not=
-     '+ + '- - '* * '/ /
-     'str str})
+    {'<    [number? <]
+     '>    [number? >]
+     '<=   [number? <=]
+     '>=   [number? >=]
+     '+    [number? +]
+     '-    [number? -]
+     '*    [number? *]
+     '/    [number? /]
+     '=    [nil =]
+     'not= [nil not=]
+     'str  [nil str]})
 
   (def unary-ops
     {'not   [nil not]
@@ -166,9 +174,15 @@
 
   (defmethod compile-expr ::varargs
     [[op & more]]
-    (let [op   (vararg-ops op)
+    (let [[check op] (vararg-ops op)
           args (mapv compile-expr more)]
-      (fn [res] (apply op (sequence (comp (map #(% res)) (filter identity)) args)))))
+      (if check
+        (fn [res]
+          (let [args' (sequence (comp (map #(% res)) (filter identity)) args)]
+            (when (every? check args')
+              (apply op args'))))
+        (fn [res]
+          (apply op (sequence (comp (map #(% res)) (filter identity)) args))))))
 
   (defmethod compile-expr ::unary
     [[op x]]
