@@ -182,7 +182,7 @@ c -> e [label="p2"];
     (let [g    (ff/fact-graph)
           spec '{:q [{:where [[?b price ?p]]}]
                  :aggregate {?total [:sum ?p]
-                             ?avg [:avg ?p]
+                             ?avg [:round [:avg ?p]]
                              ?mean [:mean ?p]
                              ?num [:count]
                              ?min [:min ?p]
@@ -194,15 +194,15 @@ c -> e [label="p2"];
       (f/execute! (f/sync-execution-context {:graph g}))
       (warn :agg1 @q1)
       (warn :agg2 @q2)
-      (is (= '#{{?b b1, ?p 10, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b1, ?p 70, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b2, ?p 20, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}
-                {?b b1, ?p 20, ?total 120, ?avg 30.0, ?mean 20, ?num 4, ?min 10, ?max 70}}
+      (is (= '#{{?b b1, ?p 10, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b1, ?p 70, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b2, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
+                {?b b1, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}}
              @q1))
-      (is (= '{b1 [{?b b1, ?p 10, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}
-                   {?b b1, ?p 20, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}
-                   {?b b1, ?p 70, ?total 100, ?avg 33.33333333333333, ?mean 20, ?num 3, ?min 10, ?max 70}]
-               b2 [{?b b2, ?p 20, ?total 20, ?avg 20.0, ?mean 20, ?num 1, ?min 20, ?max 20}]}
+      (is (= '{b1 [{?b b1, ?p 10, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
+                   {?b b1, ?p 20, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
+                   {?b b1, ?p 70, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}]
+               b2 [{?b b2, ?p 20, ?total 20, ?avg 20, ?mean 20, ?num 1, ?min 20, ?max 20}]}
              @q2))))
 #+END_SRC
 

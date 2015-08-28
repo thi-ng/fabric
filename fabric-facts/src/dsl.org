@@ -150,6 +150,21 @@
     (let [args (mapv compile-expr more)]
       (fn [res] (some #(% res) args))))
 
+  (defmethod compile-expr :floor
+    [[_ x]]
+    (let [x (compile-expr x)]
+      (fn [res] (let [x' (x res)] (when (number? x') (long (Math/floor x')))))))
+
+  (defmethod compile-expr :ceil
+    [[_ x]]
+    (let [x (compile-expr x)]
+      (fn [res] (let [x' (x res)] (when (number? x') (long (Math/ceil x')))))))
+
+  (defmethod compile-expr :round
+    [[_ x]]
+    (let [x (compile-expr x)]
+      (fn [res] (let [x' (x res)] (when (number? x') (Math/round (double x')))))))
+
   (defmethod compile-expr :match
     [[_ re x]]
     (let [x (compile-expr x)]
