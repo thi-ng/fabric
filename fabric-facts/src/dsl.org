@@ -125,11 +125,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
-    {'<    [number? <]
-     '>    [number? >]
-     '<=   [number? <=]
-     '>=   [number? >=]
-     '+    [number? +]
+    {'+    [number? +]
      '-    [number? -]
      '*    [number? *]
      '/    [number? /]
@@ -155,7 +151,11 @@
      'round [number? #(Math/round (double %))]})
 
   (def binary-ops
-    {'match [regexp?* string? re-find]
+    {'<     [nil nil #(neg? (compare % %2))]
+     '>     [nil nil #(pos? (compare % %2))]
+     '<=    [nil nil #(<= (compare % %2) 0)]
+     '>=    [nil nil #(>= (compare % %2) 0)]
+     'match [regexp?* string? re-find]
      'pow   [number? number? #(Math/pow % %2)]
      'atan2 [number? number? #(Math/atan2 % %2)]
      'logn  [number? number? #(/ (Math/log %) (Math/log %2))]})
