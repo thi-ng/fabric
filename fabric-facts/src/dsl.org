@@ -46,9 +46,15 @@
     [group]
     (if (fn? group)
       group
-      (if (sequential? group)
+      (cond
+        (and (sequential? group) (every? ff/qvar? group))
         (fn [r] (reduce #(conj % (get r %2)) [] group))
-        (fn [r] (get r group)))))
+
+        (ff/qvar? group)
+        (fn [r] (get r group))
+
+        :else
+        (compile-expr group))))
 
   (defn sub-query-options
     [{:keys [filter limit]}]
@@ -276,6 +282,15 @@
 
   (defmethod compile-expr 'agg-count
     [_] (fn [results] (count results)))
+#+END_SRC
+
+*** Grouping expressions
+
+#+BEGIN_SRC clojure :noweb-ref expr
+  (defmethod compile-expr 'group-bins-of
+    [[_ x n]]
+    (let [x (compile-expr x)]
+      (fn [res] (* (Math/floor (/ (x res) n)) n))))
 #+END_SRC
 
 ** Helper functions
