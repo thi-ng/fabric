@@ -931,7 +931,7 @@ min/max path lengths MUST be specified.
                   in-tx)
           tx    (result-transducer spec nil)
           cfn   (if group-by
-                  (let [gfn (group-by-reducer group-by)]
+                  (let [gfn (group-by-reducer spec group-by)]
                     (if in-tx
                       (fn [_ in] (transduce tx gfn {} (in-tx (peek in))))
                       (fn [_ in] (transduce tx gfn {} (peek in)))))
@@ -1097,7 +1097,7 @@ min/max path lengths MUST be specified.
                       (assoc acc k (select-keys (merge (first res) (agg res)) sel)))
                     (fn [acc k res]
                       (let [ares (agg res)]
-                        (assoc acc k (mapv #(select-keys (merge % ares) sel) res)))))))]
+                        (assoc acc k (into (empty res) (map #(select-keys (merge % ares) sel)) res)))))))]
       (fn [_ in]
         (reduce-kv rfn {} (cfn _ in)))))
 
@@ -1124,11 +1124,12 @@ min/max path lengths MUST be specified.
       (or tx (map identity))))
 
   (defn group-by-reducer
-    [grp]
-    (fn
-      ([] {})
-      ([res] res)
-      ([res input] (update res (grp input) #(conj (or % []) input)))))
+    [spec grp]
+    (let [type (if (:order spec) [] #{})]
+      (fn
+        ([] {})
+        ([res] res)
+        ([res input] (update res (grp input) #(conj (or % type) input))))))
 
   (defn remove-recursively
     [g res parent deps type]
