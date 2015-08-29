@@ -296,6 +296,7 @@ c -> e [label="p2"];
     (is (== 50 ((dsl/compile-expr '(agg-max ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
     (is (== 3 ((dsl/compile-expr '(agg-count)) '[{} {} {}])))
     (is (== 0 ((dsl/compile-expr '(agg-count)) nil)))
+    (is (= #{50 10} ((dsl/compile-expr '(agg-collect ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
     )
 #+END_SRC
 
