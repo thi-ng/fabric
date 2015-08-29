@@ -67,7 +67,7 @@ https://github.com/thi-ng/fabric
 **** [[https://github.com/thi-ng/strf][thi.ng/strf]]
 #+NAME: dep-strf
 #+BEGIN_SRC clojure
-[thi.ng/strf "0.2.0-SNAPSHOT"]
+[thi.ng/strf "0.2.1"]
 #+END_SRC
 
 **** [[https://github.com/clojure/data.int-map][data.int-map]]
