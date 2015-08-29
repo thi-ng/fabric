@@ -227,24 +227,54 @@ prefix, returns expanded string or else original value.
 #+BEGIN_SRC clojure :noweb-ref fact-tx
   (defn prefix-vector-transform
     [prefixes]
-    (reify ITwoWayTransform
-      (transform
-        [_ x]
-        (if (string? x)
-          (loop [[[pre pn] & more] (seq prefixes)]
-            (if pre
-              (if (zero? (.indexOf ^String x ^String pn))
-                [pre (subs x (count pn))]
-                (recur more))
-              x))
-          x))
-      (untransform
-        [_ x]
-        (if (vector? x)
-          (if-let [p (prefixes (first x))]
-            (str p (nth x 1))
-            x)
-          x))))
+    (let [prefixes' (rseq (vec (sort-by #(count (peek %)) prefixes)))]
+      (reify ITwoWayTransform
+        (transform
+          [_ x]
+          (if (string? x)
+            (reduce
+             (fn [acc p]
+               (if (zero? (.indexOf ^String x ^String (peek p)))
+                 (reduced [(first p) (subs x (count (peek p)))])
+                 acc))
+             x prefixes')
+            x))
+        (untransform
+          [_ x]
+          (if (vector? x)
+            (if-let [p (prefixes (first x))]
+              (str p (nth x 1))
+              x)
+            x)))))
+#+END_SRC
+
+This second version of this transform is very similar and only differs
+in its transformed result type: Instead of a vector, it produces a
+string of =prefix:name=.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn prefix-string-transform
+    [prefixes]
+    (let [prefixes' (rseq (vec (sort-by #(count (peek %)) prefixes)))]
+      (reify ITwoWayTransform
+        (transform
+          [_ x]
+          (if (string? x)
+            (reduce
+             (fn [acc p]
+               (if (zero? (.indexOf ^String x ^String (peek p)))
+                 (reduced (str (first p) \: (subs x (count (peek p)))))
+                 acc))
+             x prefixes')
+            x))
+        (untransform
+          [_ x]
+          (if (string? x)
+            (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
+              (if-let [p (prefixes p)]
+                (str p n)
+                x))
+            x)))))
 #+END_SRC
 
 **** Global fact item indexing
