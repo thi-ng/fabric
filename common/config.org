@@ -32,7 +32,7 @@ https://github.com/thi-ng/fabric
 **** [[https://github.com/clojure/clojurescript][ClojureScript]]
 #+NAME: dep-cljs
 #+BEGIN_SRC clojure
-[org.clojure/clojurescript "1.7.48"]
+[org.clojure/clojurescript "1.7.107"]
 #+END_SRC
 **** core.async
 #+NAME: dep-async
@@ -67,7 +67,7 @@ https://github.com/thi-ng/fabric
 **** [[https://github.com/thi-ng/strf][thi.ng/strf]]
 #+NAME: dep-strf
 #+BEGIN_SRC clojure
-[thi.ng/strf "0.1.0"]
+[thi.ng/strf "0.2.0-SNAPSHOT"]
 #+END_SRC
 
 **** [[https://github.com/clojure/data.int-map][data.int-map]]
