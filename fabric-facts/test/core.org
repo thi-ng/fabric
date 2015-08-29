@@ -204,7 +204,11 @@ c -> e [label="p2"];
           q2   (dsl/add-query-from-spec! g (assoc spec :group-by '?b))
           q3   (dsl/add-query-from-spec! g (assoc spec :select '[?total ?avg]))
           q4   (dsl/add-query-from-spec! g (assoc spec :select '[?total ?avg] :group-by '?b))
-          q5   (dsl/add-query-from-spec! g (assoc spec :group-by '(group-bins-of ?p 50)))]
+          q5   (dsl/add-query-from-spec! g (assoc spec :group-by '(group-bins-of ?p 50)))
+          q6   (dsl/add-query-from-spec! g (-> spec
+                                               (assoc-in [:aggregate '?pc] '(agg-collect ?p))
+                                               (assoc :select '[?b ?pc] :group-by '?b)
+                                               (dissoc :order)))]
       (run! #(ff/add-fact! g %)
             '[[b1 price 10] [b2 price 20] [b1 price 70] [b1 price 20]])
       (f/execute! (f/sync-execution-context {:graph g}))
@@ -224,7 +228,8 @@ c -> e [label="p2"];
                     {?b b1, ?p 20, ?total 50, ?avg 17, ?mean 20, ?num 3, ?min 10, ?max 20}
                     {?b b2, ?p 20, ?total 50, ?avg 17, ?mean 20, ?num 3, ?min 10, ?max 20}],
                50.0 [{?b b1, ?p 70, ?total 70, ?avg 70, ?mean 70, ?num 1, ?min 70, ?max 70}]}
-             @q5))))
+             @q5))
+      (is (= '{b1 #{{?b b1, ?pc #{70 20 10}}}, b2 #{{?b b2, ?pc #{20}}}} @q6))))
 #+END_SRC
 
 *** DSL expressions

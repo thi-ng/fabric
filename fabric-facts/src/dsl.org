@@ -280,6 +280,12 @@
         (let [res (sequence tx results)]
           (nth (sort res) (bit-shift-right (count res) 1) nil)))))
 
+  (defmethod compile-expr 'agg-collect
+    [[_ x]]
+    (let [x  (compile-expr x)
+          tx (comp (map x) (filter identity))]
+      (fn [results] (into #{} tx results))))
+
   (defmethod compile-expr 'agg-count
     [_] (fn [results] (count results)))
 #+END_SRC
