@@ -87,11 +87,12 @@ c -> e [label="p2"];
           pq4 (ff/add-path-query! g '[a [p1 p2] ?o] {:min 2 :max 3})
           pq5 (ff/add-path-query! g '[?s [p1 p2] e] {:min 2 :max 3})
           pq6 (ff/add-path-query! g '[?s [nil] ?o] {:min 1 :max 5})]
-      (ff/add-fact! g '[a p1 b])
-      (ff/add-fact! g '[b p1 c])
-      (ff/add-fact! g '[b p2 c])
-      (ff/add-fact! g '[c p1 d])
-      (ff/add-fact! g '[c p2 e])
+      (run! #(ff/add-fact! g %)
+            '[[a p1 b]
+              [b p1 c]
+              [b p2 c]
+              [c p1 d]
+              [c p2 e]])
       (f/execute! ctx)
       (is (= '#{{?s a ?o d}} @pq1))
       (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d}
@@ -193,7 +194,14 @@ c -> e [label="p2"];
   (deftest test-path-dsl
     (let [g  (ff/fact-graph)
           q1 (dsl/add-query-from-spec!
-              g '{:q [{:path [?a [p] ?b] :min 1 :max 5}]})]
+              g '{:q [{:path [?a [p] ?b] :min 1 :max 5}]})
+          q2 (dsl/add-query-from-spec!
+              g '{:q [{:path [?a [p p] ?b]}]})
+          q3 (dsl/add-query-from-spec!
+              g '{:q [{:path [?a [p p] ?b]
+                       :min 2 :max 3
+                       :filter (= a ?a)
+                       :select ?b}]})]
       (run! #(ff/add-fact! g %)
             '[[a p b]
               [a p c]
@@ -206,7 +214,9 @@ c -> e [label="p2"];
                 {?a b, ?b d} {?a b, ?b e} {?a b, ?b f}
                 {?a c, ?b e} {?a c, ?b f}
                 {?a e, ?b f}}
-             @q1))))
+             @q1))
+      (is (= '#{{?a a, ?b d} {?a a, ?b e} {?a b, ?b f} {?a c, ?b f}} @q2))
+      (is (= '#{{?b d} {?b e} {?b f}} @q3))))
 #+END_SRC
 
 *** DSL aggregation
