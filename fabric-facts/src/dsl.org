@@ -1,3 +1,16 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_3_gh:
+ - [[#namespace-thingfabricfactsdsl][Namespace: thi.ng.fabric.facts.dsl]]
+     - [[#todos][TODOs]]
+     - [[#examples][Examples]]
+     - [[#implementation][Implementation]]
+     - [[#expressions][Expressions]]
+         - [[#aggregation-expressions][Aggregation expressions]]
+         - [[#grouping-expressions][Grouping expressions]]
+     - [[#helper-functions][Helper functions]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
 * Namespace: thi.ng.fabric.facts.dsl
 
 ** TODOs
@@ -95,6 +108,14 @@
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
       (if parent
         (ff/add-query-union! g [parent q] {})
+        q)))
+
+  (defmethod compile-sub-query :path
+    [g parent q spec]
+    (let [opts (sub-query-options q)
+          q    (ff/add-path-query! g (:transform spec) (:path q) opts)]
+      (if parent
+        (ff/add-join! g parent q {})
         q)))
 
   (defn compile-query

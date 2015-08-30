@@ -81,12 +81,12 @@ c -> e [label="p2"];
   (deftest test-paths
     (let [g   (ff/fact-graph)
           ctx (f/sync-execution-context {:graph g})
-          pq1 (ff/add-path-query! g '[?s [p1] ?o] 3 3)
-          pq2 (ff/add-path-query! g '[?s [p1] ?o] 1 3)
-          pq3 (ff/add-path-query! g '[?s [p1 p2] ?o] 2 3)
-          pq4 (ff/add-path-query! g '[a [p1 p2] ?o] 2 3)
-          pq5 (ff/add-path-query! g '[?s [p1 p2] e] 2 3)
-          pq6 (ff/add-path-query! g '[?s [nil] ?o] 1 5)]
+          pq1 (ff/add-path-query! g '[?s [p1] ?o] {:min 3 :max 3})
+          pq2 (ff/add-path-query! g '[?s [p1] ?o] {:min 1 :max 3})
+          pq3 (ff/add-path-query! g '[?s [p1 p2] ?o] {:min 2 :max 3})
+          pq4 (ff/add-path-query! g '[a [p1 p2] ?o] {:min 2 :max 3})
+          pq5 (ff/add-path-query! g '[?s [p1 p2] e] {:min 2 :max 3})
+          pq6 (ff/add-path-query! g '[?s [nil] ?o] {:min 1 :max 5})]
       (ff/add-fact! g '[a p1 b])
       (ff/add-fact! g '[b p1 c])
       (ff/add-fact! g '[b p2 c])

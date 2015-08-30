@@ -889,68 +889,70 @@ min/max path lengths MUST be specified.
 
 #+BEGIN_SRC clojure
   ;; match path (of single pred) between depth 1 and 3
-  (add-path-query! g '[?s [pred] ?o] 1 3)
+  (add-path-query! g '[?s [pred] ?o] {:min 1 :max 3})
 
   ;; match path (cyclically repeated) between 2 hops 4
-  (add-path-query! g '[?s [pred1 pred2] ?o] 2 4)
+  (add-path-query! g '[?s [pred1 pred2] ?o] {:min 2 :max 4})
 
-  ;; math given path
+  ;; match given path
   (add-path-query! g '[?s [p1 p2 p3] ?o])
 
   ;; match *any* paths starting at "node-a" with len 2 - 4
-  (add-path-query! g '[node-a [nil] ?o] 1 4)
+  (add-path-query! g '[node-a [nil] ?o] {:min 1 :max 4})
 
   ;; check if path exists between fixed subject/object
   ;; this query has no variables, see note below
-  (add-path-query! g '[node-a [pred] node-b] 3 3)
+  (add-path-query! g '[node-a [pred] node-b] {:min 3 :max 3})
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-path-query!
     ([g path-pattern]
-     (let [len (count (nth path-pattern 1))]
-       (add-path-query! g path-pattern len len)))
-    ([g path-pattern mind maxd]
-     (add-path-query! g (fact-transform g) path-pattern mind maxd))
-    ([g ptx path-pattern mind maxd]
-     (assert (pos? mind) "min depth must be >= 1")
-     (assert (<= mind maxd) "min depth must be <= max depth")
-     (let [[patterns avars] (resolve-path-pattern path-pattern maxd)
-           [?s _ ?o] path-pattern
-           vs? (qvar? ?s)
-           vo? (qvar? ?o)
-           req (take mind patterns)
-           opt (drop mind (take maxd patterns))
-           req (if (seq req)
-                 (if (== 1 (count req))
-                   (add-param-query! g ptx (first req) {})
-                   (add-query-join! g ptx req {})))
-           opt (if (seq opt)
-                 (if (== 1 (count opt))
-                   (add-param-query! g ptx (first opt) {})
-                   (add-query-join-optional! g ptx opt {})))
-           q   (if (and req opt)
-                 (add-join! g join-optional req opt {}) ;; TODO opts
-                 (or req opt))
-           tx  (cond
-                 (or (= mind maxd) (and vs? (not vo?)))
-                 (let [qv (filter qvar? path-pattern)]
-                   (map #(select-keys* % qv)))
+     (add-path-query! g path-pattern {}))
+    ([g path-pattern opts]
+     (add-path-query! g (fact-transform g) path-pattern opts))
+    ([g ptx path-pattern opts]
+     (let [len (count (nth path-pattern 1))
+           {:keys [min max] :or {min len max len}} opts]
+       (assert (== 3 (count path-pattern)) "path queries only supported for triple patterns")
+       (assert (pos? min) "min depth must be >= 1")
+       (assert (<= min max) "min depth must be <= max depth")
+       (let [[patterns avars] (resolve-path-pattern path-pattern max)
+             [?s _ ?o] path-pattern
+             vs? (qvar? ?s)
+             vo? (qvar? ?o)
+             req (take min patterns)
+             opt (drop min (take max patterns))
+             req (if (seq req)
+                   (if (== 1 (count req))
+                     (add-param-query! g ptx (first req) {})
+                     (add-query-join! g ptx req {})))
+             opt (if (seq opt)
+                   (if (== 1 (count opt))
+                     (add-param-query! g ptx (first opt) {})
+                     (add-query-join-optional! g ptx opt {})))
+             q   (if (and req opt)
+                   (add-join! g join-optional req opt {}) ;; TODO opts
+                   (or req opt))
+             tx  (cond
+                   (or (= min max) (and vs? (not vo?)))
+                   (let [qv (filter qvar? path-pattern)]
+                     (map #(select-keys* % qv)))
 
-                 (and vo? (not vs?))
-                 (let [rv (take (dec mind) avars)]
-                   (mapcat #(map (fn [v] {?o v}) (vals (apply dissoc % rv)))))
+                   (and vo? (not vs?))
+                   (let [rv (take (dec min) avars)]
+                     (mapcat #(map (fn [v] {?o v}) (vals (apply dissoc % rv)))))
 
-                 :else
-                 (let [rv (cons ?s (take (dec mind) avars))]
-                   (mapcat
-                    #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
-           res (f/add-vertex!
-                g #{}
-                {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})
-           pq  (as-query-entity res nil [q] :remove-path-query)]
-       (f/add-edge! g (result-vertex q) res f/signal-forward nil)
-       pq)))
+                   :else
+                   (let [rv (cons ?s (take (dec min) avars))]
+                     (mapcat
+                      #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
+             res (f/add-vertex!
+                  g #{}
+                  {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})
+             pq  (as-query-entity res nil [q] :remove-path-query)]
+         (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+         pq))))
 #+END_SRC
 
 *** Query results
