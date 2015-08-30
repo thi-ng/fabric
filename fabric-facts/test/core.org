@@ -68,13 +68,13 @@
 *** Path queries
 
 #+BEGIN_SRC dot :tangle ../babel/test-paths.dot
-digraph g {
-a -> b [label="p1"];
-b -> c [label="p1"];
-b -> c [label="p2"];
-c -> d [label="p1"];
-c -> e [label="p2"];
-}
+  digraph g {
+  a -> b [label="p1"];
+  b -> c [label="p1"];
+  b -> c [label="p2"];
+  c -> d [label="p1"];
+  c -> e [label="p2"];
+  }
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref tests

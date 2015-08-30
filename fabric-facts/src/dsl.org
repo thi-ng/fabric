@@ -2,8 +2,12 @@
 
 * Contents                                                         :toc_3_gh:
  - [[#namespace-thingfabricfactsdsl][Namespace: thi.ng.fabric.facts.dsl]]
-     - [[#todos][TODOs]]
-     - [[#examples][Examples]]
+     - [[#introduction][Introduction]]
+     - [[#public-api][Public API]]
+     - [[#todo-examples][TODO Examples]]
+     - [[#query-specification][Query specification]]
+         - [[#sub-query-types][Sub-query types]]
+         - [[#sub-query-modifiers][Sub-query modifiers]]
      - [[#implementation][Implementation]]
      - [[#expressions][Expressions]]
          - [[#aggregation-expressions][Aggregation expressions]]
@@ -13,22 +17,160 @@
 
 * Namespace: thi.ng.fabric.facts.dsl
 
-** TODOs
+** Introduction
 
-- add support for path queries
+Whilst the query vertex tree functionality provided by the
+/facts-core/ module is powerful, it's somewhat "low-level", imperative
+and verbose to use. Therefore, this namespace provides a more
+userfriendly, succinct "high level" layer to construct query trees in
+a completely declarative way and exposes further functionality, like
+an expression language to define result filters, query variable
+projection, aggregations, sorting etc.
 
-** Examples
+The query spec DSL is highly inspired by the W3C SPARQL language,
+albeit expressed in a more Clojuresque way and not limited to RDF
+semantics.
+
+Query specs are described as standard Clojure maps and therefore offer
+all the usual benefits including composability, EDN serialization. The
+latter therefore also allows query specs to be stored in the graphs as
+part of facts and then be able to define queries returning query specs
+(e.g. for UI templating/widgets), thus enabling a completely dynamic
+and datadriven approach to design applications.
+
+The expression language is extensible via its multi-method
+implementation. See [[#expressions][section]] further below for details.
+
+** Public API
+
+The only public part of this namespace consists of this single function:
+
+#+BEGIN_SRC clojure :noweb-ref dsl-public
+  (defn add-query-from-spec!
+    [g spec]
+    (-> (compile-query g spec)
+        (compile-select-qvars g spec)))
+#+END_SRC
+
+** TODO Examples
+
+Lots more examples can be found in the [[../test/core.org][test]] namespace for this module.
+For a general overview of query patterns and supported query types,
+please also see the [[core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
+namespace.
 
 #+BEGIN_SRC clojure
-  '{:select   [?res ?type ...]
-    :transform ... ;; optional
-    :q         [{:where [[?res "dct:title" ?t] [?res "rdf:type" ?type]]}
-                {:optional [[?res "ea:schema" ?schema]]}]
-    :filter    (or (= ?res "ea:toxi") (= ?type "foaf:Person"))
-    :group-by  [?type ?res]
-    :aggregate {?num (agg-count)}
-    :order     ?type}
+  (dsl/add-query-from-spec!
+   graph
+   '{:select    [?res ?type ...]
+     :q         [{:where [[?res :title ?t] [?res :type ?type]]}
+                 {:optional [[?res :schema ?schema]]}]
+     :filter    (or (= ?res :toxi) (= ?type :person))
+     :group-by  [?type ?res]
+     :aggregate {?num (agg-count)}
+     :order     ?type})
 #+END_SRC
+
+** Query specification
+
+A query spec map can have the following toplevel keys:
+
+| *Key*        | *Required?* | *Value*                        | *Description*                                    |
+|--------------+-------------+--------------------------------+--------------------------------------------------|
+| =:q=         | Y           | Vector                         | Vector of sub-query maps (see below)             |
+| =:select=    | N           | qvar or qvar vec               | List qvars to be projected into result set       |
+| =:filter=    | N           | fn or DSL expression           | Filter criteria for result set                   |
+| =:order=     | N           | fn, qvar, qvar vec or DSL expr | Sorting criteria for result set                  |
+| =:group-by=  | N           | fn, qvar, qvar vec or DSL expr | Grouping criteria for results, causes result map |
+| =:aggregate= | N           | fn or DSL aggregation expr     | Inject new qvars w/ reduced values               |
+| =:limit=     | N           | Positive int                   | Limit the number of results to N items           |
+
+*** Sub-query types
+
+The DSL supports the following sub-query types. Each type (apart from
+=:path=) takes a number of query patterns and always computes their
+joined result set. The sub-query types only differ in how each
+sub-queries results are merged with others.
+
+**** :where - join queries
+
+Standard join with other sub-query results.
+
+#+BEGIN_SRC clojure
+  ;; match any two people knowing eachother
+  ;; but only if we know both of their nicknames too
+  {:q [{:where [[?a knows ?b]
+                [?a nickname ?anick]
+                [?b nickname ?bnick]]}]}
+#+END_SRC
+
+**** :optional - optional join queries
+
+Optional join with other sub-query results. Since on the RHS is the
+optional part in this join type, this type should *not* be used as
+first sub-query in a main spec.
+
+Examples:
+
+#+BEGIN_SRC clojure
+  ;; match people acquaintances
+  ;; optionally match 1st person's nickname and/or age
+  {:q [{:where [[?a knows ?b]]}
+       {:optional [[?a nickname ?nick]]}
+       {:optional [[?a age ?age]]}]}
+#+END_SRC
+
+*Important:* Note the use of two separate =:optional= sub-queries. If
+both the optional =?nick= and =?age= where part of the same sub-query,
+then only =?a='s with *both* =?nick= and =?age= would be matched. By
+keeping them separate, this query will also match =?a='s with only
+=?nick= *or* =?age= values.
+
+**** :union - query unions
+
+A query union simply merges its own result maps with that of other
+sub-queries. This query type too should *not* be used as first
+sub-query in a main spec.
+
+*Important:* This type is only meant to merge distinct result sets
+without any shared qvars!
+
+Examples:
+
+#+BEGIN_SRC clojure
+  ;; return any "knowing" and friend relationships
+  {:q [{:where [[?a knows ?b]]}
+       {:union [[?e friend ?f]]}]}
+#+END_SRC
+
+**** :path - bounded path queries
+
+A sub-query of this type takes a single path query pattern and options
+map defining accepted path lengths:
+
+Examples:
+
+#+BEGIN_SRC clojure
+  ;; match grandparent rels
+  {:q [{:path [?gp [parent-of parent-of] ?gc]}]}
+
+  ;; match ancestor rels w/ path lens 2-4
+  {:q [{:path [?a [parent-of] ?b] :min 2 :max 4}]}
+
+  ;; match friends of children (and optionally their friends)
+  {:q [{:path [?p [parent-of friend friend] ?f] :min 2 :max 3}]}
+#+END_SRC
+
+*** Sub-query modifiers
+
+- =:filter= - same as top-level filter expression, but only applying
+  to this sub-query
+- =:limit= - limit a sub-query's result set to N items
+- =:select= - select qvars to be projected into result set. This is
+  useful for large join queries w/ various intermediate qvars, not
+  required to be retained outside the sub-query. Use of this feature
+  will have a positive impact on down-stream joins and other result
+  processing performance.
 
 ** Implementation
 
@@ -136,11 +278,6 @@
                  (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
                                        (update :aggregate compile-result-aggregation)))]
       (ff/add-query-result! g spec result)))
-
-  (defn add-query-from-spec!
-    [g spec]
-    (-> (compile-query g spec)
-        (compile-select-qvars g spec)))
 #+END_SRC
 
 ** Expressions
@@ -354,4 +491,6 @@
   <<expr>>
 
   <<dsl>>
+
+  <<dsl-public>>
 #+END_SRC
