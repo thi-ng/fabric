@@ -187,6 +187,28 @@ c -> e [label="p2"];
       (is (== (+ 3 8) (count (f/vertices g))))))
 #+END_SRC
 
+*** DSL path queries
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-path-dsl
+    (let [g  (ff/fact-graph)
+          q1 (dsl/add-query-from-spec!
+              g '{:q [{:path [?a [p] ?b] :min 1 :max 5}]})]
+      (run! #(ff/add-fact! g %)
+            '[[a p b]
+              [a p c]
+              [b p d]
+              [b p e]
+              [c p e]
+              [e p f]])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= '#{{?a a, ?b b} {?a a, ?b c} {?a a, ?b d} {?a a, ?b e} {?a a, ?b f}
+                {?a b, ?b d} {?a b, ?b e} {?a b, ?b f}
+                {?a c, ?b e} {?a c, ?b f}
+                {?a e, ?b f}}
+             @q1))))
+#+END_SRC
+
 *** DSL aggregation
 
 #+BEGIN_SRC clojure :noweb-ref tests

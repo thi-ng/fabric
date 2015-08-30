@@ -75,7 +75,7 @@
      :limit  limit})
 
   (defmulti compile-sub-query
-    (fn [g parent q spec] (some #{:where :optional :union} (keys q))))
+    (fn [g parent q spec] (some #{:where :optional :union :path} (keys q))))
 
   (defmethod compile-sub-query :where
     [g parent q spec]
@@ -112,7 +112,7 @@
 
   (defmethod compile-sub-query :path
     [g parent q spec]
-    (let [opts (sub-query-options q)
+    (let [opts (merge (select-keys q [:min :max]) (sub-query-options q))
           q    (ff/add-path-query! g (:transform spec) (:path q) opts)]
       (if parent
         (ff/add-join! g parent q {})
