@@ -724,12 +724,7 @@ set only contains unique bindings of query variable =?s=.
                          (map #(if (verify %) (vmap %)))
                          (map vmap))
                tx      (comp tx (filter identity))
-               tx      (if-let [flt (:filter opts)]
-                         (comp tx (filter flt))
-                         tx)
-               tx      (if-let [lim (:limit opts)]
-                         (comp tx (take lim))
-                         tx)
+               tx      (non-grouping-result-transducer opts tx)
                coll-fn (f/collect-pure
                         (fn [_ incoming]
                           (if-let [res (seq (peek incoming))]
@@ -785,12 +780,7 @@ set only contains unique bindings of query variable =?s=.
            rhs-v  (result-vertex rhs)
            lhs-id (f/vertex-id lhs-v)
            rhs-id (f/vertex-id rhs-v)
-           tx     (if-let [flt (:filter opts)]
-                    (filter flt))
-           tx     (if-let [lim (:limit opts)]
-                    (let [tx' (take lim)]
-                      (if tx (comp tx tx') tx'))
-                    tx)
+           tx     (non-grouping-result-transducer opts nil)
            cfn    (if tx #(into #{} tx (join-fn % %2)) join-fn)
            res    (f/add-vertex!
                    g nil
@@ -947,6 +937,7 @@ min/max path lengths MUST be specified.
                    (let [rv (cons ?s (take (dec min) avars))]
                      (mapcat
                       #(let [s (% ?s)] (map (fn [v] {?s s ?o v}) (vals (apply dissoc % rv)))))))
+             tx  (non-grouping-result-transducer opts tx)
              res (f/add-vertex!
                   g #{}
                   {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})
@@ -976,7 +967,7 @@ min/max path lengths MUST be specified.
                     #(sort-by order (in-tx %))
                     #(sort-by order %))
                   in-tx)
-          tx    (result-transducer spec nil)
+          tx    (or (result-transducer spec nil) (map identity))
           cfn   (if group-by
                   (let [gfn (group-by-reducer spec group-by)]
                     (if in-tx
@@ -1164,11 +1155,15 @@ min/max path lengths MUST be specified.
                        tx' (comp (map #(select-keys % sel)) (filter seq))
                        agg (set (keys (:aggregate* spec)))
                        tx' (if (and (seq agg) (every? agg sel))
-                             (comp tx' (take 1)) tx')]
+                             (comp tx' (take 1))
+                             tx')]
                    (if tx (comp tx tx') tx'))
                  tx)
                tx)]
-      (or tx (map identity))))
+      tx))
+
+  (defn non-grouping-result-transducer
+    [spec tx] (result-transducer (dissoc spec :group-by :aggregate*) tx))
 
   (defn group-by-reducer
     [spec grp]
