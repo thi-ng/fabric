@@ -6,6 +6,7 @@
      - [[#object-string-literal-handling][Object string literal handling]]
          - [[#language-tags][Language tags]]
          - [[#type-mapping][Type mapping]]
+     - [[#bnode-handling][BNode handling]]
      - [[#parser][Parser]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
@@ -76,6 +77,33 @@ typed object literals will be returned as map with these keys:
   (defmethod literal-value (:double xsd) [x _]  (strf/parse-double x))
   (defmethod literal-value (:decimal xsd) [x _] (strf/parse-double x))
   (defmethod literal-value (:boolean xsd) [x _] (strf/parse-boolean x))
+#+END_SRC
+
+** BNode handling
+
+Using the =map-bnodes= function below, RDF BNodes in the graph can be
+converted to alternative representations. If no ID generator fn is
+given, BNode identifiers will be converted into UUIDv4's.
+
+The function consumes a seq of parsed NTriples and returns the seq
+with transformed BNodes.
+
+#+BEGIN_SRC clojure :noweb-ref bnodes
+  (defn bnodes
+    [facts]
+    (into
+     #{}
+     (comp (mapcat identity)
+           (filter string?)
+           (filter #(zero? (.indexOf ^String % "_:"))))
+     facts))
+
+  (defn map-bnodes
+    ([facts]
+     (map-bnodes strf/new-uuid facts))
+    ([idgen facts]
+     (let [bn-map (zipmap (bnodes facts) (repeatedly idgen))]
+       (map (fn [fact] (mapv #(bn-map % %) fact)) facts))))
 #+END_SRC
 
 ** Parser
