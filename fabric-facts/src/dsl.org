@@ -70,9 +70,10 @@
         (compile-expr group))))
 
   (defn sub-query-options
-    [{:keys [filter limit]}]
-    {:filter (if filter (compile-query-filter filter))
-     :limit  limit})
+    [opts]
+    (-> opts
+        (select-keys [:filter :limit :select])
+        (update :filter #(if % (compile-query-filter %)))))
 
   (defmulti compile-sub-query
     (fn [g parent q spec] (some #{:where :optional :union :path} (keys q))))
