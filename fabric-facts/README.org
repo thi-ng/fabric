@@ -12,7 +12,7 @@
      - [[#building--testing-this-project][Building & testing this project]]
      - [[#injected-properties][Injected properties]]
      - [[#leiningen-project-file][Leiningen project file]]
-     - [[#clojurescript-html-harness][ClojureScript HTML harness]]
+     - [[#clojurescript-html-test-harness][ClojureScript HTML test harness]]
      - [[#accessing-library-version-during-runtime][Accessing library version during runtime]]
          - [[#version-namespace][Version namespace]]
      - [[#license][License]]
@@ -21,10 +21,11 @@
 
 ** Overview
 
-This module provides the following features on top of the core compute
-graph setup:
+This module provides the following features on top of the
+/fabric-core/ compute graph setup:
 
 - Triple or Quad fact graphs
+- Specialized, more lightweight fact vertices
 - Fact indexing
 - Fact graph logging / fact persistence (via [[https://github.com/clojure/core.async][core.async]])
 - Query tree construction (vertex based)
@@ -32,14 +33,15 @@ graph setup:
   - Joins
   - Optional joins
   - Unions
+  - Bounded length path queries (min/max limits, forward, reverse)
   - Arbitrary filters at any query level
   - Nested result sorting
   - Nested result grouping
   - Grouped & un-grouped result aggregation fns & expressions
-  - Bounded length path queries (min/max limits)
+  - Result limiting
+- Map based query expression DSL (EDN serializable)
 - Extensive query & sub-query reuse/caching
 - Intelligent recursive query tree removal
-- Map based query expression DSL (EDN serializable)
 - Queries are only computed once, results are cached and only updated
   automatically when underlying fact set is changing
 - Rule based inferencing based on any query
@@ -52,18 +54,21 @@ ALPHA quality, in active development.
 ** Example usage
 
 The [[../README.org#automatically-updating-fact-graph-queries-with-rule-based-inferencing][main README]] contains an example for this module and more detailed
-information can be found in the core namespace and tests. Literate
+information can be found in the core and test namespaces. Literate
 programming FTW!
 
 * Namespaces
 
-- [[./src/core.org][thi.ng.fabric.facts.core]]
-- [[./src/dsl.org][thi.ng.fabric.facts.dsl]]
-- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]]
+- [[./src/core.org][thi.ng.fabric.facts.core]] - core fact graph & query tree functionality
+- [[./src/dsl.org][thi.ng.fabric.facts.dsl]] - Highlevel, declararite query DSL
+- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]] - RDF NTriples parser
 
 * Tests
 
-- [[./test/facts.org][thi.ng.fabric.test.facts]]
+Currently there're 100+ tests & examples showing common usage patterns
+of this module:
+
+- [[./test/core.org][thi.ng.fabric.facts.test.core]]
 
 * Module definition
 
@@ -126,7 +131,7 @@ target/fabric-facts-<<conf-version()>>.js
                                 [:timezone "0"]]])
 #+END_SRC
 
-** ClojureScript HTML harness                                      :noexport:
+** ClojureScript HTML test harness                                 :noexport:
 
 #+BEGIN_SRC html :tangle babel/index.html :noweb yes :mkdirp yes :padline no
   <!DOCTYPE html>
