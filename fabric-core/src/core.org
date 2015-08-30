@@ -548,52 +548,61 @@ This namespace provides...
           threads     (:threads ctx)
           res-chan    (:result ctx)
           notify-chan (async/chan (async/dropping-buffer 1))
+          running?    (volatile! false)
           watch-id    (keyword (gensym))
           v-filter    (filter #(or (> (score-signal %) s-thresh) (> (score-collect %) c-thresh)))
           ->result    (fn [type sigs colls t0] (go (>! res-chan (execution-result type sigs colls t0))))]
       (reify
         #?@(:clj
              [clojure.lang.IDeref
-              (deref [_] ctx)]
+              (deref [_] (assoc ctx :running @running?))]
              :cljs
              [IDeref
-              (-deref [_] ctx)])
+              (-deref [_] (assoc ctx :running @running?))])
         IGraphExecutor
         (stop!
           [_]
           (remove-context-watches! g watch-id (:watches ctx))
-          (async/close! notify-chan))
+          (async/close! notify-chan)
+          (vreset! running? false))
         (notify!
           [_] (go (>! notify-chan true)) nil)
         (execute!
           [_]
-          (let [t0     (volatile! (now))
-                active (volatile! (sequence v-filter (vertices g)))
-                queue  (atom #{})]
-            (add-context-watches! g watch-id queue (:watches ctx))
-            (go-loop [colls 0, sigs 0]
-              ;;(warn :active-count (count @active))
-              (if (seq @active)
-                (if (<= (+ colls sigs) max-ops)
-                  (let [grp-size            (max 512 (long (/ (count @active) threads)))
-                        [act' sigs' colls'] (scheduler grp-size @active)
-                        curr-q              @queue]
-                    ;;(warn :queue (count curr-q))
-                    (vreset! active (into (into #{} v-filter act') curr-q))
-                    (compare-and-set! queue curr-q #{})
-                    (recur (long (+ colls colls')) (long (+ sigs sigs'))))
-                  (do (stop! _)
-                      (->result :max-ops-reached sigs colls @t0)))
-                (do (->result :converged sigs colls @t0)
-                    (if (:auto-stop ctx)
-                      (stop! _)
-                      (when (<! notify-chan)
-                        (vreset! t0 (now))
-                        (vreset! active (sequence v-filter (vertices g)))
-                        (reset! queue #{})
-                        ;;(warn :rerun (count @active))
-                        (recur 0 0))))))
-            res-chan)))))
+          (if-not @running?
+            (do
+              (vreset! running? true)
+              (let [t0     (volatile! (now))
+                    active (volatile! (sequence v-filter (vertices g)))
+                    queue  (atom #{})]
+                (add-context-watches! g watch-id queue (:watches ctx))
+                (go-loop [colls 0, sigs 0]
+                  ;;(warn :active-count (count @active))
+                  (if (and @running? (seq @active))
+                    (if (<= (+ colls sigs) max-ops)
+                      (let [grp-size            (max 512 (long (/ (count @active) threads)))
+                            [act' sigs' colls'] (scheduler grp-size @active)
+                            curr-q              @queue]
+                        ;;(warn :queue (count curr-q))
+                        (vreset! active (into (into #{} v-filter act') curr-q))
+                        (compare-and-set! queue curr-q #{})
+                        (recur (long (+ colls colls')) (long (+ sigs sigs'))))
+                      (do (stop! _)
+                          (->result :max-ops-reached sigs colls @t0)))
+                    (if @running?
+                      (do (->result :converged sigs colls @t0)
+                          (if (:auto-stop ctx)
+                            (stop! _)
+                            (when (<! notify-chan)
+                              (vreset! t0 (now))
+                              (vreset! active (sequence v-filter (vertices g)))
+                              (reset! queue #{})
+                              ;;(warn :rerun (count @active))
+                              (recur 0 0))))
+                      (->result :stopped sigs colls @t0))))
+                res-chan))
+            (do (warn "execution context already running, use notify! to re-trigger...")
+                res-chan))))))
 #+END_SRC
 
 *** Scheduled & async context processing
