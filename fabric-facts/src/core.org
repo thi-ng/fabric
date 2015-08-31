@@ -37,7 +37,6 @@
          - [[#maps-as-facts][maps as facts?]]
 
 * Namespace: thi.ng.fabric.facts.core
-
 ** Protocols
 
 #+BEGIN_SRC clojure :noweb-ref protos
@@ -65,7 +64,6 @@
 #+END_SRC
 
 ** Core types & concepts
-
 *** Facts
 
 Facts are simply vectors of (currently 3 or 4) items, e.g. =[subject
@@ -237,9 +235,12 @@ prefix, returns expanded string or else original value.
  =combine-transforms= (described below).
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn sort-prefixes
+    [prefixes] (rseq (vec (sort-by #(count (peek %)) prefixes))))
+
   (defn prefix-vector-transform
     [prefixes]
-    (let [prefixes' (rseq (vec (sort-by #(count (peek %)) prefixes)))]
+    (let [prefixes' (sort-prefixes prefixes)]
       (reify ITwoWayTransform
         (transform
           [_ x]
@@ -265,28 +266,34 @@ in its transformed result type: Instead of a vector, it produces a
 string of =prefix:name=.
 
 #+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn ->prefix-string
+    [prefixes' x]
+    (if (string? x)
+      (reduce
+       (fn [acc p]
+         (if (zero? (.indexOf ^String x ^String (peek p)))
+           (reduced (str (first p) \: (subs x (count (peek p)))))
+           acc))
+       x prefixes')
+      x))
+
+  (defn <-prefix-string
+    [prefixes x]
+    (if (string? x)
+      (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
+        (if-let [p (prefixes p)]
+          (str p n)
+          x))
+      x))
+
   (defn prefix-string-transform
     [prefixes]
-    (let [prefixes' (rseq (vec (sort-by #(count (peek %)) prefixes)))]
+    (let [prefixes' (sort-prefixes prefixes)]
       (reify ITwoWayTransform
         (transform
-          [_ x]
-          (if (string? x)
-            (reduce
-             (fn [acc p]
-               (if (zero? (.indexOf ^String x ^String (peek p)))
-                 (reduced (str (first p) \: (subs x (count (peek p)))))
-                 acc))
-             x prefixes')
-            x))
+          [_ x] (->prefix-string prefixes' x))
         (untransform
-          [_ x]
-          (if (string? x)
-            (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
-              (if-let [p (prefixes p)]
-                (str p n)
-                x))
-            x)))))
+          [_ x] (<-prefix-string prefixes x)))))
 #+END_SRC
 
 ***** Global fact item indexing
@@ -969,10 +976,10 @@ min/max path lengths MUST be specified.
                   in-tx)
           tx    (or (result-transducer spec nil) (map identity))
           cfn   (if group-by
-                  (let [gfn (group-by-reducer spec group-by)]
+                  (let [gfn (transient-group-by-reducer spec group-by)]
                     (if in-tx
-                      (fn [_ in] (transduce tx gfn {} (in-tx (peek in))))
-                      (fn [_ in] (transduce tx gfn {} (peek in)))))
+                      (fn [_ in] (postprocess-group-by (transduce tx gfn (in-tx (peek in)))))
+                      (fn [_ in] (postprocess-group-by (transduce tx gfn (peek in))))))
                   (if in-tx
                     (fn [_ in] (into (if order [] #{}) tx (in-tx (peek in))))
                     (fn [_ in] (into #{} tx (peek in)))))
@@ -1165,13 +1172,21 @@ min/max path lengths MUST be specified.
   (defn non-grouping-result-transducer
     [spec tx] (result-transducer (dissoc spec :group-by :aggregate*) tx))
 
-  (defn group-by-reducer
+  (defn transient-group-by-reducer
     [spec grp]
-    (let [type (if (:order spec) [] #{})]
+    (let [ctype (if (:order spec) [] #{})]
       (fn
-        ([] {})
+        ([] (transient {}))
         ([res] res)
-        ([res input] (update res (grp input) #(conj (or % type) input))))))
+        ([res input]
+         (let [k (grp input)]
+           (assoc! res k (conj! (get res k (transient ctype)) input)))))))
+
+  (defn postprocess-group-by
+    [res]
+    (reduce-kv
+     (fn [acc k v] (assoc acc k (persistent! v)))
+     {} (persistent! res)))
 
   (defn remove-recursively
     [g res parent deps type]
