@@ -1,0 +1,295 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_3_gh:
+ - [[#namespace-thingfabricldcore][Namespace: thi.ng.fabric.ld.core]]
+     - [[#protocols][Protocols]]
+     - [[#components][Components]]
+         - [[#factgraph-component-wrapper][FactGraph component wrapper]]
+         - [[#graph-model][Graph model]]
+         - [[#entity-registries][Entity registries]]
+         - [[#handler][Handler]]
+         - [[#aleph-server][Aleph server]]
+     - [[#component-system-creation][Component system creation]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
+* Namespace: thi.ng.fabric.ld.core
+
+** Protocols
+
+#+BEGIN_SRC clojure :noweb-ref protocols
+  (defprotocol IGraphAccess
+    (get-graph [_]))
+
+  (defprotocol IGraphModel
+    (prefix-map [_])
+    (update-prefix-map [_])
+    (event-bus [_])
+    (add-facts [_ facts])
+    (remove-facts [_ facts])
+    (add-query [_ q notify?])
+    (remove-query [_ q])
+    (add-rule [_ rule])
+    (remove-rule [_ rule]))
+
+  (defprotocol IEntityRegistry
+    (register [_ id spec])
+    (deregister [_ id]))
+
+  (defprotocol IHandler
+    (route-map [_]))
+#+END_SRC
+
+** Components
+
+*** FactGraph component wrapper
+
+#+BEGIN_SRC clojure :noweb-ref graph
+  (defrecord GraphComponent [config graph]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "initializing graph")
+      (let [g (ff/compute-graph config)]
+        (assoc _ :graph g)))
+    (stop
+      [_]
+      (info "stop graph component")
+      (assoc _ :graph nil))
+    IGraphAccess
+    (get-graph [_] graph))
+#+END_SRC
+
+*** Graph model
+
+#+BEGIN_SRC clojure :noweb-ref model
+  (defrecord IGraphModel [graph ctx bus]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting graph model")
+      (let [bus-in (chan)
+            bus    (async/mult bus-in)
+            ctx    (f/async-execution-context {:graph graph :result bus-in})]
+        (assoc _ :ctx ctx :bus bus)))
+    (stop
+      [_]
+      (info "stop graph model")
+      (f/stop! ctx)
+      (assoc _ :graph nil :ctx nil :bus nil))
+    IGraphAccess
+    (get-graph
+      [_] (get-graph graph))
+    IGraphModel
+    (event-bus
+      [_] bus)
+    (add-facts
+      [_ facts]
+      (run! #(ff/add-fact! graph %) facts)
+      (f/notify! ctx)
+      _)
+    (remove-facts
+      [_ facts]
+      (run! #(ff/remove-fact! graph %) facts)
+      (f/notify! ctx)
+      _)
+    (add-query
+      [_ q notify?]
+      (dsl/add-query-from-spec! graph q)
+      (when notify? (f/notify! ctx))
+      _)
+    (remove-query
+      [_ q]
+      (f/remove-from-graph! q graph)
+      (f/notify! ctx)
+      _)
+    (add-rule
+      [_ rule]
+      (ff/add-rule! graph rule)
+      (f/notify! ctx)
+      _)
+    (remove-rule
+      [_ rule]
+      (f/remove-from-graph! rule graph)
+      (f/notify! ctx)
+      _))
+
+  (defn make-graph-model
+    [config]
+    (map->GraphModel {:prefixes (:prefixes config)}))
+#+END_SRC
+
+*** Entity registries
+**** Query registry
+
+***** TODO define vocab for queries defined in graph
+***** TODO auto-register stored queries when component starts
+***** Impl
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord QueryRegistry [model registry]
+    comp/Lifecycle
+    (start [_]
+      (info "starting query registry") _)
+    (stop [_]
+      (info "stopping query registry") _)
+    IEntityRegistry
+    (register
+      [_ id spec]
+      (let [id (or id (str (java.util.UUID/randomUUID)))]
+        (when-not (@registry id)
+          (info "register query:" id spec)
+          (let [q (add-query model spec true)]
+            (swap! registry assoc id {:spec spec :query q})
+            id))))
+    (deregister
+      [_id]
+      (when-let [q (:query (@registry id))]
+        (info "deregister query:" id)
+        (remove-query q model)
+        (swap! registry dissoc id)
+        q)))
+#+END_SRC
+
+**** Inference rule registry
+
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord RuleRegistry [model registry]
+    comp/Lifecycle
+    (start [_]
+      (info "starting rule registry") _)
+    (stop [_]
+      (info "stopping rule registry") _)
+    IEntityRegistry
+    (register
+      [_ id spec]
+      (let [id (or id (str (java.util.UUID/randomUUID)))]
+        (when-not (@registry id)
+          (info "register rule:" id spec)
+          (let [prod  (compile-rule-production (:prod spec))
+                query (add-query model (:q spec) false)
+                rule  (add-rule model {:id id :query query :production prod})]
+            (swap! registry assoc id {:spec spec :rule rule})
+            id)))))
+#+END_SRC
+
+**** Registry helpers
+
+#+BEGIN_SRC clojure :noweb-ref registry-helpers
+  (defn find-cached
+    [cache spec]
+    (some (fn [[id q]] (if (= (:spec q) spec) id)) cache))
+
+  (defn compile-production-item
+    [[op fact]]
+    (let [fact (map #(if (ff/qvar? %) (fn [r] (r %)) (fn [_] %)) fact)]
+      (case op
+        :add (fn [g res] (ff/add-fact! g (mapv #(% res) fact)))
+        :remove (fn [g res] (ff/remove-fact! g (mapv #(% res) fact)))
+        (throw (IllegalArgumentException. (str "invalid production op: " op))))))
+
+  (defn compile-rule-production
+    [prod]
+    (let [prods (mapv compile-production-item prod)]
+      (fn [g _ res] (run! #(% g res) prods))))
+#+END_SRC
+
+*** Handler
+
+#+BEGIN_SRC clojure :noweb-ref handler
+  (defn wrap-defaults
+    [routes]
+    (let [defaults (assoc-in site-defaults [:security :anti-forgery] false)
+          routes   (-> routes
+                       (wrap-defaults defaults))
+          routes   (if (:dev config)
+                     (wrap-stacktrace routes)
+                     routes)]
+      routes))
+
+  (defrecord Handler [config model routes]
+    comp/Lifecycle
+    (start [_]
+      (info "starting handler...")
+      (let [routes ((:routes config) config model)]
+        (assoc _ :routes routes)))
+    (stop [_]
+      (info "stopping handler..."))
+    IHandler
+    (route-map [_]
+      routes))
+
+  (defn make-handler
+    [config] (Handler. config nil nil))
+#+END_SRC
+
+*** Aleph server
+
+#+BEGIN_SRC clojure :noweb-ref aleph
+  (defrecord AlephServer [config server handler]
+    comp/Lifecycle
+    (start [_]
+      (if-not server
+        (let [port   (:port config)
+              routes (proto/route-map handler)]
+          (info "starting aleph server on port:" port)
+          (assoc _ :server (http/start-server routes {:port port})))
+        (do (warn "aleph server already running...")
+            _)))
+    (stop [_]
+      (if server
+        (do (info "stopping server...")
+            (.close ^java.io.Closeable server)
+            (assoc _ :server nil))
+        (do (warn "aleph server already stopped!")
+            _))))
+#+END_SRC
+
+** Component system creation
+
+#+BEGIN_SRC clojure :noweb-ref config
+  (def default-config
+    {:graph   {:transform ff/identity-transform}
+     :model   {}
+     :queries {}
+     :rules   {}
+     :handler {}
+     :server  {:port 8000}})
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref system
+  (defn make-system
+    [config]
+    (comp/system-map
+     :graph   (make-graph (:graph config))
+     :model   (comp/using
+               (make-graph-model (:model config))
+               {:graph :graph})
+     :queries (comp/using
+               (make-query-registry (:queries config))
+               {:model :model})
+     :rules   (comp/using
+               (make-rule-registry (:rules config))
+               {:model :model})
+     :handler (comp/using
+               (handler/make-handler (:handler config))
+               {:model :model
+                :queries :queries
+                :rules :rules})
+     :server  (comp/using
+               (server/make-server (:server config))
+               {:handler :handler})))
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/ld/core.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.ld.core
+    (:require
+     [com.stuartsierra.component :as comp]
+     [thi.ng.xerror.core :as err]
+     [aleph.http :as http]
+     [clojure.edn :as edn]
+     [clojure.core.async :as async :refer [go go-loop <! >!]]
+     [taoensso.timbre :refer [debug info warn]]))
+#+END_SRC
+
+
