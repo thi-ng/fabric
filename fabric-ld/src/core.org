@@ -103,13 +103,11 @@
   (defn default-logger
     [config prefixes]
     (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
-          path    (format (:path config) session)
-          ftx     (ff/combine-transforms prefixes 3)]
+          path    (format (:path config) session)]
       (info "fact logger writing to:" path)
-      (fn [[op fact]]
-        (info :log-fact op fact)
-        (let [fact (ff/untransform ftx fact)]
-          (spit path (str (pr-str [op fact]) "\n") :append true)))))
+      (fn [evt]
+        (info :fact-log evt)
+        (spit path (str (pr-str evt) "\n") :append true))))
 #+END_SRC
 
 *** Graph model
