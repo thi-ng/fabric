@@ -1519,22 +1519,27 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 ** Graph logging
 
+A =FactGraph= emits the events =:add-fact= or =:remove-fact= whenever
+a fact is added or removed. The =add-fact-graph-logger= function below
+can be used to subscribe to these events and react to them, for
+example to write a log of graph changes to disk. The fn takes a log
+function which is called with a single arg, a 2-element vector of
+=[event fact]=. The user function is called from a /core.async/
+=go-loop= setup by =add-fact-graph-logger=.
+
 #+BEGIN_SRC clojure :noweb-ref logger
   (def fact-log-transducer
-    (comp
-     (filter (fn [evt] (#{:add-fact :remove-fact} (first evt))))
-     (map (fn [[op v]] [({:add-fact :add :remove-fact :remove} op) @v]))))
+    (map (fn [[op f]] [({:add-fact :add :remove-fact :remove} op) f])))
 
   (defn add-fact-graph-logger
     [g log-fn]
-    (let [ch        (chan 1024 fact-log-transducer)
+    (let [ch        (chan 1024)
           watch-id  (f/random-id)
           log->chan #(go (>! ch %))]
       (go-loop []
-        (let [t (<! ch)]
-          (when t
-            (log-fn t)
-            (recur))))
+        (when-let [t (<! ch)]
+          (log-fn t)
+          (recur)))
       (f/add-watch! g :add-fact watch-id log->chan)
       (f/add-watch! g :remove-fact watch-id log->chan)
       {:graph g :chan ch :watch-id watch-id}))
