@@ -5,6 +5,7 @@
      - [[#protocols][Protocols]]
      - [[#components][Components]]
          - [[#factgraph-component-wrapper][FactGraph component wrapper]]
+         - [[#fact-log][Fact log]]
          - [[#graph-model][Graph model]]
          - [[#entity-registries][Entity registries]]
          - [[#handlers][Handlers]]
@@ -62,6 +63,35 @@
   (defn make-graph
     [config]
     (map->LDGraph {}))
+#+END_SRC
+
+*** Fact log
+
+#+BEGIN_SRC clojure :noweb-ref logger
+  (defrecord FactLogger [config graph logger prefixes]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting fact logger")
+      (let [log-fn ((:fn config) config prefixes)
+            logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
+        (assoc _ :logger logger)))
+    (stop
+      [_]
+      (info "stop fact logger")
+      (ff/remove-fact-graph-logger logger)
+      (assoc _ :graph nil :logger nil :prefixes nil)))
+
+  (defn make-logger
+    [config]
+    (map->FactLogger {:config config}))
+
+  (defn default-logger
+    [config prefixes]
+    (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
+          path    (format (:path config) session)]
+      (info "fact logger writing to:" path)
+      #(spit path (str (pr-str %) "\n") :append true)))
 #+END_SRC
 
 *** Graph model
@@ -468,11 +498,14 @@ a more efficient manner.
                             "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                             "schema"  "http://schema.org/"
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
+     :logger   {:fn default-logger
+                :path "session-%s.edn"}
      :graph    {}
      :model    {}
      :queries  {}
      :rules    {}
-     :handler  {:route-provider app-routes :dev true}
+     :handler  {:route-provider app-routes
+                :dev true}
      :server   {:port 8000}})
 #+END_SRC
 
@@ -483,6 +516,10 @@ a more efficient manner.
      :graph    (comp/using
                 (make-graph (:graph config))
                 {:prefixes :prefixes})
+     :logger   (comp/using
+                (make-logger (:logger config))
+                {:graph    :graph
+                 :prefixes :prefixes})
      :model    (comp/using
                 (make-graph-model (:model config))
                 {:graph :graph})
@@ -563,6 +600,8 @@ a more efficient manner.
   <<registry>>
 
   <<graph>>
+
+  <<logger>>
 
   <<model>>
 
