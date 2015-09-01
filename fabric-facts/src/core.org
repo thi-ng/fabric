@@ -1543,7 +1543,6 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 #+END_SRC
 
 ** Generic helpers
-
 *** Converting maps to facts / triples
 
 Clojure's hashmaps provide a natural way to express nested
@@ -1556,28 +1555,33 @@ Conversion rules:
 - toplevel keys are used as subjects and MUST each have a map as
   value, where their keys are used as predicates and their values as
   objects.
-- maps in object position are translated into UUIDs in order to allow
-  the nested map to become a subject itself. In RDF terms, this is
-  equavalent to BNodes.
+- maps in object position are translated into UUID strings in order to
+  allow the nested map to become a subject itself. In RDF terms, this
+  is equivalent to BNodes.
 - sequential types (vectors, lists) in object position cause multiple
-  triples with same subject & predicate to be emitted
+  triples with same subject & predicate to be emitted. If any of the
+  items in the object sequence is a map, it will be treated as BNode as
+  described in previous rule
 
 The following example demonstrates all these rules:
 
 #+BEGIN_SRC clojure
-    (map->facts
-     {"people:toxi"
-      {"rdf:type"          "schema:Person"
-       "schema:givenName"  "Karsten"
-       "schema:familyName" "Schmidt"
-       "foaf:nick"         "toxi"
-       "foaf:account"      {"rdf:type" "foaf:OnlineAccount"
-                            "foaf:accountServiceHomepage" "http://twitter.com/"
-                            "foaf:accountName" "toxi"}
-       "schema:memberOf"   ["orgs:postspectacular"
-                            "orgs:thing"]
-       "schema:gender"     "male"
-       "schema:jobTitle"   "Computational Designer"}})
+  (map->facts
+   {"people:toxi"
+    {"rdf:type"          "schema:Person"
+     "schema:givenName"  "Karsten"
+     "schema:familyName" "Schmidt"
+     "foaf:nick"         "toxi"
+     "foaf:account"      [{"rdf:type" "foaf:OnlineAccount"
+                           "foaf:accountServiceHomepage" "https://twitter.com/"
+                           "foaf:accountName" "toxi"}
+                          {"rdf:type" "foaf:OnlineAccount"
+                           "foaf:accountServiceHomepage" "https://github.com/"
+                           "foaf:accountName" "postspectacular"}]
+     "schema:memberOf"   ["orgs:postspectacular"
+                          "orgs:thing"]
+     "schema:gender"     "male"
+     "schema:jobTitle"   "Computational Designer"}})
 
   ;; (["people:toxi" "rdf:type" "schema:Person"]
   ;;  ["people:toxi" "schema:givenName" "Karsten"]
@@ -1585,8 +1589,12 @@ The following example demonstrates all these rules:
   ;;  ["people:toxi" "foaf:nick" "toxi"]
   ;;  ["people:toxi" "foaf:account" "b2c1c57e-2967-44fe-8b66-135ec6fa80bf"]
   ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "rdf:type" "foaf:OnlineAccount"]
-  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountServiceHomepage" "http://twitter.com/"]
+  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountServiceHomepage" "https://twitter.com/"]
   ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountName" "toxi"]
+  ;;  ["people:toxi" "foaf:account" "4e6fba86-92ec-4422-a8a2-c80150ddb885"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "rdf:type" "foaf:OnlineAccount"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountServiceHomepage" "https://github.com/"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountName" "postspectacular"]
   ;;  ["people:toxi" "schema:memberOf" "orgs:postspectacular"]
   ;;  ["people:toxi" "schema:memberOf" "orgs:thing"]
   ;;  ["people:toxi" "schema:gender" "male"]
@@ -1596,12 +1604,16 @@ The following example demonstrates all these rules:
 #+BEGIN_SRC clojure :noweb-ref helpers
   (declare map->facts)
 
-  (defn map->facts*
+  (defn- bnode-facts
+    [s p o]
+    (let [bn (strf/new-uuid)] (cons [s p bn] (map->facts o bn))))
+
+  (defn- map->facts*
     [s]
     (fn [[p o]]
       (cond
-        (sequential? o) (mapv (fn [o] [s p o]) o)
-        (map? o)        (let [bn (strf/new-uuid)] (cons [s p bn] (map->facts o bn)))
+        (sequential? o) (mapcat (fn [o] (if (map? o) (bnode-facts s p o) [[s p o]])) o)
+        (map? o)        (bnode-facts s p o)
         :else           [[s p o]])))
 
   (defn map->facts
