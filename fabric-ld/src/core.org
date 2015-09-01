@@ -50,7 +50,7 @@
     (start
       [_]
       (info "initializing graph")
-      (let [g (ff/fact-graph {:transform prefixes})]
+      (let [g (ff/fact-graph {:transform (ff/combine-transforms prefixes 3)})]
         (assoc _ :graph g)))
     (stop
       [_]
@@ -145,7 +145,7 @@ a more efficient manner.
         (run! (fn [[pre uri]] (register this pre uri)) (:prefixes config))
         this))
     (stop [_]
-      (info "stopping rule registry")
+      (info "stopping prefix registry")
       (assoc _ :registry nil))
     IEntityRegistry
     (register
