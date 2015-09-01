@@ -468,7 +468,7 @@ cache is an atom with a nested map and these top-level keys:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :len       - fact length (default 3)
     :index     - index vertex ctor (default index-vertex)
-    :transform - fact transform (default none)"
+    :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
     ([{:keys [graph len index transform]
@@ -787,6 +787,7 @@ set only contains unique bindings of query variable =?s=.
            rhs-v  (result-vertex rhs)
            lhs-id (f/vertex-id lhs-v)
            rhs-id (f/vertex-id rhs-v)
+           _      (info :add-join lhs-id rhs-id opts)
            tx     (non-grouping-result-transducer opts nil)
            cfn    (if tx #(into #{} tx (join-fn % %2)) join-fn)
            res    (f/add-vertex!
@@ -817,7 +818,7 @@ set only contains unique bindings of query variable =?s=.
                 g join
                 (add-param-query! g ptx a {})
                 (add-param-query! g ptx b {})
-                (if (< 1 (count more)) {} opts))
+                (if (seq more) {} opts))
                (butlast more))]
        (if-let [p (last more)]
          (add-join! g join jq (add-param-query! g ptx p {}) opts)
@@ -835,7 +836,7 @@ set only contains unique bindings of query variable =?s=.
                 g join-optional
                 (add-param-query! g ptx a {})
                 (add-param-query! g ptx b {})
-                (if (< 1 (count more)) {} opts))
+                (if (seq more) {} opts))
                (butlast more))]
        (if-let [p (last more)]
          (add-join! g join-optional jq (add-param-query! g ptx p {}) opts)
@@ -848,12 +849,7 @@ set only contains unique bindings of query variable =?s=.
   (defn add-query-union!
     [g queries opts]
     (assert (< 1 (count queries)) "min. 2 queries required")
-    (let [tx  (if-let [flt (:filter opts)]
-                (filter flt))
-          tx  (if-let [lim (:limit opts)]
-                (let [tx' (take lim)]
-                  (if tx (comp tx tx') tx'))
-                tx)
+    (let [tx  (non-grouping-result-transducer opts nil)
           res (f/add-vertex!
                g nil
                {::f/collect-fn
