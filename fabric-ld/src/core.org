@@ -301,7 +301,7 @@ a more efficient manner.
         (let [id (or id (str (java.util.UUID/randomUUID)))]
           (when-not (@registry id)
             (info "register rule:" id spec)
-            (let [prod  (compile-rule-production (:prod spec))
+            (let [prod  (compile-rule-production id (:prod spec))
                   query (add-query model (:q spec) false)
                   rule  (add-rule model {:id id :query query :production prod})]
               (swap! registry assoc id {:spec spec :rule rule})
@@ -332,9 +332,9 @@ a more efficient manner.
         (throw (IllegalArgumentException. (str "invalid production op: " op))))))
 
   (defn compile-rule-production
-    [prod]
+    [rule-id prod]
     (let [prods (mapv compile-production-item prod)]
-      (fn [g _ res] (run! #(% g res) prods))))
+      (fn [g _ res] (info :infer rule-id res) (run! #(% g res) prods))))
 #+END_SRC
 
 *** Handlers
@@ -534,9 +534,9 @@ a more efficient manner.
                                     [?x2 ?p ?y]]}]}
                    :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
 
-      "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
-                                    [?x ?p ?x]]}]}
-                   :prod [[:remove [?x ?p ?x]]]}
+      ;; "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
+      ;;                               [?x ?p ?x]]}]} ;; FIXME breaks bind-translator
+      ;;              :prod [[:remove [?x ?p ?x]]]}
 
       "prp-symp"  {:q {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
                                     [?x ?p ?y]]}]}
@@ -549,7 +549,8 @@ a more efficient manner.
 
       "prp-trp"   {:q {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
                                     [?x ?p ?y]
-                                    [?y ?p ?z]]}]}
+                                    [?y ?p ?z]]
+                            :filter (not= ?x ?z)}]}
                    :prod [[:add [?x ?p ?z]]]}
 
       "prp-spo1"  {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
