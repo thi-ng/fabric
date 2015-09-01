@@ -89,9 +89,12 @@
   (defn default-logger
     [config prefixes]
     (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
-          path    (format (:path config) session)]
+          path    (format (:path config) session)
+          ftx     (ff/combine-transforms prefixes 3)]
       (info "fact logger writing to:" path)
-      #(spit path (str (pr-str %) "\n") :append true)))
+      (fn [[op fact]]
+        (let [fact (ff/untransform ftx fact)]
+          (spit path (str (pr-str [op fact]) "\n") :append true)))))
 #+END_SRC
 
 *** Graph model
@@ -169,12 +172,14 @@ a more efficient manner.
 #+BEGIN_SRC clojure :noweb-ref registry
   (defrecord PrefixRegistry [config registry]
     comp/Lifecycle
-    (start [_]
+    (start
+      [_]
       (info "starting prefix registry")
       (let [this (assoc _ :registry (atom {:prefixes {}}))]
         (run! (fn [[pre uri]] (register this pre uri)) (:prefixes config))
         this))
-    (stop [_]
+    (stop
+      [_]
       (info "stopping prefix registry")
       (assoc _ :registry nil))
     IEntityRegistry
@@ -213,13 +218,16 @@ a more efficient manner.
 ***** TODO auto-register stored queries when component starts
 ***** Impl
 #+BEGIN_SRC clojure :noweb-ref registry
-  (defrecord QueryRegistry [model registry]
+  (defrecord QueryRegistry [model registry config]
     comp/Lifecycle
-    (start [_]
+    (start
+      [_]
       (info "starting query registry")
-      (let [reg (atom {})]
-        (assoc _ :registry reg)))
-    (stop [_]
+      (let [this (assoc _ :registry (atom {}))]
+        (run! (fn [[id spec]] (register this id spec)) (:specs config))
+        this))
+    (stop
+      [_]
       (info "stopping query registry")
       (assoc _ :registry nil :model nil))
     IEntityRegistry
@@ -245,19 +253,22 @@ a more efficient manner.
 
   (defn make-query-registry
     [config]
-    (map->QueryRegistry {}))
+    (map->QueryRegistry {:config config}))
 #+END_SRC
 
 **** Inference rule registry
 
 #+BEGIN_SRC clojure :noweb-ref registry
-  (defrecord RuleRegistry [model registry]
+  (defrecord RuleRegistry [model registry config]
     comp/Lifecycle
-    (start [_]
+    (start
+      [_]
       (info "starting rule registry")
-      (let [reg (atom {})]
-        (assoc _ :registry reg)))
-    (stop [_]
+      (let [this (assoc _ :registry (atom {}))]
+        (run! (fn [[id spec]] (register this id spec)) (:specs config))
+        this))
+    (stop
+      [_]
       (info "stopping rule registry")
       (assoc _ :registry nil :model nil))
     IEntityRegistry
@@ -498,11 +509,11 @@ a more efficient manner.
                             "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                             "schema"  "http://schema.org/"
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
-     :logger   {:fn default-logger
+     :logger   {:fn   default-logger
                 :path "session-%s.edn"}
      :graph    {}
      :model    {}
-     :queries  {}
+     :queries  {:specs {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
      :rules    {}
      :handler  {:route-provider app-routes
                 :dev true}
