@@ -59,7 +59,9 @@
       (let [g (ff/fact-graph {:transform (ff/combine-transforms prefixes 3)})]
         (when-let [path (:edn-path config)]
           (with-open [r (-> path io/reader PushbackReader.)]
-            (run! #(ff/add-fact! g %) (ff/map->facts (edn/read r)))))
+            (let [facts (ff/map->facts (edn/read r))]
+              (info "adding" (count facts) "facts from" path)
+              (run! #(ff/add-fact! g %) facts))))
         (assoc _ :graph g)))
     (stop
       [_]
@@ -305,7 +307,7 @@ a more efficient manner.
 
   (defn make-rule-registry
     [config]
-    (map->RuleRegistry {}))
+    (map->RuleRegistry {:config config}))
 #+END_SRC
 
 **** Registry helpers
@@ -381,10 +383,10 @@ a more efficient manner.
     [queries]
     (fn [req]
       (let [{:keys [id limit offset]} (:params req)]
-        (if-let [q (get-in (list-registry queries) [id :query])]
+        (if-let [q (:query (lookup queries id))]
           (let [limit  (strf/parse-int limit 10 100)
                 offset (strf/parse-int offset 10 0)
-                body   (sequence (comp (drop offset) (take limit)) @q)]
+                body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
             (edn-response
              {:id id
               :count (count body)
@@ -522,7 +524,70 @@ a more efficient manner.
      :graph    {:edn-path "../../../ea3/facts.edn"}
      :model    {}
      :queries  {:specs {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
-     :rules    {}
+     :rules    {:specs '{"prp-dom"   {:q {:q [{:where [[?p "rdfs:domain" ?d]
+                                                       [?x ?p ?y]]}]}
+                                      :prod [[:add [?x "rdf:type" ?d]]]}
+
+                         "prp-rng"   {:q {:q [{:where [[?p "rdfs:range" ?r]
+                                                       [?x ?p ?y]]}]}
+                                      :prod [[:add [?y "rdf:type" ?r]]]}
+
+                         "prp-fp"    {:q {:q [{:where [[?p "rdf:type" "owl:FunctionalProperty"]
+                                                       [?x ?p ?y1]
+                                                       [?x ?p ?y2]]}]}
+                                      :prod [[:add [?y1 "owl:sameAs" ?y2]]]}
+
+                         "prp-ifp"   {:q {:q [{:where [[?p "rdf:type" "owl:InverseFunctionalProperty"]
+                                                       [?x1 ?p ?y]
+                                                       [?x2 ?p ?y]]}]}
+                                      :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
+
+                         "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
+                                                       [?x ?p ?x]]}]}
+                                      :prod [[:remove [?x ?p ?x]]]}
+
+                         "prp-symp"  {:q {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
+                                                       [?x ?p ?y]]}]}
+                                      :prod [[:add [?y ?p ?x]]]}
+
+                         ;; "prp-asyp"  {:q {:q [{:where [[?p "rdf:type" "owl:AsymmetricProperty"]
+                         ;;                               [?x ?p ?y]
+                         ;;                               [?y ?p ?x]]}]}
+                         ;;              :prod false}
+
+                         "prp-trp"   {:q {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
+                                                       [?x ?p ?y]
+                                                       [?y ?p ?z]]}]}
+                                      :prod [[:add [?x ?p ?z]]]}
+
+                         "prp-spo1"  {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                                       [?x ?p1 ?y]]}]}
+                                      :prod [[:add [?x ?p2 ?y]]]}
+
+                         ;; :prp-spo2  nil ;; TODO requires property chains
+
+                         "prp-eqp1"  {:q {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                                       [?x ?p1 ?y]]}]}
+                                      :prod [[:add [?x ?p2 ?y]]]}
+
+                         "prp-eqp2"  {:q {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                                       [?x ?p2 ?y]]}]}
+                                      :prod [[:add [?x ?p1 ?y]]]}
+
+                         ;; "prp-pdw"   {:q {:q [{:where [[?p1 "owl:propertyDisjointWith" ?p2]
+                         ;;                               [?x ?p1 ?y]
+                         ;;                               [?x ?p2 ?y]]}]}
+                         ;;              :prod false}
+
+                         ;; :prp-adp   nil ;; TODO required property chains
+
+                         "prp-inv1"  {:q {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                                       [?x ?p1 ?y]]}]}
+                                      :prod [[:add [?y ?p2 ?x]]]}
+
+                         "prp-inv2"  {:q {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                                       [?x ?p2 ?y]]}]}
+                                      :prod [[:add [?y ?p1 ?x]]]}}}
      :handler  {:route-provider app-routes
                 :dev true}
      :server   {:port 8000}})
