@@ -59,6 +59,7 @@ This namespace provides...
     (update-state! [_ f]))
 
   (defprotocol IWatch
+    (notify-watches [_ evt])
     (add-watch! [_ type id f])
     (remove-watch! [_ type id]))
 
@@ -166,19 +167,19 @@ This namespace provides...
                   (-> %
                       (update ::next-id (::id-gen-fn %))
                       (update ::vertices assoc id v))))
-        (notify-watches @watches [:add-vertex @nv])
+        (notify-watches* @watches [:add-vertex @nv])
         @nv))
     (remove-vertex!
       [_ v]
       (when (get-in @state [::vertices (vertex-id v)])
-        (notify-watches @watches [:remove-vertex v])
+        (notify-watches* @watches [:remove-vertex v])
         (swap! state update ::vertices dissoc (vertex-id v))
         ;;(disconnect-all! v)
         true))
     (update-vertex!
       [_ v f]
       (update-value! v f)
-      (notify-watches @watches [:update-vertex v])
+      (notify-watches* @watches [:update-vertex v])
       _)
     (vertex-for-id
       [_ id] (get-in @state [::vertices id]))
@@ -187,12 +188,12 @@ This namespace provides...
     (add-edge!
       [_ src dest sig-fn opts]
       (connect-to! src dest sig-fn opts)
-      (notify-watches @watches [:add-edge src dest sig-fn opts])
+      (notify-watches* @watches [:add-edge src dest sig-fn opts])
       _)
     (remove-edge!
       [_ src dest]
       (disconnect-neighbor! src dest)
-      (notify-watches @watches [:remove-edge src dest])
+      (notify-watches* @watches [:remove-edge src dest])
       _)
     IWatch
     (add-watch!
@@ -204,7 +205,9 @@ This namespace provides...
       [_ type id]
       (info "removing watch" type id)
       (swap! watches update type dissoc id)
-      _))
+      _)
+    (notify-watches
+      [_ evt] (notify-watches* @watches evt)))
 #+END_SRC
 
 ** Type constructors
@@ -702,7 +705,7 @@ This namespace provides...
   (defn millis-since
     [t0] #?(:clj (* (- (now) t0) 1e-6) :cljs (- (now) t0)))
 
-  (defn notify-watches
+  (defn notify-watches*
     [watches evt]
     (let [watches (watches (first evt))]
       (when watches

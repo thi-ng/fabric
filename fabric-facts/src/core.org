@@ -426,6 +426,8 @@ cache is an atom with a nested map and these top-level keys:
       [_ type id f] (f/add-watch! g type id f) _)
     (remove-watch!
       [_ type id] (f/remove-watch! g type id) _)
+    (notify-watches
+      [_ evt] (f/notify-watches g evt))
     IFactGraph
     (fact-indices
       [_] indices)
@@ -436,6 +438,7 @@ cache is an atom with a nested map and these top-level keys:
       (let [f' (transform ftx f)]
         (or (@facts f')
             (let [v (f/add-vertex! g f' nil fact-vertex)]
+              (f/notify-watches g [:add-fact f])
               (debug :add-fact f f')
               (run! #(f/add-edge! g v % signal-fact :add) indices)
               (swap! facts assoc f' v)
@@ -448,6 +451,7 @@ cache is an atom with a nested map and these top-level keys:
             (debug :remove-fact f f')
             (run! #(f/add-edge! g v % signal-fact :remove) indices)
             (swap! facts dissoc f')
+            (f/notify-watches g [:remove-fact f])
             (f/remove-vertex! g v)
             v)
           (warn "attempting to remove unknown fact:" f))))
@@ -1518,8 +1522,8 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 #+BEGIN_SRC clojure :noweb-ref logger
   (def fact-log-transducer
     (comp
-     (filter (fn [[op v]] (and (#{:add-vertex :remove-vertex} op) (vector? @v))))
-     (map (fn [[op v]] [({:add-vertex :+ :remove-vertex :-} op) @v]))))
+     (filter (fn [evt] (#{:add-fact :remove-fact} (first evt))))
+     (map (fn [[op v]] [({:add-fact :add :remove-fact :remove} op) @v]))))
 
   (defn add-fact-graph-logger
     [g log-fn]
@@ -1531,14 +1535,14 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           (when t
             (log-fn t)
             (recur))))
-      (f/add-watch! g :add-vertex watch-id log->chan)
-      (f/add-watch! g :remove-vertex watch-id log->chan)
+      (f/add-watch! g :add-fact watch-id log->chan)
+      (f/add-watch! g :remove-fact watch-id log->chan)
       {:graph g :chan ch :watch-id watch-id}))
 
   (defn remove-fact-graph-logger
     [{:keys [graph watch-id chan]}]
-    (f/remove-watch! graph :add-vertex watch-id)
-    (f/remove-watch! graph :remove-vertex watch-id)
+    (f/remove-watch! graph :add-fact watch-id)
+    (f/remove-watch! graph :remove-fact watch-id)
     (close! chan))
 #+END_SRC
 
