@@ -338,21 +338,23 @@
   (deftest test-map->facts
     (let [facts (ff/map->facts
                  {:s1 {:p1 {:p2 :o1
-                            :p3 {:p4 :o2}}
-                       :p4 [:o3 :o4]}
-                  :s2 {:p5 :o5}})
+                            :p3 [{:p4 :o2} {:p5 :o3}]}
+                       :p6 [:o4 :o5]}
+                  :s2 {:p7 :o6}})
           ids   (zipmap
                  (into [] (comp (mapcat identity) (filter string?) (distinct)) facts)
-                 [:bnode1 :bnode2])
+                 [:bnode1 :bnode2 :bnode3])
           facts (mapv (fn [f] (mapv #(ids % %) f)) facts)]
-      (is (== 7 (count facts)))
+      (is (== 9 (count facts)))
       (is (= [[:s1 :p1 :bnode1]
               [:bnode1 :p2 :o1]
               [:bnode1 :p3 :bnode2]
               [:bnode2 :p4 :o2]
-              [:s1 :p4 :o3]
-              [:s1 :p4 :o4]
-              [:s2 :p5 :o5]]
+              [:bnode1 :p3 :bnode3]
+              [:bnode3 :p5 :o3]
+              [:s1 :p6 :o4]
+              [:s1 :p6 :o5]
+              [:s2 :p7 :o6]]
              facts))))
 #+END_SRC
 
