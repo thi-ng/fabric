@@ -7,9 +7,10 @@
          - [[#factgraph-component-wrapper][FactGraph component wrapper]]
          - [[#graph-model][Graph model]]
          - [[#entity-registries][Entity registries]]
-         - [[#handler][Handler]]
+         - [[#handlers][Handlers]]
          - [[#aleph-server][Aleph server]]
      - [[#component-system-creation][Component system creation]]
+     - [[#repl][REPL]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.ld.core
@@ -21,8 +22,7 @@
     (get-graph [_]))
 
   (defprotocol IGraphModel
-    (prefix-map [_])
-    (update-prefix-map [_])
+    (trigger-update [_])
     (event-bus [_])
     (add-facts [_ facts])
     (remove-facts [_ facts])
@@ -32,8 +32,9 @@
     (remove-rule [_ rule]))
 
   (defprotocol IEntityRegistry
-    (register [_ id spec])
-    (deregister [_ id]))
+    (register [_ id val])
+    (deregister [_ id])
+    (list-registry [_]))
 
   (defprotocol IHandler
     (route-map [_]))
@@ -44,12 +45,12 @@
 *** FactGraph component wrapper
 
 #+BEGIN_SRC clojure :noweb-ref graph
-  (defrecord GraphComponent [config graph]
+  (defrecord LDGraph [prefixes graph]
     comp/Lifecycle
     (start
       [_]
       (info "initializing graph")
-      (let [g (ff/compute-graph config)]
+      (let [g (ff/fact-graph {:transform prefixes})]
         (assoc _ :graph g)))
     (stop
       [_]
@@ -57,19 +58,24 @@
       (assoc _ :graph nil))
     IGraphAccess
     (get-graph [_] graph))
+
+  (defn make-graph
+    [config]
+    (map->LDGraph {}))
 #+END_SRC
 
 *** Graph model
 
 #+BEGIN_SRC clojure :noweb-ref model
-  (defrecord IGraphModel [graph ctx bus]
+  (defrecord LDGraphModel [graph ctx bus]
     comp/Lifecycle
     (start
       [_]
       (info "starting graph model")
       (let [bus-in (chan)
             bus    (async/mult bus-in)
-            ctx    (f/async-execution-context {:graph graph :result bus-in})]
+            ctx    (f/async-execution-context {:graph (get-graph graph) :result bus-in})]
+        (f/execute! ctx)
         (assoc _ :ctx ctx :bus bus)))
     (stop
       [_]
@@ -80,45 +86,97 @@
     (get-graph
       [_] (get-graph graph))
     IGraphModel
+    (trigger-update
+      [_] (f/notify! ctx))
     (event-bus
       [_] bus)
     (add-facts
       [_ facts]
-      (run! #(ff/add-fact! graph %) facts)
+      (let [g (get-graph graph)]
+        (run! #(ff/add-fact! g %) facts))
       (f/notify! ctx)
       _)
     (remove-facts
       [_ facts]
-      (run! #(ff/remove-fact! graph %) facts)
+      (let [g (get-graph graph)]
+        (run! #(ff/remove-fact! g %) facts))
       (f/notify! ctx)
       _)
     (add-query
       [_ q notify?]
-      (dsl/add-query-from-spec! graph q)
-      (when notify? (f/notify! ctx))
-      _)
+      (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
+        (when notify? (f/notify! ctx))
+        q))
     (remove-query
       [_ q]
-      (f/remove-from-graph! q graph)
+      (f/remove-from-graph! q (get-graph graph))
       (f/notify! ctx)
       _)
     (add-rule
       [_ rule]
-      (ff/add-rule! graph rule)
-      (f/notify! ctx)
-      _)
+      (let [r (ff/add-rule! (get-graph graph) rule)]
+        (f/notify! ctx)
+        r))
     (remove-rule
       [_ rule]
-      (f/remove-from-graph! rule graph)
+      (f/remove-from-graph! rule (get-graph graph))
       (f/notify! ctx)
       _))
 
   (defn make-graph-model
     [config]
-    (map->GraphModel {:prefixes (:prefixes config)}))
+    (map->LDGraphModel {}))
 #+END_SRC
 
 *** Entity registries
+**** URI prefix registry
+
+The =PrefixRegistry= keeps track of vocabulary URI prefixes and also
+implements the =ITwoWayTransform= defined in the [[../../fabric-facts/src/core.org][fabric-facts.core]]
+namespace. It is used as fact transform by the graph to store facts in
+a more efficient manner.
+
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord PrefixRegistry [config registry]
+    comp/Lifecycle
+    (start [_]
+      (info "starting prefix registry")
+      (let [this (assoc _ :registry (atom {:prefixes {}}))]
+        (run! (fn [[pre uri]] (register this pre uri)) (:prefixes config))
+        this))
+    (stop [_]
+      (info "stopping rule registry")
+      (assoc _ :registry nil))
+    IEntityRegistry
+    (register
+      [_ prefix uri]
+      (info "register prefix: " prefix uri)
+      (swap! registry
+             (fn [reg]
+               (let [reg (assoc-in reg [:prefixes prefix] uri)]
+                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      _)
+    (deregister
+      [_ prefix]
+      (info "deregister prefix: " prefix)
+      (swap! registry
+             (fn [reg]
+               (let [reg (update reg :prefixes dissoc prefix)]
+                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      _)
+    (list-registry
+      [_] (:prefixes @registry))
+    ff/ITwoWayTransform
+    (transform
+      [_ x] (ff/->prefix-string (:sorted @registry) x))
+    (untransform
+      [_ x] (ff/<-prefix-string (:prefixes @registry) x)))
+
+  (defn make-prefix-registry
+    [config]
+    (map->PrefixRegistry {:config config}))
+#+END_SRC
+
 **** Query registry
 
 ***** TODO define vocab for queries defined in graph
@@ -128,25 +186,36 @@
   (defrecord QueryRegistry [model registry]
     comp/Lifecycle
     (start [_]
-      (info "starting query registry") _)
+      (info "starting query registry")
+      (let [reg (atom {})]
+        (assoc _ :registry reg)))
     (stop [_]
-      (info "stopping query registry") _)
+      (info "stopping query registry")
+      (assoc _ :registry nil :model nil))
     IEntityRegistry
     (register
       [_ id spec]
-      (let [id (or id (str (java.util.UUID/randomUUID)))]
-        (when-not (@registry id)
-          (info "register query:" id spec)
-          (let [q (add-query model spec true)]
-            (swap! registry assoc id {:spec spec :query q})
-            id))))
+      (if-let [id' (find-cached @registry spec)]
+        id'
+        (let [id (or id (str (java.util.UUID/randomUUID)))]
+          (when-not (@registry id)
+            (info "register query:" id spec)
+            (let [q (add-query model spec true)]
+              (swap! registry assoc id {:spec spec :query q})
+              id)))))
     (deregister
-      [_id]
+      [_ id]
       (when-let [q (:query (@registry id))]
         (info "deregister query:" id)
         (remove-query q model)
         (swap! registry dissoc id)
-        q)))
+        q))
+    (list-registry
+      [_] @registry))
+
+  (defn make-query-registry
+    [config]
+    (map->QueryRegistry {}))
 #+END_SRC
 
 **** Inference rule registry
@@ -155,20 +224,31 @@
   (defrecord RuleRegistry [model registry]
     comp/Lifecycle
     (start [_]
-      (info "starting rule registry") _)
+      (info "starting rule registry")
+      (let [reg (atom {})]
+        (assoc _ :registry reg)))
     (stop [_]
-      (info "stopping rule registry") _)
+      (info "stopping rule registry")
+      (assoc _ :registry nil :model nil))
     IEntityRegistry
     (register
       [_ id spec]
-      (let [id (or id (str (java.util.UUID/randomUUID)))]
-        (when-not (@registry id)
-          (info "register rule:" id spec)
-          (let [prod  (compile-rule-production (:prod spec))
-                query (add-query model (:q spec) false)
-                rule  (add-rule model {:id id :query query :production prod})]
-            (swap! registry assoc id {:spec spec :rule rule})
-            id)))))
+      (if-let [id' (find-cached @registry spec)]
+        id'
+        (let [id (or id (str (java.util.UUID/randomUUID)))]
+          (when-not (@registry id)
+            (info "register rule:" id spec)
+            (let [prod  (compile-rule-production (:prod spec))
+                  query (add-query model (:q spec) false)
+                  rule  (add-rule model {:id id :query query :production prod})]
+              (swap! registry assoc id {:spec spec :rule rule})
+              id)))))
+    (list-registry
+      [_] @registry))
+
+  (defn make-rule-registry
+    [config]
+    (map->RuleRegistry {}))
 #+END_SRC
 
 **** Registry helpers
@@ -192,11 +272,123 @@
       (fn [g _ res] (run! #(% g res) prods))))
 #+END_SRC
 
-*** Handler
+*** Handlers
 
 #+BEGIN_SRC clojure :noweb-ref handler
-  (defn wrap-defaults
-    [routes]
+  (defn edn-response
+    [body status]
+    (-> (pr-str {:body body})
+        (resp/response)
+        (resp/status status)
+        (resp/content-type "application/edn")))
+
+  (defn delayed-response-handler
+    [model handler]
+    (d/->deferred
+     (go
+       (let [ch  (async/tap (event-bus model) (chan))
+             res (<! ch)]
+         (async/untap (event-bus model) ch)
+         (async/close! ch)
+         (debug :result res)
+         (handler)))))
+
+  (defn one-off-query-handler
+    [model]
+    (fn [req]
+      (let [spec    (edn/read-string (-> req :params :q))
+            _       (info :one-off-query spec)
+            q       (add-query model spec false)
+            handler (delayed-response-handler
+                     model
+                     (fn []
+                       (let [results @q]
+                         (remove-query model q)
+                         (edn-response results 200))))]
+        (trigger-update model)
+        handler)))
+
+  (defn register-query-handler
+    [queries]
+    (fn [req]
+      (let [{:keys [id q]} (:params req)
+            q  (edn/read-string q)
+            id' (register queries id q)]
+        (if id'
+          (if (= id id)
+            (edn-response {:id id' :body "New query registered"} 202)
+            (edn-response {:id id' :body "Query already registered using another ID"} 303))
+          (edn-response {:id id :body "Query ID conflict"} 409)))))
+
+  (defn query-result-handler
+    [queries]
+    (fn [req]
+      (let [{:keys [id limit offset]} (:params req)]
+        (if-let [q (get-in (list-registry queries) [id :query])]
+          (let [limit  (strf/parse-int limit 10 100)
+                offset (strf/parse-int offset 10 0)
+                body   (sequence (comp (drop offset) (take limit)) @q)]
+            (edn-response
+             {:id id
+              :count (count body)
+              :total (count @q)
+              :body body} 200))
+          (edn-response {:id id} 404)))))
+
+  (defn delete-query-handler
+    [queries]
+    (fn [req]
+      (let [id (-> req :params :id)]
+        (if (deregister queries id)
+          (edn-response {:id id :body "Query scheduled for deletion"} 202)
+          (edn-response {:id id} 404)))))
+
+  (defn list-queries-handler
+    [queries]
+    (fn [req]
+      (let [queries (reduce-kv
+                     (fn [acc k v] (assoc acc k (:spec v)))
+                     {} (list-registry queries))]
+        (edn-response {:body queries} 200))))
+
+  (defn register-rule-handler
+    [rules]
+    (fn [req]
+      (let [{:keys [id q prod]} (:params req)
+            q    (edn/read-string q)
+            prod (edn/read-string prod)
+            spec {:q q :prod (set prod)}
+            id   (or  (register rules id spec))]
+        (if id
+          (edn-response {:id id :body "Rule registered"} 202)
+          (edn-response {:id id :body "Rule ID conflict"} 409)))))
+
+  (defn list-rules-handler
+    [rules]
+    (fn [req]
+      (let [rules (reduce-kv
+                   (fn [acc k v] (assoc acc k (:spec v)))
+                   {} (list-registry rules))]
+        (edn-response {:body rules} 200))))
+
+  (defn add-facts-handler
+    [model]
+    (fn [req]
+      (let [{:keys [facts uri]} (:params req)]
+        (cond
+          facts (let [facts (edn/read-string facts)]
+                  (go (add-facts model facts))
+                  (edn-response {:body (str "adding " (count facts) " facts")} 202))
+          uri   (let [facts @(d/chain (http/get uri)
+                                      :body
+                                      bs/to-string
+                                      nt/parse-ntriples)]
+                  (go (add-facts model facts))
+                  (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
+          :else (edn-response {:body "No facts or uri param given"} 400)))))
+
+  (defn wrap-middleware
+    [config routes]
     (let [defaults (assoc-in site-defaults [:security :anti-forgery] false)
           routes   (-> routes
                        (wrap-defaults defaults))
@@ -205,11 +397,26 @@
                      routes)]
       routes))
 
-  (defrecord Handler [config model routes]
+  (defn app-routes
+    [config model queries rules]
+    (wrap-middleware
+     config
+     (compojure/routes
+      (POST   "/facts"       [] (add-facts-handler model))
+      (POST   "/query"       [] (one-off-query-handler model))
+      (POST   "/queries"     [] (register-query-handler queries))
+      (GET    "/queries"     [] (list-queries-handler queries))
+      (GET    "/queries/:id" [] (query-result-handler queries))
+      (DELETE "/queries/:id" [] (delete-query-handler queries))
+      (GET    "/rules"       [] (list-rules-handler rules))
+      (POST   "/rules"       [] (register-rule-handler rules))
+      (route/not-found "404"))))
+
+  (defrecord Handler [config model queries rules routes]
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:routes config) config model)]
+      (let [routes ((:route-provider config) config model queries rules)] 
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -218,7 +425,7 @@
       routes))
 
   (defn make-handler
-    [config] (Handler. config nil nil))
+    [config] (map->Handler {:config config}))
 #+END_SRC
 
 *** Aleph server
@@ -229,7 +436,7 @@
     (start [_]
       (if-not server
         (let [port   (:port config)
-              routes (proto/route-map handler)]
+              routes (route-map handler)]
           (info "starting aleph server on port:" port)
           (assoc _ :server (http/start-server routes {:port port})))
         (do (warn "aleph server already running...")
@@ -241,42 +448,87 @@
             (assoc _ :server nil))
         (do (warn "aleph server already stopped!")
             _))))
+
+  (defn make-server
+    [config]
+    (map->AlephServer {:config config}))
 #+END_SRC
 
 ** Component system creation
 
 #+BEGIN_SRC clojure :noweb-ref config
   (def default-config
-    {:graph   {:transform ff/identity-transform}
-     :model   {}
-     :queries {}
-     :rules   {}
-     :handler {}
-     :server  {:port 8000}})
+    {:prefixes {:prefixes  {"dcterms" "http://purl.org/dc/terms/"
+                            "doap"    "http://usefulinc.com/ns/doap#"
+                            "fabric"  "http://ns.thi.ng/fabric#"
+                            "foaf"    "http://xmlns.com/foaf/0.1/"
+                            "geo"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
+                            "owl"     "http://www.w3.org/2002/07/owl#"
+                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
+                            "schema"  "http://schema.org/"
+                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
+     :graph    {}
+     :model    {}
+     :queries  {}
+     :rules    {}
+     :handler  {:route-provider app-routes :dev true}
+     :server   {:port 8000}})
 #+END_SRC
 
 #+BEGIN_SRC clojure :noweb-ref system
   (defn make-system
     [config]
     (comp/system-map
-     :graph   (make-graph (:graph config))
-     :model   (comp/using
-               (make-graph-model (:model config))
-               {:graph :graph})
-     :queries (comp/using
-               (make-query-registry (:queries config))
-               {:model :model})
-     :rules   (comp/using
-               (make-rule-registry (:rules config))
-               {:model :model})
-     :handler (comp/using
-               (handler/make-handler (:handler config))
-               {:model :model
-                :queries :queries
-                :rules :rules})
-     :server  (comp/using
-               (server/make-server (:server config))
-               {:handler :handler})))
+     :graph    (comp/using
+                (make-graph (:graph config))
+                {:prefixes :prefixes})
+     :model    (comp/using
+                (make-graph-model (:model config))
+                {:graph :graph})
+     :prefixes (make-prefix-registry (:prefixes config))
+     :queries  (comp/using
+                (make-query-registry (:queries config))
+                {:model :model})
+     :rules    (comp/using
+                (make-rule-registry (:rules config))
+                {:model :model})
+     :handler  (comp/using
+                (make-handler (:handler config))
+                {:model    :model
+                 :prefixes :prefixes
+                 :queries  :queries
+                 :rules    :rules})
+     :server   (comp/using
+                (make-server (:server config))
+                {:handler :handler})))
+#+END_SRC
+
+** REPL
+
+#+BEGIN_SRC clojure :noweb-ref user
+  (def system nil)
+
+  (defn init []
+    (alter-var-root
+     #'system
+     (constantly (make-system default-config))))
+
+  (defn start []
+    (alter-var-root #'system comp/start))
+
+  (defn stop []
+    (alter-var-root
+     #'system
+     (fn [s] (when s (comp/stop s)))))
+
+  (defn go* []
+    (init)
+    (start))
+
+  (defn reset []
+    (stop)
+    (refresh :after 'thi.ng.fabric.ld.core/go*))
 #+END_SRC
 
 ** Complete namespace definition
@@ -284,12 +536,43 @@
 #+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/ld/core.cljc :noweb yes :mkdirp yes :padline no
   (ns thi.ng.fabric.ld.core
     (:require
-     [com.stuartsierra.component :as comp]
+     [thi.ng.fabric.core :as f]
+     [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.fabric.facts.dsl :as dsl]
+     [thi.ng.fabric.facts.io.ntriples :as nt]
+     [thi.ng.strf.core :as strf]
      [thi.ng.xerror.core :as err]
+     [com.stuartsierra.component :as comp]
+     [clojure.tools.namespace.repl :refer (refresh)]
+     [manifold.deferred :as d]
      [aleph.http :as http]
+     [byte-streams :as bs]
+     [compojure.core :as compojure :refer [GET POST DELETE]]
+     [compojure.route :as route]
+     [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
+     [ring.middleware.stacktrace :refer [wrap-stacktrace]]
+     [ring.util.response :as resp]
      [clojure.edn :as edn]
-     [clojure.core.async :as async :refer [go go-loop <! >!]]
+     [clojure.core.async :as async :refer [go go-loop <! >! chan]]
      [taoensso.timbre :refer [debug info warn]]))
+
+  <<protocols>>
+
+  <<registry-helpers>>
+
+  <<registry>>
+
+  <<graph>>
+
+  <<model>>
+
+  <<aleph>>
+
+  <<handler>>
+
+  <<config>>
+
+  <<system>>
+
+  <<user>>
 #+END_SRC
-
-
