@@ -1,6 +1,6 @@
 #+SETUPFILE: ../../common/setup.org
 
-* Contents                                                         :toc_3_gh:
+* Contents                                                         :toc_4_gh:
  - [[#namespace-thingfabricldcore][Namespace: thi.ng.fabric.ld.core]]
      - [[#protocols][Protocols]]
      - [[#components][Components]]
@@ -8,6 +8,10 @@
          - [[#fact-log][Fact log]]
          - [[#graph-model][Graph model]]
          - [[#entity-registries][Entity registries]]
+             - [[#uri-prefix-registry][URI prefix registry]]
+             - [[#query-registry][Query registry]]
+             - [[#inference-rule-registry][Inference rule registry]]
+             - [[#registry-helpers][Registry helpers]]
          - [[#handlers][Handlers]]
          - [[#aleph-server][Aleph server]]
      - [[#component-system-creation][Component system creation]]
@@ -35,6 +39,7 @@
   (defprotocol IEntityRegistry
     (register [_ id val])
     (deregister [_ id])
+    (lookup [_ id])
     (list-registry [_]))
 
   (defprotocol IHandler
@@ -46,12 +51,15 @@
 *** FactGraph component wrapper
 
 #+BEGIN_SRC clojure :noweb-ref graph
-  (defrecord LDGraph [prefixes graph]
+  (defrecord LDGraph [graph prefixes config]
     comp/Lifecycle
     (start
       [_]
       (info "initializing graph")
       (let [g (ff/fact-graph {:transform (ff/combine-transforms prefixes 3)})]
+        (when-let [path (:edn-path config)]
+          (with-open [r (-> path io/reader PushbackReader.)]
+            (run! #(ff/add-fact! g %) (ff/map->facts (edn/read r)))))
         (assoc _ :graph g)))
     (stop
       [_]
@@ -62,7 +70,7 @@
 
   (defn make-graph
     [config]
-    (map->LDGraph {}))
+    (map->LDGraph {:config config}))
 #+END_SRC
 
 *** Fact log
@@ -201,6 +209,8 @@ a more efficient manner.
       _)
     (list-registry
       [_] (:prefixes @registry))
+    (lookup
+      [_ prefix] (get-in @registry [:prefixes prefix]))
     ff/ITwoWayTransform
     (transform
       [_ x] (ff/->prefix-string (:sorted @registry) x))
@@ -215,8 +225,8 @@ a more efficient manner.
 **** Query registry
 
 ***** TODO define vocab for queries defined in graph
-***** TODO auto-register stored queries when component starts
 ***** Impl
+
 #+BEGIN_SRC clojure :noweb-ref registry
   (defrecord QueryRegistry [model registry config]
     comp/Lifecycle
@@ -248,6 +258,8 @@ a more efficient manner.
         (remove-query q model)
         (swap! registry dissoc id)
         q))
+    (lookup
+      [_ id] (@registry id))
     (list-registry
       [_] @registry))
 
@@ -257,6 +269,8 @@ a more efficient manner.
 #+END_SRC
 
 **** Inference rule registry
+***** TODO define vocab for queries defined in graph
+***** Impl
 
 #+BEGIN_SRC clojure :noweb-ref registry
   (defrecord RuleRegistry [model registry config]
@@ -284,6 +298,8 @@ a more efficient manner.
                   rule  (add-rule model {:id id :query query :production prod})]
               (swap! registry assoc id {:spec spec :rule rule})
               id)))))
+    (lookup
+      [_ id] (@registry id))
     (list-registry
       [_] @registry))
 
@@ -353,10 +369,10 @@ a more efficient manner.
     [queries]
     (fn [req]
       (let [{:keys [id q]} (:params req)
-            q  (edn/read-string q)
+            q   (edn/read-string q)
             id' (register queries id q)]
         (if id'
-          (if (= id id)
+          (if (= id id')
             (edn-response {:id id' :body "New query registered"} 202)
             (edn-response {:id id' :body "Query already registered using another ID"} 303))
           (edn-response {:id id :body "Query ID conflict"} 409)))))
@@ -384,13 +400,13 @@ a more efficient manner.
           (edn-response {:id id :body "Query scheduled for deletion"} 202)
           (edn-response {:id id} 404)))))
 
-  (defn list-queries-handler
-    [queries]
+  (defn list-registry-handler
+    [registry]
     (fn [req]
-      (let [queries (reduce-kv
-                     (fn [acc k v] (assoc acc k (:spec v)))
-                     {} (list-registry queries))]
-        (edn-response {:body queries} 200))))
+      (let [items (reduce-kv
+                   (fn [acc k v] (assoc acc k (:spec v)))
+                   {} (list-registry registry))]
+        (edn-response {:body items} 200))))
 
   (defn register-rule-handler
     [rules]
@@ -403,14 +419,6 @@ a more efficient manner.
         (if id
           (edn-response {:id id :body "Rule registered"} 202)
           (edn-response {:id id :body "Rule ID conflict"} 409)))))
-
-  (defn list-rules-handler
-    [rules]
-    (fn [req]
-      (let [rules (reduce-kv
-                   (fn [acc k v] (assoc acc k (:spec v)))
-                   {} (list-registry rules))]
-        (edn-response {:body rules} 200))))
 
   (defn add-facts-handler
     [model]
@@ -446,10 +454,10 @@ a more efficient manner.
       (POST   "/facts"       [] (add-facts-handler model))
       (POST   "/query"       [] (one-off-query-handler model))
       (POST   "/queries"     [] (register-query-handler queries))
-      (GET    "/queries"     [] (list-queries-handler queries))
+      (GET    "/queries"     [] (list-registry-handler queries))
       (GET    "/queries/:id" [] (query-result-handler queries))
       (DELETE "/queries/:id" [] (delete-query-handler queries))
-      (GET    "/rules"       [] (list-rules-handler rules))
+      (GET    "/rules"       [] (list-registry-handler rules))
       (POST   "/rules"       [] (register-rule-handler rules))
       (route/not-found "404"))))
 
@@ -457,7 +465,7 @@ a more efficient manner.
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:route-provider config) config model queries rules)] 
+      (let [routes ((:route-provider config) config model queries rules)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -511,7 +519,7 @@ a more efficient manner.
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :logger   {:fn   default-logger
                 :path "session-%s.edn"}
-     :graph    {}
+     :graph    {:edn-path "../../../ea3/facts.edn"}
      :model    {}
      :queries  {:specs {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
      :rules    {}
@@ -600,9 +608,12 @@ a more efficient manner.
      [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
      [ring.middleware.stacktrace :refer [wrap-stacktrace]]
      [ring.util.response :as resp]
+     [clojure.java.io :as io]
      [clojure.edn :as edn]
      [clojure.core.async :as async :refer [go go-loop <! >! chan]]
-     [taoensso.timbre :refer [debug info warn]]))
+     [taoensso.timbre :refer [debug info warn]])
+    (:import
+     java.io.PushbackReader))
 
   <<protocols>>
 
