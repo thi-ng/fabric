@@ -25,7 +25,7 @@
              - [[#bounded-path-query][Bounded path query]]
          - [[#query-results][Query results]]
          - [[#query-helpers][Query helpers]]
-             - [[#variable-bindings-injection-multi-method][Variable bindings injection multi-method]]
+             - [[#variable-binding-result-mapping][Variable binding result mapping]]
              - [[#fact-verifier-multi-method][Fact verifier multi-method]]
      - [[#rulebased-inference][Rulebased inference]]
      - [[#signal--collect-functions][Signal & collect functions]]
@@ -729,7 +729,7 @@ set only contains unique bindings of query variable =?s=.
          (do (debug :reuse-param-query pattern) q)
          (let [qvars?  (mapv qvar? pattern)
                raw     (mapv #(if-not (qvar? %) %) pattern)
-               vmap    (bind-translator qvars? pattern)
+               vmap    (bind-translator pattern)
                verify  (fact-verifier qvars? pattern)
                tx      (if verify
                          (map #(if (verify %) (vmap %)))
@@ -1051,6 +1051,11 @@ min/max path lengths MUST be specified.
     [patterns]
     (sort-by pattern-var-count patterns))
 
+  (defn unique-bindings?
+    "Returns true if all values in the given map are unique, i.e.
+    no two keys are mapped to the same value."
+    [res] (== (count (into #{} (vals res))) (count res)))
+
   (defn select-keys*
     "Like c.c/select-keys, but doesn't retain map's meta"
     {:static true}
@@ -1148,7 +1153,11 @@ min/max path lengths MUST be specified.
 
   (defn result-transducer
     [spec tx]
-    (let [tx (if-let [flt (:filter spec)]
+    (let [tx (if (:unique spec)
+               (let [tx' (filter unique-bindings?)]
+                 (if tx (comp tx tx') tx'))
+               tx)
+          tx (if-let [flt (:filter spec)]
                (let [tx' (filter flt)]
                  (if tx (comp tx tx') tx'))
                tx)
@@ -1223,10 +1232,10 @@ min/max path lengths MUST be specified.
         (remove-recursively g res parent deps type))))
 #+END_SRC
 
-**** Variable bindings injection multi-method
+**** Variable binding result mapping
 
-This function (and =fact-verifier= below) are used as an extensible
-mechanism to allow the graph to support facts of varying lengths and
+This function (and =fact-verifier= below) are used as part of the
+mechanism allowing the graph to support facts of varying lengths and
 queries over them. Currently, this module only supports fact triples
 (len=3) or quads (len=4).
 
@@ -1235,67 +1244,27 @@ variables to their fact components in the result set of a parametric
 query.
 
 #+BEGIN_SRC clojure :noweb-ref query-helpers
-  (defmulti bind-translator
-    (fn [qvars? pattern] (count pattern)))
-
-  (defmethod bind-translator 3
-    [[vs? vp? vo?] [s p o]]
-    (if vs?
-      (if vp?
-        (if vo?
-          (fn [r] {s (r 0) p (r 1) o (r 2)})
-          (fn [r] {s (r 0) p (r 1)}))
-        (if vo?
-          (fn [r] {s (r 0) o (r 2)})
-          (fn [r] {s (r 0)})))
-      (if vp?
-        (if vo?
-          (fn [r] {p (r 1) o (r 2)})
-          (fn [r] {p (r 1)}))
-        (if vo?
-          (fn [r] {o (r 2)})
-          (fn [_] {})))))
-
-  (defmethod bind-translator 4
-    [[vt? vs? vp? vo?] [t s p o]]
-    (if vt?
-      (if vs?
-        (if vp?
-          (if vo?
-            (fn [r] {t (r 0) s (r 1) p (r 2) o (r 3)})
-            (fn [r] {t (r 0) s (r 1) p (r 2)}))
-          (if vo?
-            (fn [r] {t (r 0) s (r 1) o (r 3)})
-            (fn [r] {t (r 0) s (r 1)})))
-        (if vp?
-          (if vo?
-            (fn [r] {t (r 0) p (r 2) o (r 3)})
-            (fn [r] {t (r 0) p (r 2)}))
-          (if vo?
-            (fn [r] {t (r 0) o (r 3)})
-            (fn [r] {t (r 0)}))))
-      (if vs?
-        (if vp?
-          (if vo?
-            (fn [r] {s (r 1) p (r 2) o (r 3)})
-            (fn [r] {s (r 1) p (r 2)}))
-          (if vo?
-            (fn [r] {s (r 1) o (r 3)})
-            (fn [r] {s (r 1)})))
-        (if vp?
-          (if vo?
-            (fn [r] {p (r 2) o (r 3)})
-            (fn [r] {p (r 2)}))
-          (if vo?
-            (fn [r] {o (r 3)})
-            (fn [_] {}))))))
+  (defn bind-translator
+    [pattern]
+    (let [vmap (reduce-kv
+                (fn [acc k v]
+                  (if (and (qvar? k) (not (acc k)))
+                    (assoc acc k #(% v))
+                    acc))
+                {} (zipmap pattern (range)))]
+      (case (count vmap)
+        0 (fn [r] {})
+        1 (let [[[a av]] (seq vmap)] (fn [r] {a (av r)}))
+        2 (let [[[a av] [b bv]] (seq vmap)] (fn [r] {a (av r) b (bv r)}))
+        3 (let [[[a av] [b bv] [c cv]] (seq vmap)] (fn [r] {a (av r) b (bv r) c (cv r)}))
+        (fn [r] (reduce-kv (fn [acc k f] (assoc acc k (f r))) {} vmap)))))
 #+END_SRC
 
 **** Fact verifier multi-method
 
 The fact verifier function is used to provide optimized validations to
 ensure query variables are bound to unique values. E.g. given a query
-pattern =['?a ?b '?a]=, these functions ensure that all 3 qvars are
+pattern =['?a ?b '?a]=, these functions ensure that all qvars are
 bound to different values, i.e. it would reject the fact =[fact is
 fiction]= (yes, pretty meaningless..) because =?a= wouldn't be bound to the
 same values (first =?a= binds to "fact", second =?a= to "fiction")...
