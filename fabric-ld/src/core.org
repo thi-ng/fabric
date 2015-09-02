@@ -534,9 +534,9 @@ a more efficient manner.
                                     [?x2 ?p ?y]]}]}
                    :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
 
-      ;; "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
-      ;;                               [?x ?p ?x]]}]} ;; FIXME breaks bind-translator
-      ;;              :prod [[:remove [?x ?p ?x]]]}
+      "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
+                                    [?x ?p ?x]]}]}
+                   :prod [[:remove [?x ?p ?x]]]}
 
       "prp-symp"  {:q {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
                                     [?x ?p ?y]]}]}
@@ -550,7 +550,7 @@ a more efficient manner.
       "prp-trp"   {:q {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
                                     [?x ?p ?y]
                                     [?y ?p ?z]]
-                            :filter (not= ?x ?z)}]}
+                            :unique true}]}
                    :prod [[:add [?x ?p ?z]]]}
 
       "prp-spo1"  {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
