@@ -201,7 +201,7 @@ a more efficient manner.
     IEntityRegistry
     (register
       [_ prefix uri]
-      (info "register prefix: " prefix uri)
+      (info "register prefix:" prefix uri)
       (swap! registry
              (fn [reg]
                (let [reg (assoc-in reg [:prefixes prefix] uri)]
@@ -209,7 +209,7 @@ a more efficient manner.
       _)
     (deregister
       [_ prefix]
-      (info "deregister prefix: " prefix)
+      (info "deregister prefix:" prefix)
       (swap! registry
              (fn [reg]
                (let [reg (update reg :prefixes dissoc prefix)]
@@ -242,7 +242,7 @@ a more efficient manner.
       [_]
       (info "starting query registry")
       (let [this (assoc _ :registry (atom {}))]
-        (run! (fn [[id spec]] (register this id spec)) (:specs config))
+        (run! (fn [[id spec]] (register this (name id) spec)) (:specs config))
         this))
     (stop
       [_]
@@ -263,7 +263,7 @@ a more efficient manner.
       [_ id]
       (when-let [q (:query (@registry id))]
         (info "deregister query:" id)
-        (remove-query q model)
+        (remove-query model q)
         (swap! registry dissoc id)
         q))
     (lookup
@@ -287,7 +287,7 @@ a more efficient manner.
       [_]
       (info "starting rule registry")
       (let [this (assoc _ :registry (atom {}))]
-        (run! (fn [[id spec]] (register this id spec)) (:specs config))
+        (run! (fn [[id spec]] (register this (name id) spec)) (:specs config))
         this))
     (stop
       [_]
@@ -306,6 +306,13 @@ a more efficient manner.
                   rule  (add-rule model {:id id :query query :production prod})]
               (swap! registry assoc id {:spec spec :rule rule})
               id)))))
+    (deregister
+      [_ id]
+      (when-let [r (:rule (@registry id))]
+        (info "deregister rule:" id)
+        (remove-rule model r)
+        (swap! registry dissoc id)
+        r))
     (lookup
       [_ id] (@registry id))
     (list-registry
@@ -327,7 +334,7 @@ a more efficient manner.
     [[op fact]]
     (let [fact (map #(if (ff/qvar? %) (fn [r] (r %)) (fn [_] %)) fact)]
       (case op
-        :add (fn [g res] (ff/add-fact! g (mapv #(% res) fact)))
+        :add    (fn [g res] (ff/add-fact! g (mapv #(% res) fact)))
         :remove (fn [g res] (ff/remove-fact! g (mapv #(% res) fact)))
         (throw (IllegalArgumentException. (str "invalid production op: " op))))))
 
@@ -367,9 +374,17 @@ a more efficient manner.
             handler (delayed-response-handler
                      model
                      (fn []
-                       (let [results @q]
+                       (let [{:keys [id limit offset]} (:params req)
+                             limit  (strf/parse-int limit 10 100)
+                             offset (strf/parse-int offset 10 0)
+                             body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
                          (remove-query model q)
-                         (edn-response results 200))))]
+                         (edn-response
+                          {:count  (count body)
+                           :total  (count @q)
+                           :offset offset
+                           :body   body}
+                          200))))]
         (trigger-update model)
         handler)))
 
@@ -388,16 +403,20 @@ a more efficient manner.
   (defn query-result-handler
     [queries]
     (fn [req]
-      (let [{:keys [id limit offset]} (:params req)]
-        (if-let [q (:query (lookup queries id))]
+      (let [{:keys [id limit offset]} (:params req)
+            q (lookup queries id)]
+        (if-let [qq (:query q)]
           (let [limit  (strf/parse-int limit 10 100)
                 offset (strf/parse-int offset 10 0)
-                body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                body   (into (empty @qq) (comp (drop offset) (take limit)) @qq)]
             (edn-response
              {:id id
-              :count (count body)
-              :total (count @q)
-              :body body} 200))
+              :count  (count body)
+              :total  (count @qq)
+              :offset offset
+              :spec   (:spec q)
+              :body   body}
+             200))
           (edn-response {:id id} 404)))))
 
   (defn delete-query-handler
@@ -427,6 +446,33 @@ a more efficient manner.
         (if id
           (edn-response {:id id :body "Rule registered"} 202)
           (edn-response {:id id :body "Rule ID conflict"} 409)))))
+
+  (defn rule-result-handler
+    [rules]
+    (fn [req]
+      (let [{:keys [id limit offset]} (:params req)
+            r (lookup rules id)]
+        (if-let [rr (:rule r)]
+          (let [limit  (strf/parse-int limit 10 100)
+                offset (strf/parse-int offset 10 0)
+                body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
+            (edn-response
+             {:id id
+              :count  (count body)
+              :total  (count @rr)
+              :offset offset
+              :spec   (:spec r)
+              :body   body}
+             200))
+          (edn-response {:id id} 404)))))
+
+  (defn delete-rule-handler
+    [rules]
+    (fn [req]
+      (let [id (-> req :params :id)]
+        (if (deregister rules id)
+          (edn-response {:id id :body "Rule scheduled for deletion"} 202)
+          (edn-response {:id id} 404)))))
 
   (defn add-facts-handler
     [model]
@@ -467,6 +513,8 @@ a more efficient manner.
       (DELETE "/queries/:id" [] (delete-query-handler queries))
       (GET    "/rules"       [] (list-registry-handler rules))
       (POST   "/rules"       [] (register-rule-handler rules))
+      (GET    "/rules/:id"   [] (rule-result-handler rules))
+      (DELETE "/rules/:id"   [] (delete-rule-handler rules))
       (route/not-found "404"))))
 
   (defrecord Handler [config model queries rules routes]
@@ -516,90 +564,90 @@ a more efficient manner.
 
 #+BEGIN_SRC clojure :noweb-ref inf-rules
   (def inf-rules-props
-    '{"prp-dom"   {:q {:q [{:where [[?p "rdfs:domain" ?d]
-                                    [?x ?p ?y]]}]}
-                   :prod [[:add [?x "rdf:type" ?d]]]}
+    '{:prp-dom   {:q    {:q [{:where [[?p "rdfs:domain" ?d]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?x "rdf:type" ?d]]]}
 
-      "prp-rng"   {:q {:q [{:where [[?p "rdfs:range" ?r]
-                                    [?x ?p ?y]]}]}
-                   :prod [[:add [?y "rdf:type" ?r]]]}
+      :prp-rng   {:q    {:q [{:where [[?p "rdfs:range" ?r]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?y "rdf:type" ?r]]]}
 
-      "prp-fp"    {:q {:q [{:where [[?p "rdf:type" "owl:FunctionalProperty"]
-                                    [?x ?p ?y1]
-                                    [?x ?p ?y2]]}]}
-                   :prod [[:add [?y1 "owl:sameAs" ?y2]]]}
+      :prp-fp    {:q    {:q [{:where [[?p "rdf:type" "owl:FunctionalProperty"]
+                                      [?x ?p ?y1]
+                                      [?x ?p ?y2]]}]}
+                  :prod [[:add [?y1 "owl:sameAs" ?y2]]]}
 
-      "prp-ifp"   {:q {:q [{:where [[?p "rdf:type" "owl:InverseFunctionalProperty"]
-                                    [?x1 ?p ?y]
-                                    [?x2 ?p ?y]]}]}
-                   :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
+      :prp-ifp   {:q    {:q [{:where [[?p "rdf:type" "owl:InverseFunctionalProperty"]
+                                      [?x1 ?p ?y]
+                                      [?x2 ?p ?y]]}]}
+                  :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
 
-      "prp-irp"   {:q {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
-                                    [?x ?p ?x]]}]}
-                   :prod [[:remove [?x ?p ?x]]]}
+      :prp-irp   {:q    {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
+                                      [?x ?p ?x]]}]}
+                  :prod [[:remove [?x ?p ?x]]]}
 
-      "prp-symp"  {:q {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
-                                    [?x ?p ?y]]}]}
-                   :prod [[:add [?y ?p ?x]]]}
+      :prp-symp  {:q    {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?y ?p ?x]]]}
 
-      ;; "prp-asyp"  {:q {:q [{:where [[?p "rdf:type" "owl:AsymmetricProperty"]
+      ;; :prp-asyp  {:q {:q [{:where [[?p "rdf:type" "owl:AsymmetricProperty"]
       ;;                               [?x ?p ?y]
       ;;                               [?y ?p ?x]]}]}
       ;;              :prod false}
 
-      "prp-trp"   {:q {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
-                                    [?x ?p ?y]
-                                    [?y ?p ?z]]
-                            :unique true}]}
-                   :prod [[:add [?x ?p ?z]]]}
+      :prp-trp   {:q    {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
+                                      [?x ?p ?y]
+                                      [?y ?p ?z]]
+                              :unique true}]}
+                  :prod [[:add [?x ?p ?z]]]}
 
-      "prp-spo1"  {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
-                                    [?x ?p1 ?y]]}]}
-                   :prod [[:add [?x ?p2 ?y]]]}
+      :prp-spo1  {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?x ?p2 ?y]]]}
 
       ;; :prp-spo2  nil ;; TODO requires property chains
 
-      "prp-eqp1"  {:q {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
-                                    [?x ?p1 ?y]]}]}
-                   :prod [[:add [?x ?p2 ?y]]]}
+      :prp-eqp1  {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?x ?p2 ?y]]]}
 
-      "prp-eqp2"  {:q {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
-                                    [?x ?p2 ?y]]}]}
-                   :prod [[:add [?x ?p1 ?y]]]}
+      :prp-eqp2  {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                      [?x ?p2 ?y]]}]}
+                  :prod [[:add [?x ?p1 ?y]]]}
 
-      ;; "prp-pdw"   {:q {:q [{:where [[?p1 "owl:propertyDisjointWith" ?p2]
+      ;; :prp-pdw   {:q {:q [{:where [[?p1 "owl:propertyDisjointWith" ?p2]
       ;;                               [?x ?p1 ?y]
       ;;                               [?x ?p2 ?y]]}]}
       ;;              :prod false}
 
       ;; :prp-adp   nil ;; TODO required property chains
 
-      "prp-inv1"  {:q {:q [{:where [[?p1 "owl:inverseOf" ?p2]
-                                    [?x ?p1 ?y]]}]}
-                   :prod [[:add [?y ?p2 ?x]]]}
+      :prp-inv1  {:q    {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?y ?p2 ?x]]]}
 
-      "prp-inv2"  {:q {:q [{:where [[?p1 "owl:inverseOf" ?p2]
-                                    [?x ?p2 ?y]]}]}
-                   :prod [[:add [?y ?p1 ?x]]]}})
+      :prp-inv2  {:q    {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                      [?x ?p2 ?y]]}]}
+                  :prod [[:add [?y ?p1 ?x]]]}})
 #+END_SRC
 
 **** Class semantics
 
 #+BEGIN_SRC clojure :noweb-ref inf-rules
   (def inf-rules-class-semantics
-    '{"cax-sco"  {:q {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
-                                   [?x "rdf:type" ?c1]]}]}
-                  :prod [[:add [?x "rdf:type" ?c2]]]}
+    '{:cax-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?x "rdf:type" ?c1]]}]}
+                 :prod [[:add [?x "rdf:type" ?c2]]]}
 
-      "cax-eqc1" {:q {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
-                                   [?x "rdf:type" ?c1]]}]}
-                  :prod [[:add [?x "rdf:type" ?c2]]]}
+      :cax-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
+                                     [?x "rdf:type" ?c1]]}]}
+                 :prod [[:add [?x "rdf:type" ?c2]]]}
 
-      "cax-eqc2" {:q {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
-                                   [?x "rdf:type" ?c2]]}]}
-                  :prod [[:add [?x "rdf:type" ?c1]]]}
+      :cax-eqc2 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
+                                     [?x "rdf:type" ?c2]]}]}
+                 :prod [[:add [?x "rdf:type" ?c1]]]}
 
-      ;; "cax-dw"   {:q {:q [{:where [[?c1 "owl:disjointWith" ?c2]
+      ;; :cax-dw   {:q {:q [{:where [[?c1 "owl:disjointWith" ?c2]
       ;;                              [?x "rdf:type" ?c1]
       ;;                              [?x "rdf:type" ?c2]]}]}
       ;;             :prod false}
@@ -612,94 +660,94 @@ a more efficient manner.
 
 #+BEGIN_SRC clojure :noweb-ref inf-rules
   (def inf-rules-schema
-    '{"scm-cls"  {:q {:q [{:where [[?c "rdf:type" "owl:Class"]]}]}
-                  :prod [[:add [?c "rdfs:subClassOf" ?c]]
-                         [:add [?c "owl:equivalentClass" ?c]]
-                         [:add [?c "rdfs:subClassOf" "owl:Thing"]]
-                         [:add ["owl:Nothing" "rdfs:subClassOf" ?c]]]}
+    '{:scm-cls  {:q    {:q [{:where [[?c "rdf:type" "owl:Class"]]}]}
+                 :prod [[:add [?c "rdfs:subClassOf" ?c]]
+                        [:add [?c "owl:equivalentClass" ?c]]
+                        [:add [?c "rdfs:subClassOf" "owl:Thing"]]
+                        [:add ["owl:Nothing" "rdfs:subClassOf" ?c]]]}
 
-      "scm-sco"  {:q {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
-                                   [?c2 "rdfs:subClassOf" ?c3]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c3]]]}
+      :scm-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?c2 "rdfs:subClassOf" ?c3]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c3]]]}
 
-      "scm-eqc1" {:q {:q [{:where [[?c1 "owl:equivalentClass" ?c2]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]
-                         [:add [?c2 "rdfs:subClassOf" ?c1]]]}
+      :scm-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]
+                        [:add [?c2 "rdfs:subClassOf" ?c1]]]}
 
-      "scm-eqc2" {:q {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
-                                   [?c2 "rdfs:subClassOf" ?c1]]}]}
-                  :prod [[:add [?c1 "owl:equivalentClass" ?c2]]]}
+      :scm-eqc2 {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?c2 "rdfs:subClassOf" ?c1]]}]}
+                 :prod [[:add [?c1 "owl:equivalentClass" ?c2]]]}
 
-      "scm-op"   {:q {:q [{:where [[?p "rdf:type" "owl:ObjectProperty"]]}]}
-                  :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
-                         [:add [?p "owl:equivalentProperty" ?p]]]}
+      :scm-op   {:q    {:q [{:where [[?p "rdf:type" "owl:ObjectProperty"]]}]}
+                 :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
+                        [:add [?p "owl:equivalentProperty" ?p]]]}
 
-      "scm-dp"   {:q {:q [{:where [[?p "rdf:type" "owl:DatatypeProperty"]]}]}
-                  :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
-                         [:add [?p "owl:equivalentProperty" ?p]]]}
+      :scm-dp   {:q    {:q [{:where [[?p "rdf:type" "owl:DatatypeProperty"]]}]}
+                 :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
+                        [:add [?p "owl:equivalentProperty" ?p]]]}
 
-      "scm-spo"  {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
-                                   [?p2 "rdfs:subPropertyOf" ?p3]]}]}
-                  :prod [[:add [?p1 "rdfs:subPropertyOf" ?p3]]]}
+      :scm-spo  {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                     [?p2 "rdfs:subPropertyOf" ?p3]]}]}
+                 :prod [[:add [?p1 "rdfs:subPropertyOf" ?p3]]]}
 
-      "scm-eqp1" {:q {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]]}]}
-                  :prod [[:add [?p1 "rdfs:subPropertyOf" ?p2]]
-                         [:add [?p2 "rdfs:subPropertyOf" ?p1]]]}
+      :scm-eqp1 {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:subPropertyOf" ?p2]]
+                        [:add [?p2 "rdfs:subPropertyOf" ?p1]]]}
 
-      "scm-eqp2" {:q {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
-                                   [?p2 "rdfs:subPropertyOf" ?p1]]}]}
-                  :prod [[:add [?p1 "owl:equivalentProperty" ?p2]]]}
+      :scm-eqp2 {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                     [?p2 "rdfs:subPropertyOf" ?p1]]}]}
+                 :prod [[:add [?p1 "owl:equivalentProperty" ?p2]]]}
 
-      "scm-dom1" {:q {:q [{:where [[?p "rdfs:domain" ?c1]
-                                   [?c1 "rdfs:subClassOf" ?c2]]}]}
-                  :prod [[:add [?p "rdfs:domain" ?c2]]]}
+      :scm-dom1 {:q    {:q [{:where [[?p "rdfs:domain" ?c1]
+                                     [?c1 "rdfs:subClassOf" ?c2]]}]}
+                 :prod [[:add [?p "rdfs:domain" ?c2]]]}
 
-      "scm-dom2" {:q {:q [{:where [[?p2 "rdfs:domain" ?c]
-                                   [?p1 "rdfs:subPropertyOf" ?p2]]}]}
-                  :prod [[:add [?p1 "rdfs:domain" ?c]]]}
+      :scm-dom2 {:q    {:q [{:where [[?p2 "rdfs:domain" ?c]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:domain" ?c]]]}
 
-      "scm-rng1" {:q {:q [{:where [[?p "rdfs:range" ?c1]
-                                   [?c1 "rdfs:subClassOf" ?c2]]}]}
-                  :prod [[:add [?p "rdfs:range" ?c2]]]}
+      :scm-rng1 {:q    {:q [{:where [[?p "rdfs:range" ?c1]
+                                     [?c1 "rdfs:subClassOf" ?c2]]}]}
+                 :prod [[:add [?p "rdfs:range" ?c2]]]}
 
-      "scm-rng2" {:q {:q [{:where [[?p2 "rdfs:range" ?c]
-                                   [?p1 "rdfs:subPropertyOf" ?p2]]}]}
-                  :prod [[:add [?p1 "rdfs:range" ?c]]]}
+      :scm-rng2 {:q    {:q [{:where [[?p2 "rdfs:range" ?c]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:range" ?c]]]}
 
-      "scm-hv"   {:q {:q [{:where [[?c1 "owl:hasValue" ?i]
-                                   [?c1 "owl:onProperty" ?p1]
-                                   [?c2 "owl:hasValue" ?i]
-                                   [?c2 "owl:onProperty" ?p2]
-                                   [?p1 "rdfs:subPropertyOf" ?p2]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+      :scm-hv   {:q    {:q [{:where [[?c1 "owl:hasValue" ?i]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:hasValue" ?i]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
 
-      "scm-svf1" {:q {:q [{:where [[?c1 "owl:someValuesFrom" ?y1]
-                                   [?c1 "owl:onProperty" ?p]
-                                   [?c2 "owl:someValuesFrom" ?y2]
-                                   [?c2 "owl:onProperty" ?p]
-                                   [?y1 "rdfs:subClassOf" ?y2]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+      :scm-svf1 {:q    {:q [{:where [[?c1 "owl:someValuesFrom" ?y1]
+                                     [?c1 "owl:onProperty" ?p]
+                                     [?c2 "owl:someValuesFrom" ?y2]
+                                     [?c2 "owl:onProperty" ?p]
+                                     [?y1 "rdfs:subClassOf" ?y2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
 
-      "scm-svf2" {:q {:q [{:where [[?c1 "owl:someValuesFrom" ?y]
-                                   [?c1 "owl:onProperty" ?p1]
-                                   [?c2 "owl:someValuesFrom" ?y]
-                                   [?c2 "owl:onProperty" ?p2]
-                                   [?p1 "rdfs:subPropertyOf" ?p2]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+      :scm-svf2 {:q    {:q [{:where [[?c1 "owl:someValuesFrom" ?y]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:someValuesFrom" ?y]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
 
-      "scm-avf1" {:q {:q [{:where [[?c1 "owl:allValuesFrom" ?y1]
-                                   [?c1 "owl:onProperty" ?p]
-                                   [?c2 "owl:allValuesFrom" ?y2]
-                                   [?c2 "owl:onProperty" ?p]
-                                   [?y1 "rdfs:subClassOf" ?y2]]}]}
-                  :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+      :scm-avf1 {:q    {:q [{:where [[?c1 "owl:allValuesFrom" ?y1]
+                                     [?c1 "owl:onProperty" ?p]
+                                     [?c2 "owl:allValuesFrom" ?y2]
+                                     [?c2 "owl:onProperty" ?p]
+                                     [?y1 "rdfs:subClassOf" ?y2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
 
-      "scm-avf2" {:q {:q [{:where [[?c1 "owl:allValuesFrom" ?y]
-                                   [?c1 "owl:onProperty" ?p1]
-                                   [?c2 "owl:allValuesFrom" ?y]
-                                   [?c2 "owl:onProperty" ?p2]
-                                   [?p1 "rdfs:subPropertyOf" ?p2]]}]}
-                  :prod [[:add [?c2 "rdfs:subClassOf" ?c1]]]}
+      :scm-avf2 {:q    {:q [{:where [[?c1 "owl:allValuesFrom" ?y]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:allValuesFrom" ?y]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c2 "rdfs:subClassOf" ?c1]]]}
 
       ;; :scm-int  nil ;; TODO
 
