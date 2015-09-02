@@ -214,7 +214,7 @@ Examples:
   (defn sub-query-options
     [opts]
     (-> opts
-        (select-keys [:filter :limit :select])
+        (select-keys [:filter :limit :select :unique])
         (update :filter #(if % (compile-query-filter %)))))
 
   (defmulti compile-sub-query
