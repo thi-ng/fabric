@@ -1360,7 +1360,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
           coll-fn (or collect-fn (collect-inference g production))
           query   (or query
                       (let [tx (or transform (fact-transform g))
-                            q-opts (select-keys opts [:filter :limit])]
+                            q-opts (select-keys opts [:filter :limit :select :unique])]
                         (if (< 1 (count patterns))
                           (add-query-join! g tx patterns q-opts)
                           (add-param-query! g tx (first patterns) q-opts))))
@@ -1446,13 +1446,17 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
   (defn- collect-basic-query-results
     [g opts]
-    (let [ftx (fact-transform g)
-          tx  (map #(untransform ftx @(f/vertex-for-id g %)))
+    (let [tx  (if (not= false (:untransform opts))
+                (let [ftx (fact-transform g)]
+                  (map #(untransform ftx @(f/vertex-for-id g %))))
+                (map #(deref (f/vertex-for-id g %))))
           tx  (if-let [flt (:filter opts)]
-                (comp tx (filter flt))
+                (let [tx' (filter flt)]
+                  (if tx (comp tx tx') tx'))
                 tx)
           tx  (if-let [lim (:limit opts)]
-                (comp tx (take lim))
+                (let [tx' (take lim)]
+                  (if tx (comp tx tx') tx'))
                 tx)]
       (f/collect-pure
        (fn [_ incoming]
