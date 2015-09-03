@@ -13,12 +13,15 @@
           q2 (ff/add-param-query! g '[alice ?p ?o] {})
           q3 (ff/add-query! g '[nil friend nil] {:limit 1})
           q4 (ff/add-query! g '[nil friend nil] {:filter (fn [[s]] (= 'bob s))})
-          q5 (ff/add-param-query! g '[alice ?p ?o] {:limit 1 :filter #(= 'friend (% '?p))})]
+          q5 (ff/add-param-query! g '[alice ?p ?o] {:limit 1 :filter #(= 'friend (% '?p))})
+          q6 (ff/add-param-query! g '[alice ?p ?o] {:limit 1 :filter #(= 'friend (% '?p)) :select '?o})]
       (ff/add-fact! g '[alice friend bob])
       (ff/add-fact! g '[bob friend charlie])
       (ff/add-fact! g '[alice friend dora])
       (ff/add-fact! g '[alice email "a@b.com"])
       (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= :basic-query (f/component-type q1)))
+      (is (= :param-query (f/component-type q2)))
       (is (every? set? [@q1 @q2 @q3 @q4]))
       (is (= '#{[alice friend dora] [bob friend charlie] [alice friend bob]} @q1))
       (is (= '#{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}} @q2))
@@ -26,7 +29,8 @@
       (is (= '#{[bob friend charlie]} @q4))
       (is (== 1 (count @q5)))
       (is ('#{bob dora} ((first @q5) '?o)))
-      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5])
+      (is ('#{{?o bob} {?o dora}} (first @q6)))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6])
       (is (== (+ 3 4) (count (f/vertices g))))))
 #+END_SRC
 
@@ -52,6 +56,7 @@
       (ff/add-fact! g '[alice friend dora])
       (ff/add-fact! g '[bob nick bobby])
       (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= :join-query (f/component-type jq1)))
       (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob}} @q1))
       (is (= '#{{?b alice, ?c dora} {?b bob, ?c charlie} {?b alice, ?c bob}} @q2))
       (is (= '#{{?a alice ?b bob ?c charlie}} @jq1))
@@ -94,6 +99,7 @@
               [c p1 d]
               [c p2 e]])
       (f/execute! ctx)
+      (is (= :path-query (f/component-type pq1)))
       (is (= '#{{?s a ?o d}} @pq1))
       (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d}
                 {?s b, ?o c} {?s b, ?o d}
@@ -151,7 +157,14 @@
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}
                       {:optional [[?a q ?aq]]}
                       {:optional [[?b q ?bq]]}]
-                  :filter (in-set? ?a b c)})]
+                  :filter (in-set? ?a b c)})
+          q7 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a p ?b]] :bind {?c (str ?a "->" ?b)}}]
+                  :filter (= ?b b)})
+          q8 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a p ?b]]}]
+                  :filter (= ?b b)
+                  :bind {?c (str ?a "->" ?b)}})]
       (run! #(ff/add-fact! g %)
             '[[a p b]
               [a p c]
@@ -162,6 +175,7 @@
               [a q aa]
               [c q cc]])
       (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= :query-result (f/component-type q1)))
       (is (= '#{{?a a, ?b b, ?c e, ?aq aa}
                 {?a a, ?b c, ?c e, ?aq aa, ?bq cc}
                 {?a a, ?b b, ?c d, ?aq aa}
@@ -184,7 +198,9 @@
       (is (= '#{{?a b, ?b e, ?c f}
                 {?a c, ?b e, ?c f, ?aq cc}}
              @q6))
-      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6])
+      (is (= '#{{?a b ?b d ?c "b->d"} {?a b ?b e ?c "b->e"}}) @q7)
+      (is (= @q7 @q8))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6 q7 q8])
       (is (== (+ 3 8) (count (f/vertices g))))))
 #+END_SRC
 
