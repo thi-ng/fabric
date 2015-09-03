@@ -64,6 +64,7 @@ This namespace provides...
     (remove-watch! [_ type id]))
 
   (defprotocol IGraphComponent
+    (component-type [_])
     (add-to-graph! [_ g])
     (remove-from-graph! [_ g] [_ g parent]))
 
