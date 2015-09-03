@@ -955,14 +955,16 @@ min/max path lengths MUST be specified.
 
 *** Query results
 
-| *Key*        | *Value*              | *Description*                                     |
-|--------------+----------------------+---------------------------------------------------|
-| =:select=    | =:*= or =[?a ?b ..]= | keep all or only given qvars in result maps       |
-| =:filter=    | predicate fn         | keep only result maps for which fn returns truthy |
-| =:limit=     | number               | limit results to max. N items                     |
-| =:order=     | key fn               | sort results by given key fn                      |
-| =:group-by=  | group fn             | group results by given fn                         |
-| =:aggregate= | aggregation fn       | inject new qvars of aggregated values             |
+| *Key*        | *Value*              | *Default* | *Description*                                        |
+|--------------+----------------------+-----------+------------------------------------------------------|
+| =:select=    | =:*= or =[?a ?b ..]= | :*        | keep all or only given qvars in result maps          |
+| =:unique=    | true / false         | false     | ensure all qvars in each result map have unique vals |
+| =:filter=    | predicate fn         | none      | keep only result maps for which fn returns truthy    |
+| =:limit=     | number               | none      | limit results to max. N items                        |
+| =:order=     | key fn               | none      | sort results by given key fn                         |
+| =:group-by=  | group fn             | none      | group results by given fn                            |
+| =:aggregate= | aggregation fn       | none      | inject new qvars of aggregated values                |
+| =:bind=      | {?qvar fn}           | none      | inject new qvars in result maps                      |
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-query-result!
@@ -1153,7 +1155,11 @@ min/max path lengths MUST be specified.
 
   (defn result-transducer
     [spec tx]
-    (let [tx (if (:unique spec)
+    (let [tx (if-let [bnd (:bind spec)]
+               (let [tx' (map bnd)]
+                 (if tx (comp tx tx') tx'))
+               tx)
+          tx (if (:unique spec)
                (let [tx' (filter unique-bindings?)]
                  (if tx (comp tx tx') tx'))
                tx)

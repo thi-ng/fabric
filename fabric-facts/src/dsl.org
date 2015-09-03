@@ -175,8 +175,8 @@ Examples:
 ** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref dsl
-  (defn compile-query-filter
-    [flt] (if (fn? flt) flt (compile-expr flt)))
+  (defn compile-query-option
+    [expr] (if (fn? expr) expr (compile-expr expr)))
 
   (defn compile-result-order
     [order]
@@ -185,6 +185,20 @@ Examples:
       (if (sequential? order)
         (fn [r] (reduce #(conj % (get r %2)) [] order))
         (fn [r] (get r order)))))
+
+  (defn compile-query-bindings
+    [binds]
+    (let [binds (reduce-kv
+                 (fn [acc k v] (assoc acc k (compile-expr v)))
+                 {} binds)]
+      (fn [res]
+        (let [res'(reduce-kv
+                   (fn [acc k f]
+                     (assoc acc k (f acc)))
+                   res binds)]
+          (info :pre-bind res)
+          (info :post-bind res')
+          res'))))
 
   (defn compile-result-aggregation
     [agg]
@@ -214,8 +228,9 @@ Examples:
   (defn sub-query-options
     [opts]
     (-> opts
-        (select-keys [:filter :limit :select :unique])
-        (update :filter #(if % (compile-query-filter %)))))
+        (select-keys [:filter :limit :select :unique :bind])
+        (update :filter #(if % (compile-query-option %)))
+        (update :bind #(if % (compile-query-bindings %)))))
 
   (defmulti compile-sub-query
     (fn [g parent q spec] (some #{:where :optional :union :path} (keys q))))
@@ -272,7 +287,8 @@ Examples:
   (defn compile-select-qvars
     [result g spec]
     (let [spec (cond-> spec
-                 (:filter spec)    (update :filter compile-query-filter)
+                 (:bind spec)      (update :bind compile-query-bindings)
+                 (:filter spec)    (update :filter compile-query-option)
                  (:order spec)     (update :order compile-result-order)
                  (:group-by spec)  (update :group-by compile-result-grouping)
                  (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
