@@ -233,7 +233,7 @@ Examples:
         (update :bind #(if % (compile-query-bindings %)))))
 
   (defmulti compile-sub-query
-    (fn [g parent q spec] (some #{:where :optional :union :path} (keys q))))
+    (fn [g parent q spec] (some #{:where :optional :union :minus :path} (keys q))))
 
   (defmethod compile-sub-query :where
     [g parent q spec]
@@ -266,6 +266,17 @@ Examples:
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
       (if parent
         (ff/add-query-union! g [parent q] {})
+        q)))
+
+  (defmethod compile-sub-query :minus
+    [g parent q spec]
+    (let [pat  (:minus q)
+          opts (sub-query-options q)
+          q    (if (< 1 (count pat))
+                 (ff/add-query-join! g (:transform spec) pat opts)
+                 (ff/add-param-query! g (:transform spec) (first pat) opts))]
+      (if parent
+        (ff/add-query-negation! g parent q {})
         q)))
 
   (defmethod compile-sub-query :path
@@ -462,7 +473,11 @@ Examples:
       (fn [results] (into #{} tx results))))
 
   (defmethod compile-expr 'agg-count
-    [_] (fn [results] (count results)))
+    [[_ x]]
+    (if x
+      (let [collect (compile-expr ['agg-collect x])]
+        (fn [results] (count (collect results))))
+      (fn [results] (count results))))
 #+END_SRC
 
 *** Grouping expressions

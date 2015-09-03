@@ -21,6 +21,7 @@
          - [[#parametric-query][Parametric query]]
          - [[#query-join][Query join]]
          - [[#query-union][Query union]]
+         - [[#query-negation][Query negation]]
          - [[#path-queries][Path queries]]
              - [[#bounded-path-query][Bounded path query]]
          - [[#query-results][Query results]]
@@ -810,7 +811,7 @@ set only contains unique bindings of query variable =?s=.
                       (let [sig-map (f/signal-map vertex)
                             a (sig-map lhs-id)
                             b (sig-map rhs-id)]
-                        (debug (f/vertex-id vertex) :join-sets a b)
+                        ;;(debug (f/vertex-id vertex) :join-sets a b)
                         (f/set-value! vertex (cfn a b))))
                     ::f/score-collect-fn score-collect-join
                     ::f/score-signal-fn  f/score-signal-with-new-edges})
@@ -873,6 +874,39 @@ set only contains unique bindings of query variable =?s=.
                 ::f/score-signal-fn f/score-signal-with-new-edges})
           q   (as-query-entity res nil queries :union-query)]
       (run! #(f/add-edge! g (result-vertex %) res f/signal-forward nil) queries)
+      q))
+#+END_SRC
+
+*** Query negation
+
+#+BEGIN_SRC clojure :noweb-ref queries
+  (defn add-query-negation!
+    [g lhs rhs opts]
+    (let [lhs-v  (result-vertex lhs)
+          rhs-v  (result-vertex rhs)
+          lhs-id (f/vertex-id lhs-v)
+          rhs-id (f/vertex-id rhs-v)
+          tx     (non-grouping-result-transducer opts nil)
+          cfn    (if tx #(into #{} tx %) identity)
+          res    (f/add-vertex!
+                  g nil
+                  {::f/collect-fn
+                   (fn [vertex]
+                     (let [sig-map (f/signal-map vertex)
+                           a       (sig-map lhs-id)
+                           b       (sig-map rhs-id)
+                           bvars   (accumulate-result-vars b)
+                           _       (info :minus-bvars bvars)
+                           res     (reduce-kv
+                                    (fn [res k v]
+                                      (reduce
+                                       (fn [res v] (vec (remove (fn [r] (= (r k) v)) res))) res v))
+                                    a bvars)]
+                       (f/set-value! vertex (cfn res))))
+                   ::f/score-signal-fn f/score-signal-with-new-edges})
+          q   (as-query-entity res nil [lhs rhs] :negation-query)]
+      (f/add-edge! g lhs-v res f/signal-forward nil)
+      (f/add-edge! g rhs-v res f/signal-forward nil)
       q))
 #+END_SRC
 
@@ -1213,6 +1247,18 @@ min/max path lengths MUST be specified.
     (reduce-kv
      (fn [acc k v] (assoc acc k (persistent! v)))
      {} (persistent! res)))
+
+  (defn accumulate-result-vars
+    [results]
+    (->> results
+         (reduce
+          (fn [acc res]
+            (reduce-kv
+             (fn [acc k v]
+               (assoc! acc k (conj! (get acc k (transient #{})) v)))
+             acc res))
+          (transient {}))
+         (postprocess-group-by)))
 
   (defn remove-recursively
     [g res parent deps type]
