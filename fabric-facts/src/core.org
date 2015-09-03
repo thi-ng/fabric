@@ -52,10 +52,10 @@
     (expire! [_ type k]))
 
   (defprotocol IFactQuery
-    (raw-pattern [_])
-    (query-spec [_]))
+    (raw-pattern [_]))
 
   (defprotocol IQueryResult
+    (pre-result-vertex [_])
     (result-vertex [_]))
 
   (defprotocol ITwoWayTransform
@@ -615,9 +615,13 @@ In code form this same graph could be constructed like this:
                      ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})
             isel   (reify
                      IQueryResult
+                     (pre-result-vertex
+                       [_] nil)
                      (result-vertex
                        [_] vertex)
                      f/IGraphComponent
+                     (component-type
+                       [_] :index-sel)
                      (add-to-graph!
                        [_ g] _)
                      (remove-from-graph!
@@ -625,7 +629,7 @@ In code form this same graph could be constructed like this:
                      (remove-from-graph!
                        [_ g parent]
                        (if (f/none-or-single-user? vertex parent)
-                         (do (debug :remove-index-sel sel)
+                         (do (debug "removing :index-sel" sel)
                              (expire! g ::index-sel sel)
                              (f/disconnect-neighbor! index vertex)
                              (f/remove-vertex! g vertex)
@@ -676,12 +680,14 @@ triple graph (or =[nil nil nil nil]= for quads).
                       IFactQuery
                       (raw-pattern
                         [_] pattern)
-                      (query-spec
-                        [_] (merge {:select :* :q [{:where pattern}]} opts))
                       IQueryResult
+                      (pre-result-vertex
+                        [_] acc)
                       (result-vertex
                         [_] res)
                       f/IGraphComponent
+                      (component-type
+                        [_] :basic-query)
                       (add-to-graph!
                         [_ g] (err/unsupported!))
                       (remove-from-graph!
@@ -689,7 +695,7 @@ triple graph (or =[nil nil nil nil]= for quads).
                       (remove-from-graph!
                         [_ g parent]
                         (if (f/none-or-single-user? res parent)
-                          (do (debug :remove-query pattern)
+                          (do (debug "removing :basic-query" pattern)
                               (expire! g ::queries pattern)
                               (f/remove-vertex! g res)
                               (f/remove-vertex! g acc)
@@ -742,6 +748,7 @@ set only contains unique bindings of query variable =?s=.
                             (into #{} tx res)
                             #{})))
                sub-q   (add-query! g identity-transform raw {})
+               sub-res (result-vertex sub-q)
                result  (f/add-vertex!
                         g nil
                         {::f/collect-fn      coll-fn
@@ -754,12 +761,14 @@ set only contains unique bindings of query variable =?s=.
                          IFactQuery
                          (raw-pattern
                            [_] raw)
-                         (query-spec
-                           [_]) ;; TODO
                          IQueryResult
+                         (pre-result-vertex
+                           [_] sub-res)
                          (result-vertex
                            [_] result)
                          f/IGraphComponent
+                         (component-type
+                           [_] :param-query)
                          (add-to-graph!
                            [_ g] (err/unsupported!))
                          (remove-from-graph!
@@ -767,14 +776,14 @@ set only contains unique bindings of query variable =?s=.
                          (remove-from-graph!
                            [_ g parent]
                            (if (f/none-or-single-user? result parent)
-                             (do (debug :remove-param-query pattern)
+                             (do (debug "removing :param-query" pattern)
                                  (expire! g ::queries pattern)
                                  (f/remove-vertex! g result)
                                  (f/remove-from-graph! sub-q g result)
                                  true)
                              (do (f/disconnect-neighbor! result parent)
                                  false))))]
-           (f/add-edge! g (result-vertex sub-q) result f/signal-forward nil)
+           (f/add-edge! g sub-res result f/signal-forward nil)
            (if-not (seq opts)
              (cache! g ::queries pattern pq)
              pq))))))
@@ -805,7 +814,7 @@ set only contains unique bindings of query variable =?s=.
                         (f/set-value! vertex (cfn a b))))
                     ::f/score-collect-fn score-collect-join
                     ::f/score-signal-fn  f/score-signal-with-new-edges})
-           jq     (as-query-entity res nil [lhs rhs] :remove-query-join)]
+           jq     (as-query-entity res nil [lhs rhs] :join-query)]
        (f/add-edge! g lhs-v res f/signal-forward nil)
        (f/add-edge! g rhs-v res f/signal-forward nil)
        jq)))
@@ -862,7 +871,7 @@ set only contains unique bindings of query variable =?s=.
                         res  (reduce #(if (seq %2) (into % %2) %) subs)]
                     (f/set-value! vertex (if tx (into #{} tx res) res))))
                 ::f/score-signal-fn f/score-signal-with-new-edges})
-          q   (as-query-entity res nil queries :remove-query-union)]
+          q   (as-query-entity res nil queries :union-query)]
       (run! #(f/add-edge! g (result-vertex %) res f/signal-forward nil) queries)
       q))
 #+END_SRC
@@ -931,6 +940,7 @@ min/max path lengths MUST be specified.
              q   (if (and req opt)
                    (add-join! g join-optional req opt {}) ;; TODO opts
                    (or req opt))
+             qr  (result-vertex q)
              tx  (cond
                    (or (= min max) (and vs? (not vo?)))
                    (let [qv (filter qvar? path-pattern)]
@@ -948,8 +958,8 @@ min/max path lengths MUST be specified.
              res (f/add-vertex!
                   g #{}
                   {::f/collect-fn (f/collect-pure (fn [_ in] (into #{} tx (peek in))))})
-             pq  (as-query-entity res nil [q] :remove-path-query)]
-         (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+             pq  (as-query-entity res qr [q] :path-query)]
+         (f/add-edge! g qr res f/signal-forward nil)
          pq))))
 #+END_SRC
 
@@ -992,8 +1002,9 @@ min/max path lengths MUST be specified.
                  g nil
                  {::f/collect-fn      (f/collect-pure cfn)
                   ::f/score-signal-fn f/score-signal-with-new-edges})
-          qres (as-query-entity res nil [q] :remove-result)]
-      (f/add-edge! g (result-vertex q) res f/signal-forward nil)
+          qraw (result-vertex q)
+          qres (as-query-entity res qraw [q] :query-result)]
+      (f/add-edge! g qraw res f/signal-forward nil)
       qres))
 
   (defn add-counter!
@@ -1017,7 +1028,7 @@ min/max path lengths MUST be specified.
 
   (defn auto-qvar?
     "Returns true, if x is an auto-generated qvar (a symbol prefixed
-    with *auto-qvar-prefix*)"
+      with *auto-qvar-prefix*)"
     [x] (and (symbol? x) (zero? (.indexOf ^String (name x) ^String *auto-qvar-prefix*))))
 
   (defn auto-qvar
@@ -1029,15 +1040,15 @@ min/max path lengths MUST be specified.
 
   (defn resolve-path-pattern
     "Takes a path triple pattern and max depth. The pattern's predicate
-    must be a seq of preds. Returns a 2-elem vector [patterns vars],
-    where `patterns` is a seq of query patterns with injected temp qvars
-    for inbetween patterns and `vars` the autogenerated qvars
-    themselves.
+      must be a seq of preds. Returns a 2-elem vector [patterns vars],
+      where `patterns` is a seq of query patterns with injected temp qvars
+      for inbetween patterns and `vars` the autogenerated qvars
+      themselves.
 
-    Example:
+      Example:
 
-      [?s [p1 p2 p3] ?o]
-      => [([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o]) (?__q0 ?__q1)]"
+        [?s [p1 p2 p3] ?o]
+        => [([?s p1 ?__q0] [?__q0 p2 ?__q1] [?__q1 p3 ?o]) (?__q0 ?__q1)]"
     [[s p o] maxd]
     (let [avars (repeatedly maxd auto-qvar)
           vars  (cons s avars)]
@@ -1055,7 +1066,7 @@ min/max path lengths MUST be specified.
 
   (defn unique-bindings?
     "Returns true if all values in the given map are unique, i.e.
-    no two keys are mapped to the same value."
+      no two keys are mapped to the same value."
     [res] (== (count (into #{} (vals res))) (count res)))
 
   (defn select-keys*
@@ -1089,8 +1100,8 @@ min/max path lengths MUST be specified.
 
   (defn join
     "Based on clojure.set/join. Does not join when there're no shared
-    keys and no key mapping, enforced result set limit, uses
-    transients."
+      keys and no key mapping, enforced result set limit, uses
+      transients."
     [xrel yrel]
     (if (and (seq xrel) (seq yrel))
       (let [ks (set/intersection (set (keys (first xrel))) (set (keys (first yrel))))]
@@ -1206,7 +1217,7 @@ min/max path lengths MUST be specified.
   (defn remove-recursively
     [g res parent deps type]
     (if (f/none-or-single-user? res parent)
-      (do (debug type)
+      (do (debug "removing" type)
           (f/remove-vertex! g res)
           (run! #(f/remove-from-graph! % g res) deps)
           true)
@@ -1214,7 +1225,7 @@ min/max path lengths MUST be specified.
           false)))
 
   (defn as-query-entity
-    [res qspec deps type]
+    [res pre-res deps type]
     (reify
       #?@(:clj
            [clojure.lang.IDeref (deref [_] @res)]
@@ -1223,12 +1234,14 @@ min/max path lengths MUST be specified.
       IFactQuery
       (raw-pattern
         [_] nil)
-      (query-spec
-        [_] qspec)
       IQueryResult
+      (pre-result-vertex
+        [_] pre-res)
       (result-vertex
         [_] res)
       f/IGraphComponent
+      (component-type
+        [_] type)
       (add-to-graph!
         [_ g] (err/unsupported!))
       (remove-from-graph!
@@ -1379,12 +1392,14 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                     IFactQuery
                     (raw-pattern
                       [_] nil)
-                    (query-spec
-                      [_]) ;; TODO
                     IQueryResult
+                    (pre-result-vertex
+                      [_] (pre-result-vertex query))
                     (result-vertex
                       [_] (result-vertex query))
                     f/IGraphComponent
+                    (component-type
+                      [_] :rule)
                     (add-to-graph!
                       [_ g] (err/unsupported!))
                     (remove-from-graph!
@@ -1392,7 +1407,7 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
                     (remove-from-graph!
                       [_ g parent]
                       (if (f/none-or-single-user? inf parent)
-                        (do (debug :remove-rule id)
+                        (do (debug "removing :rule" id)
                             (f/remove-vertex! g inf)
                             (f/remove-from-graph! query g inf)
                             true)
