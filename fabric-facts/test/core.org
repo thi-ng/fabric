@@ -235,6 +235,30 @@
       (is (= '#{{?b d} {?b e} {?b f}} @q3))))
 #+END_SRC
 
+*** DSL negation queries
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-negation
+    (let [g  (ff/fact-graph)
+          q1 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a type animal]]}
+                      {:minus [[?a type ?type]] :filter (in-set? ?type reptile insect)}]})
+          q2 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a type animal]]}
+                      {:minus [[?a type reptile]]}
+                      {:minus [[?a type insect]]}]})]
+      (run! #(ff/add-fact! g %)
+            '[[lf1 type mammal]
+              [lf2 type reptile]
+              [lf3 type insect]
+              [lf1 type animal]
+              [lf2 type animal]
+              [lf3 type animal]])
+      (f/execute! (f/sync-execution-context {:graph g}))
+      (is (= '#{{?a lf1}} @q1))
+      (is (= @q1 @q2))))
+#+END_SRC
+
 *** DSL aggregation
 
 #+BEGIN_SRC clojure :noweb-ref tests
