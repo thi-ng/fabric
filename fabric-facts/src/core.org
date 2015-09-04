@@ -739,56 +739,57 @@ set only contains unique bindings of query variable =?s=.
      (let [pattern (transform ptx pattern)]
        (if-let [q (and (empty? opts) (cached g ::queries pattern))]
          (do (debug :reuse-param-query pattern) q)
-         (let [qvars?  (mapv qvar? pattern)
-               raw     (mapv #(if-not (qvar? %) %) pattern)
-               vmap    (bind-translator pattern)
-               verify  (fact-verifier qvars? pattern)
-               tx      (if verify
-                         (map #(if (verify %) (vmap %)))
-                         (map vmap))
-               tx      (comp tx (filter identity))
-               tx      (non-grouping-result-transducer opts tx)
-               coll-fn (f/collect-pure
-                        (fn [_ incoming]
-                          (if-let [res (seq (peek incoming))]
-                            (into #{} tx res)
-                            #{})))
-               sub-q   (add-query! g identity-transform raw {})
-               sub-res (result-vertex sub-q)
-               result  (f/add-vertex!
-                        g nil
-                        {::f/collect-fn      coll-fn
-                         ::f/score-signal-fn f/score-signal-with-new-edges})
-               pq      (reify
-                         #?@(:clj
-                              [clojure.lang.IDeref (deref [_] @result)]
-                              :cljs
-                              [IDeref (-deref [_] @result)])
-                         IFactQuery
-                         (raw-pattern
-                           [_] raw)
-                         IQueryResult
-                         (pre-result-vertex
-                           [_] sub-res)
-                         (result-vertex
-                           [_] result)
-                         f/IGraphComponent
-                         (component-type
-                           [_] :param-query)
-                         (add-to-graph!
-                           [_ g] (err/unsupported!))
-                         (remove-from-graph!
-                           [_ g] (f/remove-from-graph! _ g nil))
-                         (remove-from-graph!
-                           [_ g parent]
-                           (if (f/none-or-single-user? result parent)
-                             (do (debug "removing :param-query" pattern)
-                                 (expire! g ::queries pattern)
-                                 (f/remove-vertex! g result)
-                                 (f/remove-from-graph! sub-q g result)
-                                 true)
-                             (do (f/disconnect-neighbor! result parent)
-                                 false))))]
+         (let [pattern' (inject-value-choices pattern (:values opts))
+               qvars?   (mapv qvar? pattern)
+               raw      (mapv #(if-not (qvar? %) %) pattern')
+               vmap     (bind-translator pattern)
+               verify   (fact-verifier qvars? pattern)
+               tx       (if verify
+                          (map #(if (verify %) (vmap %)))
+                          (map vmap))
+               tx       (comp tx (filter identity))
+               tx       (non-grouping-result-transducer opts tx)
+               coll-fn  (f/collect-pure
+                         (fn [_ incoming]
+                           (if-let [res (seq (peek incoming))]
+                             (into #{} tx res)
+                             #{})))
+               sub-q    (add-query! g identity-transform raw {})
+               sub-res  (result-vertex sub-q)
+               result   (f/add-vertex!
+                         g nil
+                         {::f/collect-fn      coll-fn
+                          ::f/score-signal-fn f/score-signal-with-new-edges})
+               pq       (reify
+                          #?@(:clj
+                               [clojure.lang.IDeref (deref [_] @result)]
+                               :cljs
+                               [IDeref (-deref [_] @result)])
+                          IFactQuery
+                          (raw-pattern
+                            [_] raw)
+                          IQueryResult
+                          (pre-result-vertex
+                            [_] sub-res)
+                          (result-vertex
+                            [_] result)
+                          f/IGraphComponent
+                          (component-type
+                            [_] :param-query)
+                          (add-to-graph!
+                            [_ g] (err/unsupported!))
+                          (remove-from-graph!
+                            [_ g] (f/remove-from-graph! _ g nil))
+                          (remove-from-graph!
+                            [_ g parent]
+                            (if (f/none-or-single-user? result parent)
+                              (do (debug "removing :param-query" pattern)
+                                  (expire! g ::queries pattern)
+                                  (f/remove-vertex! g result)
+                                  (f/remove-from-graph! sub-q g result)
+                                  true)
+                              (do (f/disconnect-neighbor! result parent)
+                                  false))))]
            (f/add-edge! g sub-res result f/signal-forward nil)
            (if-not (seq opts)
              (cache! g ::queries pattern pq)
@@ -806,7 +807,7 @@ set only contains unique bindings of query variable =?s=.
            rhs-v  (result-vertex rhs)
            lhs-id (f/vertex-id lhs-v)
            rhs-id (f/vertex-id rhs-v)
-           _      (info :add-join lhs-id rhs-id opts)
+           _      (debug :add-join lhs-id rhs-id opts)
            tx     (non-grouping-result-transducer opts nil)
            cfn    (if tx #(into #{} tx (join-fn % %2)) join-fn)
            res    (f/add-vertex!
@@ -830,15 +831,16 @@ set only contains unique bindings of query variable =?s=.
      (add-query-join! g (fact-transform g) patterns opts))
     ([g ptx patterns opts]
      (let [[a b & more :as p] patterns ;;(sort-patterns patterns)
-           _  (assert (and a b) "Requires min. 2 query patterns")
-           jq (reduce
-               #(add-join! g join % (add-param-query! g ptx %2 {}) {})
-               (add-join!
-                g join
-                (add-param-query! g ptx a {})
-                (add-param-query! g ptx b {})
-                (if (seq more) {} opts))
-               (butlast more))]
+           _     (assert (and a b) "Requires min. 2 query patterns")
+           opts' (select-keys* opts [:values])
+           jq    (reduce
+                  #(add-join! g join % (add-param-query! g ptx %2 opts') {})
+                  (add-join!
+                   g join
+                   (add-param-query! g ptx a opts')
+                   (add-param-query! g ptx b opts')
+                   (if (seq more) {} opts))
+                  (butlast more))]
        (if-let [p (last more)]
          (add-join! g join jq (add-param-query! g ptx p {}) opts)
          jq))))
@@ -848,15 +850,16 @@ set only contains unique bindings of query variable =?s=.
      (add-query-join-optional! g (fact-transform g) patterns opts))
     ([g ptx patterns opts]
      (let [[a b & more] patterns
-           _  (assert (and a b) "Requires min. 2 query patterns")
-           jq (reduce
-               #(add-join! g join-optional % (add-param-query! g ptx %2 {}) {})
-               (add-join!
-                g join-optional
-                (add-param-query! g ptx a {})
-                (add-param-query! g ptx b {})
-                (if (seq more) {} opts))
-               (butlast more))]
+           _     (assert (and a b) "Requires min. 2 query patterns")
+           opts' (select-keys* opts [:values])
+           jq    (reduce
+                  #(add-join! g join-optional % (add-param-query! g ptx %2 opts') {})
+                  (add-join!
+                   g join-optional
+                   (add-param-query! g ptx a opts')
+                   (add-param-query! g ptx b opts')
+                   (if (seq more) {} opts))
+                  (butlast more))]
        (if-let [p (last more)]
          (add-join! g join-optional jq (add-param-query! g ptx p {}) opts)
          jq))))
@@ -1081,6 +1084,12 @@ available options...
             (partition 3 2))
        avars]))
 
+  (defn inject-value-choices
+    [pattern value-map]
+    (if (seq value-map)
+      (mapv #(if-let [choices (value-map %)] (index-sel-choice choices) %) pattern)
+      pattern))
+
   (defn pattern-var-count
     [pattern]
     (count (filter qvar? pattern)))
@@ -1090,7 +1099,7 @@ available options...
     (sort-by pattern-var-count patterns))
 
   (defn unique-bindings?
-    "Returns true if all values in the given map are unique, i.e.
+    "Returns true if all value-map in the given map are unique, i.e.
       no two keys are mapped to the same value."
     [res] (== (count (into #{} (vals res))) (count res)))
 
@@ -1720,8 +1729,8 @@ The following example demonstrates all these rules:
 
   (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
-  (declare select-keys*)
-  (declare index-selection make-index-selections qvar? add-query! add-query-join!)
+  (declare select-keys* qvar? add-query! add-query-join!)
+  (declare index-selection index-sel-choice make-index-selections)
 
   <<protos>>
 

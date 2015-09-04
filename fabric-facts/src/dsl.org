@@ -247,11 +247,12 @@ Examples:
         (compile-expr group))))
 
   (defn sub-query-options
-    [opts]
+    [opts spec]
     (-> opts
-        (select-keys [:filter :limit :select :unique :bind])
+        (select-keys [:filter :limit :select :unique :bind :values])
         (update :filter #(if % (compile-query-option %)))
-        (update :bind #(if % (compile-query-bindings %)))))
+        (update :bind #(if % (compile-query-bindings %)))
+        (update :values #(or % (:values spec)))))
 
   (defmulti compile-sub-query
     (fn [g parent q spec] (some #{:where :optional :union :minus :path} (keys q))))
@@ -259,7 +260,7 @@ Examples:
   (defmethod compile-sub-query :where
     [g parent q spec]
     (let [pat  (:where q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -270,7 +271,7 @@ Examples:
   (defmethod compile-sub-query :optional
     [g parent q spec]
     (let [pat  (:optional q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -281,7 +282,7 @@ Examples:
   (defmethod compile-sub-query :union
     [g parent q spec]
     (let [pat  (:union q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -292,7 +293,7 @@ Examples:
   (defmethod compile-sub-query :minus
     [g parent q spec]
     (let [pat  (:minus q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -302,7 +303,7 @@ Examples:
 
   (defmethod compile-sub-query :path
     [g parent q spec]
-    (let [opts (merge (select-keys q [:min :max]) (sub-query-options q))
+    (let [opts (merge (select-keys q [:min :max]) (sub-query-options q spec))
           q    (ff/add-path-query! g (:transform spec) (:path q) opts)]
       (if parent
         (ff/add-join! g parent q {})
