@@ -393,16 +393,18 @@ The =ICache= protocol is used to cache various query related entities
 for DRY reasons. Intermediate result caching is not just done for
 performance reasons, but also to minimize memory usage, since queries
 often make use of similar patterns and sub-patterns (e.g. two separate
-query joins might use the same pattern as LHS or RHS). Currently the
-cache is an atom with a nested map and these top-level keys:
+query joins might use the same underlying pattern as LHS or RHS).
+Currently the cache is an atom with a nested map and these top-level
+keys:
 
 - =::index-sel= - caches vertices selecting a specific key from any of
   the indices (or a wildcard selection). These vertices basically act
   as sub-sub-queries of a specific fact component.
 - =::queries= - caches existing single-pattern queries based on their
-  query pattern (no query joins or unions are cached). Note: the
-  cached values are NOT vertices, but query entities (defrecords w/
-  =IFactQuery= implementations)
+  query pattern (only basic & parametric queries without options are
+  cached). Note: the cached values are NOT vertices, but query
+  entities (reify's w/ =IFactQuery=, =IGraphComponent= and other
+  protocol implementations)
 - =::rules= - caches inference rules based on their ID (also
   defrecords)
 
@@ -637,8 +639,11 @@ In code form this same graph could be constructed like this:
                              true)
                          (do (f/disconnect-neighbor! vertex parent)
                              false))))]
-        (f/add-edge! g index vertex signal-index-select sel)
+        (f/add-edge! g index vertex (signal-index-select sel) nil)
         (cache! g ::index-sel sel isel))))
+
+  (defn index-sel-choice
+    [coll] {::choices (set coll)})
 
   (defn make-index-selections
     [g pattern]
@@ -1500,8 +1505,16 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
            val)))))
 
   (defn- signal-index-select
-    [vertex [idx sel]]
-    [idx (if sel (@vertex sel [nil]) (->> @vertex vals (mapcat identity) (set)))])
+    [[idx sel]]
+    (if sel
+      (if-let [choices (and (map? sel) (::choices sel))]
+        (fn [vertex _]
+          (let [res (into #{} (mapcat identity) (vals (select-keys* @vertex choices)))]
+            [idx (if (seq res) res ::none)]))
+        (fn [vertex _]
+          [idx (@vertex sel ::none)]))
+      (fn [vertex _]
+        [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
 
   (def ^:private collect-select
     (f/collect-pure
@@ -1538,9 +1551,9 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
        (fn [_ incoming]
          (let [res (vals (peek incoming))]
            ;;(debug :agg-incoming res)
-           (if (every? #(not= [nil] %) res)
+           (if (every? #(not= ::none %) res)
              (->> res
-                  (into #{} (map #(disj % nil)))
+                  (into #{})
                   (sort-by count)
                   (reduce set/intersection)
                   (into #{} tx))
@@ -1707,6 +1720,7 @@ The following example demonstrates all these rules:
 
   (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
+  (declare select-keys*)
   (declare index-selection make-index-selections qvar? add-query! add-query-join!)
 
   <<protos>>
