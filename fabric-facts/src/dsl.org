@@ -7,7 +7,7 @@
      - [[#todo-examples][TODO Examples]]
      - [[#query-specification][Query specification]]
          - [[#sub-query-types][Sub-query types]]
-         - [[#sub-query-modifiers][Sub-query modifiers]]
+         - [[#query--sub-query-options][Query & sub-query options]]
      - [[#implementation][Implementation]]
      - [[#expressions][Expressions]]
          - [[#aggregation-expressions][Aggregation expressions]]
@@ -178,20 +178,108 @@ Examples:
   {:q [{:path [?p [parent-of friend friend] ?f] :min 2 :max 3}]}
 #+END_SRC
 
-*** Sub-query modifiers
+*** Query & sub-query options
 
-- =:filter= - same as top-level filter expression, but only applying
-  to this sub-query
-- =:limit= - limit a sub-query's result set to N items
-- =:select= - select qvars to be projected into result set. This is
-  useful for large join queries w/ various intermediate qvars, not
-  required to be retained outside the sub-query. Use of this feature
-  will have a positive impact on down-stream joins and other result
-  processing performance.
-- =:unique= - ensure that each result map's qvars have unique values
-- =:bind= - inject (or overwrite) qvars in result maps (e.g. to format
-  dates, concatenate strings etc.). The value of this option must be a
-  map of ={?qvar expression..}=
+Unless noted otherwise, query options have the same semantics
+regardless if used at the top-level or for individual sub-queries. In
+the latter case, of course they only apply to a single sub-query.
+
+Use of these modifiers can have a positive impact on down-stream joins
+and other result processing performance and memory requirements.
+*However, be careful to not overconstrain intermediate results.*
+
+Furthermore, sub-queries with options are not re-usable by other
+queries. So in cases where there're many similar queries, it is
+recommended to only apply top-level options, manipulating the final
+result set of a query.
+
+**** :filter
+
+A single DSL expression or Clojure predicate fn applied to each single
+result (map). The result is only kept if the filter is truthy.
+
+#+BEGIN_SRC clojure
+  ;; global & local filter
+  {:q [{:where [[?p type procedure] [?p created ?date]]}
+       {:optional [[?p author ?a]] :filter (in-set? #{alice bob charlie})}]
+   :filter (< ?date #inst "2015-09-01")}
+#+END_SRC
+
+**** :limit
+
+Limit the result set to N items.
+
+#+BEGIN_SRC clojure
+  ;; find first underage person and (optionally his/her name)
+  {:q [{:where [[?a type person] [?a age ?age]] :filter (< ?age 21) :limit 1}
+       {:optional [[?a name ?n]]}]}
+#+END_SRC
+
+**** :select
+
+Select qvars to be projected into result set. This is also useful for
+large join queries w/ various intermediate qvars, not required to be
+retained outside the sub-query.
+
+#+BEGIN_SRC clojure
+  ;; find books in price range w/ their authors and topics (via category)
+  ;; don't include price and category in results
+  {:q [{:where [[?a author ?b]
+                [?b type book]
+                [?b price ?p]]
+        :filter (and (>= ?p 10) (<= ?p 20))
+        :select [?a ?b]}
+       {:where [[?b category ?cat]
+                [?cat includes-topic ?t]]
+        :select [?b ?t]}]}
+#+END_SRC
+
+**** :unique
+
+The query engine ensures that - within a single query pattern - unique
+qvars contain unique values (see [[./core.org#fact-verifier-multi-method][fact-verifier description]] in core
+namespace). However, when using query joins, unions, aggregations,
+qvars injections etc. this behavior is not guaranteed, unless
+explicitly enabled by setting this option key to =true=. If enabled,
+each result map's qvars will have unique values (or the result map is
+removed if not). For most cases, this can be ignored, but this feature
+is essential for some queries, as shown below.
+
+#+BEGIN_SRC clojure
+  ;; given these facts...
+
+  [a knows b]
+  [b knows a]
+  [b knows c]
+  [c knows b]
+
+  ;; ...this query...
+  {:q [{:where [[?x knows ?y] [?y knows ?z]]}] :select [?x ?z]}
+
+  ;; ...produces these results:
+  #{{?x b, ?z b}
+    {?x a, ?z a}
+    {?x a, ?z c}  ;; unique
+    {?x c, ?z a}  ;; unique
+    {?x c, ?z c}}
+
+  ;; Without :unique flag this query produces results where ?x & ?z are
+  ;; bound to same values, which is not what we want in this case!
+
+
+  ;; Same query with :unique...
+  {:q [{:where [[?x knows ?y] [?y knows ?z]]}] :select [?x ?z] :unique true}
+
+  ;; ...produces the correct results:
+  #{{?x a, ?z c} {?x c, ?z a}}
+#+END_SRC
+
+
+**** :bind
+
+Inject (or overwrite) qvars in result maps (e.g. to format dates,
+concatenate strings etc.). The value of this option must be a map of
+={?qvar expression..}=
 
 ** Implementation
 
