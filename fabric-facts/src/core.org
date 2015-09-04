@@ -993,16 +993,8 @@ min/max path lengths MUST be specified.
 
 *** Query results
 
-| *Key*        | *Value*              | *Default* | *Description*                                        |
-|--------------+----------------------+-----------+------------------------------------------------------|
-| =:select=    | =:*= or =[?a ?b ..]= | :*        | keep all or only given qvars in result maps          |
-| =:unique=    | true / false         | false     | ensure all qvars in each result map have unique vals |
-| =:filter=    | predicate fn         | none      | keep only result maps for which fn returns truthy    |
-| =:limit=     | number               | none      | limit results to max. N items                        |
-| =:order=     | key fn               | none      | sort results by given key fn                         |
-| =:group-by=  | group fn             | none      | group results by given fn                            |
-| =:aggregate= | aggregation fn       | none      | inject new qvars of aggregated values                |
-| =:bind=      | {?qvar fn}           | none      | inject new qvars in result maps                      |
+See the [[./dsl.org#query-specification][query specification]] section in the DSL namespace for all
+available options...
 
 #+BEGIN_SRC clojure :noweb-ref queries
   (defn add-query-result!
