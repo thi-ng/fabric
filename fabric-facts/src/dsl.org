@@ -199,9 +199,10 @@ A single DSL expression or Clojure predicate fn applied to each single
 result (map). The result is only kept if the filter is truthy.
 
 #+BEGIN_SRC clojure
-  ;; global & local filter
-  {:q [{:where [[?p type procedure] [?p created ?date]]}
-       {:optional [[?p author ?a]] :filter (in-set? #{alice bob charlie})}]
+  ;; global & local filters
+  ;; find procedures created by any of the 3 authors before given date
+  {:q [{:where [[?p type procedure] [?p date-created ?date]]}
+       {:optional [[?p author ?a]] :filter (in-set? ?a alice bob charlie)}]
    :filter (< ?date #inst "2015-09-01")}
 #+END_SRC
 
@@ -266,7 +267,6 @@ is essential for some queries, as shown below.
   ;; Without :unique flag this query produces results where ?x & ?z are
   ;; bound to same values, which is not what we want in this case!
 
-
   ;; Same query with :unique...
   {:q [{:where [[?x knows ?y] [?y knows ?z]]}] :select [?x ?z] :unique true}
 
@@ -274,12 +274,21 @@ is essential for some queries, as shown below.
   #{{?x a, ?z c} {?x c, ?z a}}
 #+END_SRC
 
-
 **** :bind
 
 Inject (or overwrite) qvars in result maps (e.g. to format dates,
 concatenate strings etc.). The value of this option must be a map of
 ={?qvar expression..}=
+
+#+BEGIN_SRC clojure
+  ;; find all persons and their first/surnames
+  ;; inject new qvar ?name (string concat) into results
+  ;; only return person & name
+  {:q [{:where [[?p firstname ?fn]
+                [?p surname ?sn]]
+        :bind {?name (str ?fn " " ?sn)}
+        :select [?p ?name]}]}
+#+END_SRC
 
 ** Implementation
 
