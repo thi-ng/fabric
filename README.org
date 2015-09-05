@@ -3,12 +3,14 @@
 
 [[./assets/fabric-hot-1280x720-orange.jpg]]
 
-Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript.
+Modular, Signal/Collect inspired compute graph infrastructure for
+Clojure & Clojurescript. Written in a Literate Programming format.
 
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#overview][Overview]]
+         - [[#general-compute-graph-concepts][General Compute Graph concepts]]
          - [[#features][Features]]
          - [[#motivation--use-cases][Motivation & use cases]]
          - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
@@ -20,7 +22,7 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
-         - [[#automatically-updating-fact-graph-queries-with-rule-based-inferencing][Automatically updating fact graph queries with rule based inferencing]]
+         - [[#fabric-facts-module-example][fabric-facts module example]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -42,6 +44,53 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 
 ** Overview
 
+*** General Compute Graph concepts
+
+These libraries are built around the model of a directed, potentially
+cyclic graph structure, in which vertices hold state and edges are
+functions sending possibly transformed states to other vertices in the
+graph. All processing is done in two phases, both of which are score
+guided and completely customizable:
+
+- *Signalling*: The operations carried out by edge functions, each
+  accepting their source vertex' state value, transforming it and
+  placing it in a signal map/queue of their target vertex. Vertices
+  only signal if the user defined (or default) scoring function
+  exceeds a threshold (user defined as well).
+
+- *Collecting*: Each vertex can define its own collection function,
+  responsible for processing any uncollected signal values and
+  producing a new state value. As with signalling, vertices only
+  collect if their collection score exceeds a threshold value. This
+  allows users to implement different collection behaviors (e.g.
+  semi-lazy or batched or only after certain amount of uncollected
+  signals have been received etc.)
+
+There're many different ways to execute these two operational phases
+(e.g. ordered vs. unordered, interleaved, thresholded, eager, async
+etc.) and the core library provides 3 different execution contexts
+(also fully configurable) to tailor the execution model for different
+use cases. For some problem domains choosing one model over another
+can provide major (500-1000%) speedups (e.g. see Vertex coloring
+example below).
+
+Common to all supplied execution models/contexts is the notion of
+/graph convergence/ (a term borrowed from the original Signal/Collect
+papers, link below). Since both signal and collect operations are
+score guided, the executors can keep track of the remaining active
+work set. A graph is called /converged/ if there're no more vertices
+left which should emit signals or can collect. Due to the model
+explicitly allowing cycles (recursion) in the graph, users can also
+specify halt thresholds to forcefully terminate graph execution when a
+certain number of operations has been carried out, but then
+potentially leaving the graph in a /non-converged/ state (which in
+some use cases is a valid result).
+
+The Signal/Collect model provides both a flexible and elegant metaphor
+for many problem domains. To avoid a monolithic one-fits-all approach
+and provide somewhat of a thematic focus, this project is structured
+into different modules (all described & linked below).
+
 *** Features
 
 - Modular architecture (see [[#modules][Modules]] section below)
@@ -58,13 +107,15 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
 - Knowledge graphs (triples & quads)
-- Fully featured, efficient query engine (variables, joins, optional
-  joins, unions, filters, grouping, aggregation)
-- Optional map based query DSL (EDN serializable)
-- Bounded length path queries (min/max limits)
+- Fully featured, efficient query engine (pattern based, variables,
+  sub-queries, joins, optional joins, unions, negation, filters,
+  pre-filters, grouping, value injection, aggregation)
+- Optional map based query & expression DSL (EDN serializable)
+- Bounded length (variable) path queries (with min/max limits)
 - Query & rule based fact inferencing (additions & retractions)
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
+- Literate programming format
 
 See the [[./fabric-facts/README.org][README]] of the *fabric-facts* module for full feature set.
 
@@ -87,7 +138,7 @@ mandatory integration or reliance on React.js or DOM rendering cycle
 
 **** Single machine or distributed processing
 
-Multi-environment graphs not yet implemented (WIP)
+Distributed, multi-environment graphs not yet implemented (WIP)
 
 **** Self-organizing workflows
 
@@ -170,12 +221,14 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-Currently, the included test cases act as the best demonstation of usage patterns and
-also show most of the currently implemented functionality:
+Currently, the included test cases for each module act as the best
+demonstation of usage patterns and also show most of the currently
+implemented functionality:
 
 *** Single-source shortest path
 
-Calculate minimum distance from a single node to all others (connected) in the graph.
+Calculate minimum distance from a single node to all others
+(connected) in the graph. Also see benchmark above.
 
 [[./assets/sssp.jpg]]
 
@@ -184,7 +237,11 @@ Calculate minimum distance from a single node to all others (connected) in the g
 *** Vertex coloring in random graphs
 
 Assign each vertex a color from a limited pallete such that no two
-neighbors have the same color.
+neighbors have the same color. This is one of the examples used for
+the above benchmarks. Please note the drastic difference between
+different execution models (synchronous vs. eager). If the number of
+possible colors is reduced further, the synchronous approach will not
+converge at all.
 
 [[./assets/vcolor.jpg]]
 
@@ -283,12 +340,25 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
   ;; :total 2280.0
 #+END_SRC
 
-*** Automatically updating fact graph queries with rule based inferencing
+*** fabric-facts module example
 
-Note: This example uses two forms of queries: low-level query node
-construction and the more userfriendly and EDN serializable query
-specs via the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace. The query specs are
-compiled into these low-level forms.
+This example uses a compute graph to store facts, fact queries and
+inference rules (based on queries) to create new facts. Since the
+queries and inference rules are expressed as vertex trees, taking part
+in the normal graph execution, this example demonstrates how easy it
+is to use this architecture to build custom rule engines or use with
+Linked Data applications (the query engine features are heavily
+inspired by W3C SPARQL, albeit using Clojure syntax and no RDF
+restrictions). Whenever facts are added or removed from the graph
+(either manually or via inference), all query results are updated
+(somewhat equivalent to stored procedures in SQL). In complex queries,
+intermediate query vertices act as result cache and potentially
+limit/avoid work to do.
+
+*Note:* This example is somewhat out of date in that it hardly uses
+the more userfriendly and powerful query DSL and instead largely
+defines queries via low-level forms. For a better overview please
+consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the [[./fabric-facts/README.org][facts module]]...
 
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
