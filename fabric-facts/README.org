@@ -27,16 +27,23 @@ This module provides the following features on top of the
 - Triple or Quad fact graphs
 - Specialized, more lightweight fact vertices
 - Fact indexing
+- Optional, customizable fact transformations (and untransform) for
+  optimizing graph internal storage
 - Fact graph logging / fact persistence (via [[https://github.com/clojure/core.async][core.async]])
+- Conversion of nested Clojure maps to facts (triples)
 - Query tree construction (vertex based)
   - Query variable bindings (SPARQL / Datalog style pattern queries)
+  - Sub-queries (each with own filters, limits, projections)
   - Joins
   - Optional joins
   - Unions
-  - Bounded length path queries (min/max limits, forward, reverse)
+  - Negation (result subtraction)
+  - Bounded length path queries (min/max limits, forward & reverse)
   - Arbitrary filters at any query level
+  - Pre-bound query variables (pre-filtered queries)
+  - Result variable injection
   - Nested result sorting
-  - Nested result grouping
+  - Arbitrary result grouping
   - Grouped & un-grouped result aggregation fns & expressions
   - Result limiting
 - Map based query expression DSL (EDN serializable)
@@ -44,7 +51,8 @@ This module provides the following features on top of the
 - Intelligent recursive query tree removal
 - Queries are only computed once, results are cached and only updated
   automatically when underlying fact set is changing
-- Rule based inferencing based on any query
+- Rule based inferencing based on any query (execute arbitrary action
+  for each new result, e.g. to add/remove facts)
 - RDF N-Triple parser
 
 ** Status
@@ -65,7 +73,7 @@ programming FTW!
 
 * Tests
 
-Currently there're 100+ tests & examples showing common usage patterns
+Currently there're 110+ tests & examples showing common usage patterns
 of this module:
 
 - [[./test/core.org][thi.ng.fabric.facts.test.core]]

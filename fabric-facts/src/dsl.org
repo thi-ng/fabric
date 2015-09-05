@@ -7,7 +7,7 @@
      - [[#todo-examples][TODO Examples]]
      - [[#query-specification][Query specification]]
          - [[#sub-query-types][Sub-query types]]
-         - [[#sub-query-modifiers][Sub-query modifiers]]
+         - [[#query--sub-query-options][Query & sub-query options]]
      - [[#implementation][Implementation]]
      - [[#expressions][Expressions]]
          - [[#aggregation-expressions][Aggregation expressions]]
@@ -20,26 +20,29 @@
 ** Introduction
 
 Whilst the query vertex tree functionality provided by the
-/facts-core/ module is powerful, it's somewhat "low-level", imperative
-and verbose to use. Therefore, this namespace provides a more
-userfriendly, succinct "high level" layer to construct query trees in
-a completely declarative way and exposes further functionality, like
-an expression language to define result filters, query variable
-projection, aggregations, sorting etc.
+/fabric-facts/ core module is powerful, it's somewhat "low-level",
+imperative and verbose to use. Therefore, this namespace provides a
+more userfriendly, succinct "high level" layer to construct query
+trees in a completely declarative way and exposes further
+functionality, like an expression language to define result filters,
+query variable projection, variable injections, aggregations, sorting
+etc.
 
 The query spec DSL is highly inspired by the W3C SPARQL language,
 albeit expressed in a more Clojuresque way and not limited to RDF
 semantics.
 
 Query specs are described as standard Clojure maps and therefore offer
-all the usual benefits including composability, EDN serialization. The
+all the usual benefits including composability & EDN serialization. The
 latter therefore also allows query specs to be stored in the graphs as
 part of facts and then be able to define queries returning query specs
 (e.g. for UI templating/widgets), thus enabling a completely dynamic
-and datadriven approach to design applications.
+and datadriven approach to design applications/UIs.
 
-The expression language is extensible via its multi-method
-implementation. See [[#expressions][section]] further below for details.
+The expression language is responsible to compile variable lookups and
+result processing expressions into actual Clojure functions. The
+language is extensible via its multi-method implementation. See
+[[#expressions][section]] further below for details.
 
 ** Public API
 
@@ -54,7 +57,7 @@ The only public part of this namespace consists of this single function:
 
 ** TODO Examples
 
-Lots more examples can be found in the [[../test/core.org][test]] namespace for this module.
+Dozens of examples can be found in the [[../test/core.org][test]] namespace for this module.
 For a general overview of query patterns and supported query types,
 please also see the [[core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
 namespace.
@@ -73,24 +76,29 @@ namespace.
 
 ** Query specification
 
-A query spec map can have the following toplevel keys:
+A query spec map can have the following toplevel keys. *Only the =:q=
+key is required, all others are optional.*
 
-| *Key*        | *Required?* | *Value*                        | *Description*                                    |
-|--------------+-------------+--------------------------------+--------------------------------------------------|
-| =:q=         | Y           | Vector                         | Vector of sub-query maps (see below)             |
-| =:select=    | N           | qvar or qvar vec               | List qvars to be projected into result set       |
-| =:filter=    | N           | fn or DSL expression           | Filter criteria for result set                   |
-| =:order=     | N           | fn, qvar, qvar vec or DSL expr | Sorting criteria for result set                  |
-| =:group-by=  | N           | fn, qvar, qvar vec or DSL expr | Grouping criteria for results, causes result map |
-| =:aggregate= | N           | fn or DSL aggregation expr     | Inject new qvars w/ reduced values               |
-| =:limit=     | N           | Positive int                   | Limit the number of results to N items           |
+| *Key*        | *Possible values*            | *Default* | *Description*                                        |
+|--------------+------------------------------+-----------+------------------------------------------------------|
+| =:q=         | Vector                       | none      | Vector of sub-queries (see below)                    |
+| =:select=    | =:*= or =[?a ?b ..]=         | :*        | Keep all or only given qvars in result maps          |
+| =:unique=    | true / false                 | false     | Ensure all qvars in each result map have unique vals |
+| =:filter=    | predicate fn / DSL expr      | none      | Keep only result maps for which fn returns truthy    |
+| =:limit=     | positive int                 | none      | Limit results to max. N items                        |
+| =:order=     | fn, qvar, qvar vec, DSL expr | none      | Sort results by given key fn                         |
+| =:group-by=  | fn, qvar, qvar vec, DSL expr | none      | Grouping criteria for results, causes result map     |
+| =:aggregate= | aggregation fn / DSL expr    | none      | Inject new qvars of aggregated values                |
+| =:bind=      | {?qvar fn}                   | none      | Inject new qvars in result maps                      |
 
 *** Sub-query types
 
 The DSL supports the following sub-query types. Each type (apart from
 =:path=) takes a number of query patterns and always computes their
 joined result set. The sub-query types only differ in how each
-sub-queries results are merged with others.
+sub-query's results are merged with those of others. Each sub-query
+can also specify a number of options to modify its result set. These
+options are described [[#sub-query-modifiers][over here]].
 
 **** :where - join queries
 
@@ -143,10 +151,20 @@ Examples:
        {:union [[?e friend ?f]]}]}
 #+END_SRC
 
+**** :minus - query negation (pattern based result removal)
+
+#+BEGIN_SRC clojure
+  ;; remove matching triples from existing result set:
+  ;; first match all "knows" relationships, but
+  ;; remove any results where ?b is bill's friend
+  {:q [{:where [[?a knows ?b]]}
+       {:minus [[?b friend bill]]}]}
+#+END_SRC
+
 **** :path - bounded path queries
 
 A sub-query of this type takes a single path query pattern and options
-map defining accepted path lengths:
+defining the accepted min/max path lengths:
 
 Examples:
 
@@ -161,22 +179,127 @@ Examples:
   {:q [{:path [?p [parent-of friend friend] ?f] :min 2 :max 3}]}
 #+END_SRC
 
-*** Sub-query modifiers
+*** Query & sub-query options
 
-- =:filter= - same as top-level filter expression, but only applying
-  to this sub-query
-- =:limit= - limit a sub-query's result set to N items
-- =:select= - select qvars to be projected into result set. This is
-  useful for large join queries w/ various intermediate qvars, not
-  required to be retained outside the sub-query. Use of this feature
-  will have a positive impact on down-stream joins and other result
-  processing performance.
+Unless noted otherwise, query options have the same semantics
+regardless if used at the top-level or for individual sub-queries. In
+the latter case, of course they only apply to a single sub-query.
+
+Use of these modifiers can have a positive impact on down-stream joins
+and other result processing performance and memory requirements.
+*However, be careful to not overconstrain intermediate results.*
+
+Furthermore, sub-queries with options are not re-usable by other
+queries. So in cases where there're many similar queries, it is
+recommended to only apply top-level options, manipulating the final
+result set of a query.
+
+**** :filter
+
+A single DSL expression or Clojure predicate fn applied to each single
+result (map). The result is only kept if the filter is truthy.
+
+#+BEGIN_SRC clojure
+  ;; global & local filters
+  ;; find procedures created by any of the 3 authors before given date
+  {:q [{:where [[?p type procedure] [?p date-created ?date]]}
+       {:optional [[?p author ?a]] :filter (in-set? ?a alice bob charlie)}]
+   :filter (< ?date #inst "2015-09-01")}
+#+END_SRC
+
+**** :limit
+
+Limit the result set to N items.
+
+#+BEGIN_SRC clojure
+  ;; find first underage person and (optionally his/her name)
+  {:q [{:where [[?a type person] [?a age ?age]] :filter (< ?age 21) :limit 1}
+       {:optional [[?a name ?n]]}]}
+#+END_SRC
+
+**** :select
+
+Select qvars to be projected into result set. This is also useful for
+large join queries w/ various intermediate qvars, not required to be
+retained outside the sub-query.
+
+#+BEGIN_SRC clojure
+  ;; find books in price range w/ their authors and topics (via category)
+  ;; don't include price and category in results
+  {:q [{:where [[?a author ?b]
+                [?b type book]
+                [?b price ?p]]
+        :filter (and (>= ?p 10) (<= ?p 20))
+        :select [?a ?b]}
+       {:where [[?b category ?cat]
+                [?cat includes-topic ?t]]
+        :select [?b ?t]}]}
+#+END_SRC
+
+**** :unique
+
+The query engine ensures that - within a single query pattern - unique
+qvars contain unique values (see [[./core.org#fact-verifier-multi-method][fact-verifier description]] in core
+namespace). However, when using query joins, unions, aggregations,
+qvars injections etc. this behavior is not guaranteed, unless
+explicitly enabled by setting this option key to =true=. If enabled,
+each result map's qvars will have unique values (or the result map is
+removed if not). For most cases, this can be ignored, but this feature
+is essential for some queries, as shown below.
+
+#+BEGIN_SRC clojure
+  ;; given these facts...
+
+  [a knows b]
+  [b knows a]
+  [b knows c]
+  [c knows b]
+
+  ;; ...this query...
+  {:q [{:where [[?x knows ?y] [?y knows ?z]]}] :select [?x ?z]}
+
+  ;; ...produces these results:
+  #{{?x b, ?z b}
+    {?x a, ?z a}
+    {?x a, ?z c}  ;; unique
+    {?x c, ?z a}  ;; unique
+    {?x c, ?z c}}
+
+  ;; Without :unique flag this query produces results where ?x & ?z are
+  ;; bound to same values, which is not what we want in this case!
+
+  ;; Same query with :unique...
+  {:q [{:where [[?x knows ?y] [?y knows ?z]]}] :select [?x ?z] :unique true}
+
+  ;; ...produces the correct results:
+  #{{?x a, ?z c} {?x c, ?z a}}
+#+END_SRC
+
+**** :bind
+
+Inject (or overwrite) qvars in result maps (e.g. to format dates,
+concatenate strings etc.). The value of this option must be a map of
+={?qvar expression..}=
+
+#+BEGIN_SRC clojure
+  ;; find all persons and their first/surnames
+  ;; inject new qvar ?name (string concat) into results
+  ;; only return person & name
+  {:q [{:where [[?p firstname ?fn]
+                [?p surname ?sn]]
+        :bind {?name (str ?fn " " ?sn)}
+        :select [?p ?name]}]}
+#+END_SRC
+
+**** :aggregate
+
+TODO (see tests for various examples)
 
 ** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref dsl
-  (defn compile-query-filter
-    [flt] (if (fn? flt) flt (compile-expr flt)))
+  (defn compile-query-option
+    [expr] (if (fn? expr) expr (compile-expr expr)))
 
   (defn compile-result-order
     [order]
@@ -185,6 +308,20 @@ Examples:
       (if (sequential? order)
         (fn [r] (reduce #(conj % (get r %2)) [] order))
         (fn [r] (get r order)))))
+
+  (defn compile-query-bindings
+    [binds]
+    (let [binds (reduce-kv
+                 (fn [acc k v] (assoc acc k (compile-expr v)))
+                 {} binds)]
+      (fn [res]
+        (let [res'(reduce-kv
+                   (fn [acc k f]
+                     (assoc acc k (f acc)))
+                   res binds)]
+          (info :pre-bind res)
+          (info :post-bind res')
+          res'))))
 
   (defn compile-result-aggregation
     [agg]
@@ -212,18 +349,20 @@ Examples:
         (compile-expr group))))
 
   (defn sub-query-options
-    [opts]
+    [opts spec]
     (-> opts
-        (select-keys [:filter :limit :select :unique])
-        (update :filter #(if % (compile-query-filter %)))))
+        (select-keys [:filter :limit :select :unique :bind :values])
+        (update :filter #(if % (compile-query-option %)))
+        (update :bind #(if % (compile-query-bindings %)))
+        (update :values #(or % (:values spec)))))
 
   (defmulti compile-sub-query
-    (fn [g parent q spec] (some #{:where :optional :union :path} (keys q))))
+    (fn [g parent q spec] (some #{:where :optional :union :minus :path} (keys q))))
 
   (defmethod compile-sub-query :where
     [g parent q spec]
     (let [pat  (:where q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -234,7 +373,7 @@ Examples:
   (defmethod compile-sub-query :optional
     [g parent q spec]
     (let [pat  (:optional q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -245,7 +384,7 @@ Examples:
   (defmethod compile-sub-query :union
     [g parent q spec]
     (let [pat  (:union q)
-          opts (sub-query-options q)
+          opts (sub-query-options q spec)
           q    (if (< 1 (count pat))
                  (ff/add-query-join! g (:transform spec) pat opts)
                  (ff/add-param-query! g (:transform spec) (first pat) opts))]
@@ -253,9 +392,20 @@ Examples:
         (ff/add-query-union! g [parent q] {})
         q)))
 
+  (defmethod compile-sub-query :minus
+    [g parent q spec]
+    (let [pat  (:minus q)
+          opts (sub-query-options q spec)
+          q    (if (< 1 (count pat))
+                 (ff/add-query-join! g (:transform spec) pat opts)
+                 (ff/add-param-query! g (:transform spec) (first pat) opts))]
+      (if parent
+        (ff/add-query-negation! g parent q {})
+        q)))
+
   (defmethod compile-sub-query :path
     [g parent q spec]
-    (let [opts (merge (select-keys q [:min :max]) (sub-query-options q))
+    (let [opts (merge (select-keys q [:min :max]) (sub-query-options q spec))
           q    (ff/add-path-query! g (:transform spec) (:path q) opts)]
       (if parent
         (ff/add-join! g parent q {})
@@ -272,7 +422,8 @@ Examples:
   (defn compile-select-qvars
     [result g spec]
     (let [spec (cond-> spec
-                 (:filter spec)    (update :filter compile-query-filter)
+                 (:bind spec)      (update :bind compile-query-bindings)
+                 (:filter spec)    (update :filter compile-query-option)
                  (:order spec)     (update :order compile-result-order)
                  (:group-by spec)  (update :group-by compile-result-grouping)
                  (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
@@ -446,7 +597,11 @@ Examples:
       (fn [results] (into #{} tx results))))
 
   (defmethod compile-expr 'agg-count
-    [_] (fn [results] (count results)))
+    [[_ x]]
+    (if x
+      (let [collect (compile-expr ['agg-collect x])]
+        (fn [results] (count (collect results))))
+      (fn [results] (count results))))
 #+END_SRC
 
 *** Grouping expressions

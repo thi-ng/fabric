@@ -3,12 +3,14 @@
 
 [[./assets/fabric-hot-1280x720-orange.jpg]]
 
-Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Clojurescript.
+Modular, Signal/Collect inspired compute graph infrastructure for
+Clojure & Clojurescript. Written in a Literate Programming format.
 
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#overview][Overview]]
+         - [[#general-compute-graph-concepts][General Compute Graph concepts]]
          - [[#features][Features]]
          - [[#motivation--use-cases][Motivation & use cases]]
          - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
@@ -19,8 +21,8 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
+         - [[#fabric-facts-module-example][fabric-facts module example]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
-         - [[#automatically-updating-fact-graph-queries-with-rule-based-inferencing][Automatically updating fact graph queries with rule based inferencing]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -37,10 +39,57 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.231"]
+  [thi.ng/fabric "0.0.247"]
 #+END_SRC
 
 ** Overview
+
+*** General Compute Graph concepts
+
+These libraries are built around the model of a directed, potentially
+cyclic graph structure, in which vertices hold state and edges are
+functions sending possibly transformed states to other vertices in the
+graph. All processing is done in two phases, both of which are score
+guided and completely customizable:
+
+- *Signalling*: The operations carried out by edge functions, each
+  accepting their source vertex' state value, transforming it and
+  placing it in a signal map/queue of their target vertex. Vertices
+  only signal if the user defined (or default) scoring function
+  exceeds a threshold (user defined as well).
+
+- *Collecting*: Each vertex can define its own collection function,
+  responsible for processing any uncollected signal values and
+  producing a new state value. As with signalling, vertices only
+  collect if their collection score exceeds a threshold value. This
+  allows users to implement different collection behaviors (e.g.
+  semi-lazy or batched or only after certain amount of uncollected
+  signals have been received etc.)
+
+There're many different ways to execute these two operational phases
+(e.g. ordered vs. unordered, interleaved, thresholded, eager, async
+etc.) and the core library provides 3 different execution contexts
+(also fully configurable) to tailor the execution model for different
+use cases. For some problem domains choosing one model over another
+can provide major (500-1000%) speedups (e.g. see Vertex coloring
+example below).
+
+Common to all supplied execution models/contexts is the notion of
+/graph convergence/ (a term borrowed from the original Signal/Collect
+papers, link below). Since both signal and collect operations are
+score guided, the executors can keep track of the remaining active
+work set. A graph is called /converged/ if there're no more vertices
+left which should emit signals or can collect. Due to the model
+explicitly allowing cycles (recursion) in the graph, users can also
+specify halt thresholds to forcefully terminate graph execution when a
+certain number of operations has been carried out, but then
+potentially leaving the graph in a /non-converged/ state (which in
+some use cases is a valid result).
+
+The Signal/Collect model provides both a flexible and elegant metaphor
+for many problem domains. To avoid a monolithic one-fits-all approach
+and provide somewhat of a thematic focus, this project is structured
+into different modules (all described & linked below).
 
 *** Features
 
@@ -58,13 +107,15 @@ Modular, Signal/Collect inspired compute graph infrastructure for Clojure & Cloj
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
 - Knowledge graphs (triples & quads)
-- Fully featured, efficient query engine (variables, joins, optional
-  joins, unions, filters, grouping, aggregation)
-- Optional map based query DSL (EDN serializable)
-- Bounded length path queries (min/max limits)
+- Fully featured, efficient query engine (pattern based, variables,
+  sub-queries, joins, optional joins, unions, negation, filters,
+  pre-filters, grouping, value injection, aggregation)
+- Optional map based query & expression DSL (EDN serializable)
+- Bounded length (variable) path queries (with min/max limits)
 - Query & rule based fact inferencing (additions & retractions)
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
+- Literate programming format
 
 See the [[./fabric-facts/README.org][README]] of the *fabric-facts* module for full feature set.
 
@@ -87,7 +138,7 @@ mandatory integration or reliance on React.js or DOM rendering cycle
 
 **** Single machine or distributed processing
 
-Multi-environment graphs not yet implemented (WIP)
+Distributed, multi-environment graphs not yet implemented (WIP)
 
 **** Self-organizing workflows
 
@@ -170,12 +221,14 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-Currently, the included test cases act as the best demonstation of usage patterns and
-also show most of the currently implemented functionality:
+Currently, the included test cases for each module act as the best
+demonstation of usage patterns and also show most of the currently
+implemented functionality:
 
 *** Single-source shortest path
 
-Calculate minimum distance from a single node to all others (connected) in the graph.
+Calculate minimum distance from a single node to all others
+(connected) in the graph. Also see benchmark above.
 
 [[./assets/sssp.jpg]]
 
@@ -184,7 +237,11 @@ Calculate minimum distance from a single node to all others (connected) in the g
 *** Vertex coloring in random graphs
 
 Assign each vertex a color from a limited pallete such that no two
-neighbors have the same color.
+neighbors have the same color. This is one of the examples used for
+the above benchmarks. Please note the drastic difference between
+different execution models (synchronous vs. eager). If the number of
+possible colors is reduced further, the synchronous approach will not
+converge at all.
 
 [[./assets/vcolor.jpg]]
 
@@ -198,97 +255,38 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 [[./assets/transclosure.jpg]]
 
-[[./fabric-core/test/transclosure.org][source]]
+Apart from adding the data to the graph, the only user code required
+to collect the closure(s) is this custom collection function used for
+each vertex:
 
-*** Spreadsheet like computation
-
-#+BEGIN_SRC clojure :tangle fabric-core/babel/examples/spreadsheet.cljc :mkdirp yes :padline no
-  (require '[thi.ng.fabric.core :as f])
-  (require '[clojure.core.async :refer [go-loop <! chan]])
-
-  (def g (f/compute-graph))
-  (def result-chan (chan))
-  (def ctx (f/async-execution-context {:graph g :result result-chan}))
-
-  ;; Define vertex collection functions
-  (defn collect-with
-    [f] (fn [v] (f/set-value! v (reduce f (vals (f/signal-map v))))))
-
-  (def collect-sum     (collect-with +))
-  (def collect-product (collect-with *))
-
-  ;; Define some data vertices with values to sum
-
-  (def A1 (f/add-vertex! g 100.00 {}))
-  (def A2 (f/add-vertex! g 200.00 {}))
-  (def A3 (f/add-vertex! g 300.00 {}))
-
-  ;; Another one with VAT rate
-
-  (def VAT (f/add-vertex! g 1.2 {}))
-
-  ;; This vertex will produce the net price (the sum of A1 + A2 + A3, see below...)
-
-  (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
-
-  ;; And this one the total (net * vat)
-
-  (def TOTAL (f/add-vertex! g nil {::f/collect-fn collect-product}))
-
-  ;; Connect everything together:
-  ;; The direction is always src -> dest
-  ;; signal-forward will simply send a vertex' value as signal
-  ;; The nil arg is because signal-foward doesn't use any signal arguments
-  ;; but other signal functions could make use of this extra arg (see SSSP example above)
-
-  (run! (fn [[a b]] (f/connect-to! a b f/signal-forward nil))
-        [[A1 NET] [A2 NET] [A3 NET] [NET TOTAL] [VAT TOTAL]])
-
-  ;; Everytime the graph converges into a stable/unchanging state
-  ;; the async execution context will pause & push a result map to the channel provided
-  ;; Here we simply print it out along with the values of the NET & TOTAL vertices
-
-  (go-loop []
-    (when-let [res (<! result-chan)]
-      (prn :result res)
-      (prn :net @NET)
-      (prn :total @TOTAL)
-      (recur)))
-
-  ;; Kick off computation
-
-  (f/execute! ctx)
-  ;; :result {:collections 3, :signals 5, :type :converged, :runtime 1.9211129999999998, :time-per-op 0.24013912499999998}
-  ;; :net 600.0
-  ;; :total 720.0
-
-  ;; Modify A1 and notify exec context. Calling notify! on an active
-  ;; async context is indempodent, i.e. multiple invocations will only
-  ;; trigger 1 additional execution loop (until the graph is converged
-  ;; again). Calling notify! on a converged graph/context is almost free
-  ;; and will bail out quickly, since no active vertices will be found
-
-  (f/set-value! A1 1000)
-  (f/notify! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6149319999999999, :time-per-op 0.15373299999999998}
-  ;; :net 1500.0
-  ;; :total 1800.0
-
-  ;; Add another data vertex to include in results
-
-  (f/add-edge! g (f/add-vertex! g 400 {}) NET f/signal-forward nil)
-  (f/notify! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.563244, :time-per-op 0.140811}
-  ;; :net 1900.0
-  ;; :total 2280.0
+#+BEGIN_SRC clojure
+  (def collect-transitive-closure
+    (f/collect-pure
+     (fn [val uncollected]
+       (reduce into val uncollected))))
 #+END_SRC
 
-*** Automatically updating fact graph queries with rule based inferencing
+[[./fabric-core/test/transclosure.org][source]]
 
-Note: This example uses two forms of queries: low-level query node
-construction and the more userfriendly and EDN serializable query
-specs via the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace. The query specs are
-compiled into these low-level forms.
+*** fabric-facts module example
+
+This example uses a compute graph to store facts, fact queries and
+inference rules (based on queries) to create new facts. Since the
+queries and inference rules are expressed as vertex trees, taking part
+in the normal graph execution, this example demonstrates how easy it
+is to use this architecture to build custom rule engines or use with
+Linked Data applications (the query engine features are heavily
+inspired by W3C SPARQL, albeit using Clojure syntax and no RDF
+restrictions). Whenever facts are added or removed from the graph
+(either manually or via inference), all query results are updated
+(somewhat equivalent to stored procedures in SQL). In complex queries,
+intermediate query vertices act as result cache and potentially
+limit/avoid work to do.
+
+*Note:* This example is somewhat out of date in that it hardly uses
+the more userfriendly and powerful query DSL and instead largely
+defines queries via low-level forms. For a better overview please
+consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the [[./fabric-facts/README.org][facts module]]...
 
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
@@ -423,15 +421,99 @@ compiled into these low-level forms.
 
 [[./fabric-facts/test/core.org][full source]]
 
+*** Spreadsheet like computation
+
+
+#+BEGIN_SRC clojure :tangle fabric-core/babel/examples/spreadsheet.cljc :mkdirp yes :padline no
+  (require '[thi.ng.fabric.core :as f])
+  (require '[clojure.core.async :refer [go-loop <! chan]])
+
+  (def g (f/compute-graph))
+  (def result-chan (chan))
+  (def ctx (f/async-execution-context {:graph g :result result-chan}))
+
+  ;; Define vertex collection functions
+  (defn collect-with
+    [f] (fn [v] (f/set-value! v (reduce f (vals (f/signal-map v))))))
+
+  (def collect-sum     (collect-with +))
+  (def collect-product (collect-with *))
+
+  ;; Define some data vertices with values to sum
+
+  (def A1 (f/add-vertex! g 100.00 {}))
+  (def A2 (f/add-vertex! g 200.00 {}))
+  (def A3 (f/add-vertex! g 300.00 {}))
+
+  ;; Another one with VAT rate
+
+  (def VAT (f/add-vertex! g 1.2 {}))
+
+  ;; This vertex will produce the net price (the sum of A1 + A2 + A3, see below...)
+
+  (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
+
+  ;; And this one the total (net * vat)
+
+  (def TOTAL (f/add-vertex! g nil {::f/collect-fn collect-product}))
+
+  ;; Connect everything together:
+  ;; The direction is always src -> dest
+  ;; signal-forward will simply send a vertex' value as signal
+  ;; The nil arg is because signal-foward doesn't use any signal arguments
+  ;; but other signal functions could make use of this extra arg (see SSSP example above)
+
+  (run! (fn [[a b]] (f/connect-to! a b f/signal-forward nil))
+        [[A1 NET] [A2 NET] [A3 NET] [NET TOTAL] [VAT TOTAL]])
+
+  ;; Everytime the graph converges into a stable/unchanging state
+  ;; the async execution context will pause & push a result map to the channel provided
+  ;; Here we simply print it out along with the values of the NET & TOTAL vertices
+
+  (go-loop []
+    (when-let [res (<! result-chan)]
+      (prn :result res)
+      (prn :net @NET)
+      (prn :total @TOTAL)
+      (recur)))
+
+  ;; Kick off computation
+
+  (f/execute! ctx)
+  ;; :result {:collections 3, :signals 5, :type :converged, :runtime 1.9211129999999998, :time-per-op 0.24013912499999998}
+  ;; :net 600.0
+  ;; :total 720.0
+
+  ;; Modify A1 and notify exec context. Calling notify! on an active
+  ;; async context is indempodent, i.e. multiple invocations will only
+  ;; trigger 1 additional execution loop (until the graph is converged
+  ;; again). Calling notify! on a converged graph/context is almost free
+  ;; and will bail out quickly, since no active vertices will be found
+
+  (f/set-value! A1 1000)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6149319999999999, :time-per-op 0.15373299999999998}
+  ;; :net 1500.0
+  ;; :total 1800.0
+
+  ;; Add another data vertex to include in results
+
+  (f/add-edge! g (f/add-vertex! g 400 {}) NET f/signal-forward nil)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.563244, :time-per-op 0.140811}
+  ;; :net 1900.0
+  ;; :total 2280.0
+#+END_SRC
+
 * Modules
 
 - *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
 
 - *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
 
-- *fabric-ld* - Linked Data server setup (not yet included)
+- *fabric-ld* - Linked Data server setup (WIP, not yet included)
 
-- *[[./fabric-redis/README.org][fabric-redis*]] - Redis backend (not yet included)
+- *fabric-redis* - Redis backend (WIP, not yet included)
 
 * Project definition
 
@@ -516,18 +598,19 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*                                                               |
-|-----------+------------+-----------------------------------------------------------------------------|
-|   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling      |
-|   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests |
-|   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                     |
-|   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                              |
-|   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring         |
-|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                |
-|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                      |
-|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                |
-|   0.0.116 | 2015-08-15 | more reusable fact queries                                                  |
-|   0.0.108 | 2015-08-14 | 1st public release                                                          |
+| *Version* | *Released* | *Description*                                                                    |
+|-----------+------------+----------------------------------------------------------------------------------|
+|   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
+|   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling           |
+|   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests      |
+|   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                          |
+|   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                                   |
+|   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring              |
+|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                     |
+|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                           |
+|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                     |
+|   0.0.116 | 2015-08-15 | more reusable fact queries                                                       |
+|   0.0.108 | 2015-08-14 | 1st public release                                                               |
 
 ** Contributors
 
