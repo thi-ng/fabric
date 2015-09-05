@@ -34,6 +34,7 @@ This namespace provides...
     (disconnect-all! [_])
     (neighbors [_])
     (collect! [_])
+    (collect-final! [_])
     (score-collect [_])
     (signal! [_ handler])
     (score-signal [_])
@@ -80,7 +81,7 @@ This namespace provides...
 #+BEGIN_SRC clojure :noweb-ref vertex
   (deftype Vertex
       [id value prev-val state uncollected signal-map new-edges outs
-       score-signal-fn score-collect-fn collect-fn]
+       score-signal-fn score-collect-fn collect-fn collect-final-fn]
     #?@(:clj
          [clojure.lang.IDeref
           (deref
@@ -103,6 +104,11 @@ This namespace provides...
       (collect-fn _)
       (reset! uncollected [])
       _)
+    (collect-final!
+      [_]
+      (when collect-final-fn
+        (collect-final-fn _)
+        _))
     (score-collect
       [_] (score-collect-fn _))
     (connect-to!
@@ -223,7 +229,9 @@ This namespace provides...
   (defn vertex
     [id val opts]
     (let [opts (merge default-vertex-opts opts)
-          opts' (dissoc opts ::score-signal-fn ::score-collect-fn ::collect-fn)]
+          opts' (dissoc opts
+                        ::score-signal-fn ::score-collect-fn
+                        ::collect-fn ::collect-final-fn)]
       (Vertex.
        id
        (atom val)                 ;; value
@@ -235,8 +243,8 @@ This namespace provides...
        (atom {})                  ;; outs
        (::score-signal-fn opts)
        (::score-collect-fn opts)
-       (::collect-fn opts))))
-
+       (::collect-fn opts)
+       (::collect-final-fn opts))))
 #+END_SRC
 
 *** Graph
@@ -318,6 +326,9 @@ This namespace provides...
   (defn async-execution-result
     [type out sigs colls t0 & [opts]]
     (go (>! out (execution-result type colls sigs t0 opts))))
+
+  (defn collect-final-all!
+    [vertices] (run! #(collect-final! %) vertices)) ;; FIXME make parallel
 
   (defn sub-pass-combine
     ([] [#{} 0])
@@ -401,6 +412,7 @@ This namespace provides...
      :max-iter       1e6
      :signal-fn      parallel-signal-pass-simple
      :collect-fn     parallel-collect-pass-simple
+     :collect-final? true
      :watches        {:remove-vertex
                       (fn [queue]
                         (fn [[__ v]] (signal! v sync-vertex-signal)))}})
@@ -442,7 +454,8 @@ This namespace provides...
                       colls' (coll-fn verts)]
                   (if (or (pos? sigs') (pos? colls'))
                     (recur (inc i) (long (+ colls colls')) (long (+ sigs sigs')))
-                    (->result :converged i sigs colls t0)))
+                    (do (when (:collect-final? ctx) (collect-final-all! verts))
+                        (->result :converged i sigs colls t0))))
                 (->result :max-iter-reached i sigs colls t0))))))))
 #+END_SRC
 
@@ -468,6 +481,7 @@ This namespace provides...
      ;;:scheduler      single-pass-scheduler
      :max-ops        1e6
      :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
+     :collect-final? true
      :watches        default-context-watches})
 #+END_SRC
 
@@ -515,7 +529,8 @@ This namespace provides...
                     (reset! queue #{})
                     (recur (long (+ colls colls')) (long (+ sigs sigs'))))
                   (->result :max-ops-reached sigs colls t0))
-                (->result :converged sigs colls t0))))))))
+                (do (when (:collect-final? ctx) (collect-final-all! (vertices g)))
+                    (->result :converged sigs colls t0)))))))))
 #+END_SRC
 
 *** Async
@@ -533,6 +548,7 @@ This namespace provides...
      :max-ops        1e6
      :auto-stop      false
      :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
+     :collect-final? true
      :watches        default-context-watches})
 
 #+END_SRC
@@ -594,7 +610,8 @@ This namespace provides...
                       (do (stop! _)
                           (->result :max-ops-reached sigs colls @t0)))
                     (if @running?
-                      (do (->result :converged sigs colls @t0)
+                      (do (when (:collect-final? ctx) (collect-final-all! (vertices g)))
+                          (->result :converged sigs colls @t0)
                           (if (:auto-stop ctx)
                             (stop! _)
                             (when (<! notify-chan)
