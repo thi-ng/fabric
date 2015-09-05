@@ -20,12 +20,13 @@
 ** Introduction
 
 Whilst the query vertex tree functionality provided by the
-/facts-core/ module is powerful, it's somewhat "low-level", imperative
-and verbose to use. Therefore, this namespace provides a more
-userfriendly, succinct "high level" layer to construct query trees in
-a completely declarative way and exposes further functionality, like
-an expression language to define result filters, query variable
-projection, variable injections, aggregations, sorting etc.
+/fabric-facts/ core module is powerful, it's somewhat "low-level",
+imperative and verbose to use. Therefore, this namespace provides a
+more userfriendly, succinct "high level" layer to construct query
+trees in a completely declarative way and exposes further
+functionality, like an expression language to define result filters,
+query variable projection, variable injections, aggregations, sorting
+etc.
 
 The query spec DSL is highly inspired by the W3C SPARQL language,
 albeit expressed in a more Clojuresque way and not limited to RDF
@@ -289,6 +290,10 @@ concatenate strings etc.). The value of this option must be a map of
         :bind {?name (str ?fn " " ?sn)}
         :select [?p ?name]}]}
 #+END_SRC
+
+**** :aggregate
+
+TODO (see tests for various examples)
 
 ** Implementation
 

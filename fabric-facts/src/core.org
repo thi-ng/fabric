@@ -40,6 +40,9 @@
 * Namespace: thi.ng.fabric.facts.core
 ** Protocols
 
+These protocols act as the main public & internal API for this module
+and their roles are described in more detail throughout this document.
+
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
     (fact-indices [_])
@@ -90,6 +93,15 @@ Example facts:
 #+END_SRC
 
 **** FactVertex implementation
+
+As with the default =Vertex= type defined in the /fabric-core/ module,
+a vertex' state can be obtained by dereferencing it via Clojure's =@=
+reader macro or =deref=. The =FactVertex= impl will throw errors for
+many operations supported by the default vertex. This is because
+unlike standard vertices, facts (as values) in a graph must be
+immutable. The only mutable aspects of a =FactVertex= are related to
+connectivity and signalling (e.g. each fact vertex is automatically
+connected to index vertices).
 
 #+BEGIN_SRC clojure :noweb-ref fact-v
   (deftype FactVertex
@@ -151,6 +163,9 @@ Example facts:
 
 **** Constructor
 
+This constructor is not intended for public use. Instead it is called
+by the =FactGraph= when a new fact is to be added.
+
 #+BEGIN_SRC clojure :noweb-ref fact-v
   (defn fact-vertex
     [id fact _]
@@ -160,9 +175,10 @@ Example facts:
 *** FactGraph
 
 Facts are stored in a =FactGraph= instance which has been configured
-with a maximum fact length (currently 3 or 4 items per fact). The
-default implementation of the =FactGraph= wraps an existing
-=IComputeGraph= instance and provides an extended API via the
+with a maximum fact length (currently 3 or 4 items per fact, *all
+facts in a graph MUST have the same length*). The default
+implementation of the =FactGraph= wraps an existing =IComputeGraph=
+instance (used as backend) and provides an extended API via the
 =IFactGraph= and =ICache= protocols.
 
 **** Fact indexing

@@ -27,6 +27,8 @@ This module provides the following features on top of the
 - Triple or Quad fact graphs
 - Specialized, more lightweight fact vertices
 - Fact indexing
+- Optional, customizable fact transformations (and untransform) for
+  optimizing graph internal storage
 - Fact graph logging / fact persistence (via [[https://github.com/clojure/core.async][core.async]])
 - Conversion of nested Clojure maps to facts (triples)
 - Query tree construction (vertex based)
