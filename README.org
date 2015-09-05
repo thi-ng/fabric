@@ -255,6 +255,17 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 [[./assets/transclosure.jpg]]
 
+Apart from adding the data to the graph, the only user code required
+to collect the closure(s) is this custom collection function used for
+each vertex:
+
+#+BEGIN_SRC clojure
+  (def collect-transitive-closure
+    (f/collect-pure
+     (fn [val uncollected]
+       (reduce into val uncollected))))
+#+END_SRC
+
 [[./fabric-core/test/transclosure.org][source]]
 
 *** fabric-facts module example
