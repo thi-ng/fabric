@@ -355,15 +355,19 @@ a more efficient manner.
         (resp/content-type "application/edn")))
 
   (defn delayed-response-handler
-    [model handler]
+    [model ready? handler]
     (d/->deferred
      (go
-       (let [ch  (async/tap (event-bus model) (async/chan))
-             res (<! ch)]
-         (async/untap (event-bus model) ch)
-         (async/close! ch)
-         (debug :result res)
-         (handler)))))
+       (let [ch  (async/tap (event-bus model) (async/chan))]
+         (loop []
+           (let [res (<! ch)]
+             (if (ready?)
+               (do
+                 (async/untap (event-bus model) ch)
+                 (async/close! ch)
+                 (debug :result res)
+                 (handler))
+               (recur))))))))
 
   (defn one-off-query-handler
     [model]
@@ -373,18 +377,18 @@ a more efficient manner.
             q       (add-query model spec false)
             handler (delayed-response-handler
                      model
-                     (fn []
-                       (let [{:keys [id limit offset]} (:params req)
-                             limit  (strf/parse-int limit 10 100)
-                             offset (strf/parse-int offset 10 0)
-                             body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
-                         (remove-query model q)
-                         (edn-response
-                          {:count  (count body)
-                           :total  (count @q)
-                           :offset offset
-                           :body   body}
-                          200))))]
+                     #(deref q)
+                     #(let [{:keys [id limit offset]} (:params req)
+                            limit  (strf/parse-int limit 10 100)
+                            offset (strf/parse-int offset 10 0)
+                            body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                        (remove-query model q)
+                        (edn-response
+                         {:count  (count body)
+                          :total  (count @q)
+                          :offset offset
+                          :body   body}
+                         200)))]
         (trigger-update model)
         handler)))
 
