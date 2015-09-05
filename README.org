@@ -21,8 +21,8 @@ Clojure & Clojurescript. Written in a Literate Programming format.
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
-         - [[#spreadsheet-like-computation][Spreadsheet like computation]]
          - [[#fabric-facts-module-example][fabric-facts module example]]
+         - [[#spreadsheet-like-computation][Spreadsheet like computation]]
  - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
@@ -257,89 +257,6 @@ top-level classes of phylogenetic [[http://tolweb.org/Life_on_Earth/1][Tree Of L
 
 [[./fabric-core/test/transclosure.org][source]]
 
-*** Spreadsheet like computation
-
-#+BEGIN_SRC clojure :tangle fabric-core/babel/examples/spreadsheet.cljc :mkdirp yes :padline no
-  (require '[thi.ng.fabric.core :as f])
-  (require '[clojure.core.async :refer [go-loop <! chan]])
-
-  (def g (f/compute-graph))
-  (def result-chan (chan))
-  (def ctx (f/async-execution-context {:graph g :result result-chan}))
-
-  ;; Define vertex collection functions
-  (defn collect-with
-    [f] (fn [v] (f/set-value! v (reduce f (vals (f/signal-map v))))))
-
-  (def collect-sum     (collect-with +))
-  (def collect-product (collect-with *))
-
-  ;; Define some data vertices with values to sum
-
-  (def A1 (f/add-vertex! g 100.00 {}))
-  (def A2 (f/add-vertex! g 200.00 {}))
-  (def A3 (f/add-vertex! g 300.00 {}))
-
-  ;; Another one with VAT rate
-
-  (def VAT (f/add-vertex! g 1.2 {}))
-
-  ;; This vertex will produce the net price (the sum of A1 + A2 + A3, see below...)
-
-  (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
-
-  ;; And this one the total (net * vat)
-
-  (def TOTAL (f/add-vertex! g nil {::f/collect-fn collect-product}))
-
-  ;; Connect everything together:
-  ;; The direction is always src -> dest
-  ;; signal-forward will simply send a vertex' value as signal
-  ;; The nil arg is because signal-foward doesn't use any signal arguments
-  ;; but other signal functions could make use of this extra arg (see SSSP example above)
-
-  (run! (fn [[a b]] (f/connect-to! a b f/signal-forward nil))
-        [[A1 NET] [A2 NET] [A3 NET] [NET TOTAL] [VAT TOTAL]])
-
-  ;; Everytime the graph converges into a stable/unchanging state
-  ;; the async execution context will pause & push a result map to the channel provided
-  ;; Here we simply print it out along with the values of the NET & TOTAL vertices
-
-  (go-loop []
-    (when-let [res (<! result-chan)]
-      (prn :result res)
-      (prn :net @NET)
-      (prn :total @TOTAL)
-      (recur)))
-
-  ;; Kick off computation
-
-  (f/execute! ctx)
-  ;; :result {:collections 3, :signals 5, :type :converged, :runtime 1.9211129999999998, :time-per-op 0.24013912499999998}
-  ;; :net 600.0
-  ;; :total 720.0
-
-  ;; Modify A1 and notify exec context. Calling notify! on an active
-  ;; async context is indempodent, i.e. multiple invocations will only
-  ;; trigger 1 additional execution loop (until the graph is converged
-  ;; again). Calling notify! on a converged graph/context is almost free
-  ;; and will bail out quickly, since no active vertices will be found
-
-  (f/set-value! A1 1000)
-  (f/notify! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6149319999999999, :time-per-op 0.15373299999999998}
-  ;; :net 1500.0
-  ;; :total 1800.0
-
-  ;; Add another data vertex to include in results
-
-  (f/add-edge! g (f/add-vertex! g 400 {}) NET f/signal-forward nil)
-  (f/notify! ctx)
-  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.563244, :time-per-op 0.140811}
-  ;; :net 1900.0
-  ;; :total 2280.0
-#+END_SRC
-
 *** fabric-facts module example
 
 This example uses a compute graph to store facts, fact queries and
@@ -493,15 +410,99 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
 
 [[./fabric-facts/test/core.org][full source]]
 
+*** Spreadsheet like computation
+
+
+#+BEGIN_SRC clojure :tangle fabric-core/babel/examples/spreadsheet.cljc :mkdirp yes :padline no
+  (require '[thi.ng.fabric.core :as f])
+  (require '[clojure.core.async :refer [go-loop <! chan]])
+
+  (def g (f/compute-graph))
+  (def result-chan (chan))
+  (def ctx (f/async-execution-context {:graph g :result result-chan}))
+
+  ;; Define vertex collection functions
+  (defn collect-with
+    [f] (fn [v] (f/set-value! v (reduce f (vals (f/signal-map v))))))
+
+  (def collect-sum     (collect-with +))
+  (def collect-product (collect-with *))
+
+  ;; Define some data vertices with values to sum
+
+  (def A1 (f/add-vertex! g 100.00 {}))
+  (def A2 (f/add-vertex! g 200.00 {}))
+  (def A3 (f/add-vertex! g 300.00 {}))
+
+  ;; Another one with VAT rate
+
+  (def VAT (f/add-vertex! g 1.2 {}))
+
+  ;; This vertex will produce the net price (the sum of A1 + A2 + A3, see below...)
+
+  (def NET (f/add-vertex! g nil {::f/collect-fn collect-sum}))
+
+  ;; And this one the total (net * vat)
+
+  (def TOTAL (f/add-vertex! g nil {::f/collect-fn collect-product}))
+
+  ;; Connect everything together:
+  ;; The direction is always src -> dest
+  ;; signal-forward will simply send a vertex' value as signal
+  ;; The nil arg is because signal-foward doesn't use any signal arguments
+  ;; but other signal functions could make use of this extra arg (see SSSP example above)
+
+  (run! (fn [[a b]] (f/connect-to! a b f/signal-forward nil))
+        [[A1 NET] [A2 NET] [A3 NET] [NET TOTAL] [VAT TOTAL]])
+
+  ;; Everytime the graph converges into a stable/unchanging state
+  ;; the async execution context will pause & push a result map to the channel provided
+  ;; Here we simply print it out along with the values of the NET & TOTAL vertices
+
+  (go-loop []
+    (when-let [res (<! result-chan)]
+      (prn :result res)
+      (prn :net @NET)
+      (prn :total @TOTAL)
+      (recur)))
+
+  ;; Kick off computation
+
+  (f/execute! ctx)
+  ;; :result {:collections 3, :signals 5, :type :converged, :runtime 1.9211129999999998, :time-per-op 0.24013912499999998}
+  ;; :net 600.0
+  ;; :total 720.0
+
+  ;; Modify A1 and notify exec context. Calling notify! on an active
+  ;; async context is indempodent, i.e. multiple invocations will only
+  ;; trigger 1 additional execution loop (until the graph is converged
+  ;; again). Calling notify! on a converged graph/context is almost free
+  ;; and will bail out quickly, since no active vertices will be found
+
+  (f/set-value! A1 1000)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.6149319999999999, :time-per-op 0.15373299999999998}
+  ;; :net 1500.0
+  ;; :total 1800.0
+
+  ;; Add another data vertex to include in results
+
+  (f/add-edge! g (f/add-vertex! g 400 {}) NET f/signal-forward nil)
+  (f/notify! ctx)
+  ;; :result {:collections 2, :signals 2, :type :converged, :runtime 0.563244, :time-per-op 0.140811}
+  ;; :net 1900.0
+  ;; :total 2280.0
+#+END_SRC
+
 * Modules
 
 - *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
 
 - *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
 
-- *fabric-ld* - Linked Data server setup (not yet included)
+- *fabric-ld* - Linked Data server setup (WIP, not yet included)
 
-- *[[./fabric-redis/README.org][fabric-redis*]] - Redis backend (not yet included)
+- *fabric-redis* - Redis backend (WIP, not yet included)
 
 * Project definition
 
