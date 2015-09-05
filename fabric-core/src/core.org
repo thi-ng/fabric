@@ -328,7 +328,7 @@ This namespace provides...
     (go (>! out (execution-result type colls sigs t0 opts))))
 
   (defn collect-final-all!
-    [vertices] (run! #(collect-final! %) vertices)) ;; FIXME make parallel
+    [vertices] (run! collect-final! vertices))
 
   (defn sub-pass-combine
     ([] [#{} 0])
@@ -347,7 +347,6 @@ This namespace provides...
   (defn remove-context-watches!
     [g watch-id watches]
     (run! (fn [[id]] (remove-watch! g id watch-id)) watches))
-
 #+END_SRC
 
 *** Synchronous execution
@@ -412,7 +411,7 @@ This namespace provides...
      :max-iter       1e6
      :signal-fn      parallel-signal-pass-simple
      :collect-fn     parallel-collect-pass-simple
-     :collect-final? true
+     :collect-final? false
      :watches        {:remove-vertex
                       (fn [queue]
                         (fn [[__ v]] (signal! v sync-vertex-signal)))}})
@@ -480,8 +479,8 @@ This namespace provides...
      ;;:processor      eager-probabilistic-single-pass-processor
      ;;:scheduler      single-pass-scheduler
      :max-ops        1e6
-     :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
-     :collect-final? true
+     :threads        #?(:clj (+ 2 (.availableProcessors (Runtime/getRuntime))) :cljs 1)
+     :collect-final? false
      :watches        default-context-watches})
 #+END_SRC
 
@@ -548,7 +547,7 @@ This namespace provides...
      :max-ops        1e6
      :auto-stop      false
      :threads        #?(:clj (inc (.availableProcessors (Runtime/getRuntime))) :cljs 1)
-     :collect-final? true
+     :collect-final? false
      :watches        default-context-watches})
 
 #+END_SRC
