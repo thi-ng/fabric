@@ -39,7 +39,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.247"]
+  [thi.ng/fabric "0.0.262"]
 #+END_SRC
 
 ** Overview
@@ -595,6 +595,7 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                                    |
 |-----------+------------+----------------------------------------------------------------------------------|
+|   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL        |
 |   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
 |   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling           |
 |   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests      |
