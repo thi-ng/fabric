@@ -1231,8 +1231,7 @@ available options...
                     (fn [acc k res]
                       (let [ares (agg res)]
                         (assoc acc k (into (empty res) (map #(select-keys (merge % ares) sel)) res)))))))]
-      (fn [_ in]
-        (reduce-kv rfn {} (cfn _ in)))))
+      (fn [in] (reduce-kv rfn {} (cfn in)))))
 
   (defn result-transducer
     [spec tx]
@@ -1269,14 +1268,22 @@ available options...
     [spec tx] (result-transducer (dissoc spec :group-by :aggregate*) tx))
 
   (defn transient-group-by-reducer
-    [spec grp]
-    (let [ctype (if (:order spec) [] #{})]
-      (fn
-        ([] (transient {}))
-        ([res] res)
-        ([res input]
-         (let [k (grp input)]
-           (assoc! res k (conj! (get res k (transient ctype)) input)))))))
+    [{:keys [aggregate order select]} grp]
+    (let [ctype (if order [] #{})]
+      (if-not (or aggregate (nil? select) (= :* select))
+        (let [sel (if (sequential? select) select [select])]
+          (fn
+            ([] (transient {}))
+            ([res] res)
+            ([res input]
+             (let [k (grp input)]
+               (assoc! res k (conj! (get res k (transient ctype)) (select-keys* input sel)))))))
+        (fn
+          ([] (transient {}))
+          ([res] res)
+          ([res input]
+           (let [k (grp input)]
+             (assoc! res k (conj! (get res k (transient ctype)) input))))))))
 
   (defn postprocess-group-by
     [res]

@@ -154,14 +154,19 @@
                   :group-by [?a ?b]
                   :select :*})
           q6 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?a p ?b] [?b p ?c]]}]
+                  :order ?c
+                  :group-by [?a ?b]
+                  :select ?c})
+          q7 (dsl/add-query-from-spec!
               g '{:q [{:where [[?a p ?b] [?b p ?c]]}
                       {:optional [[?a q ?aq]]}
                       {:optional [[?b q ?bq]]}]
                   :filter (in-set? ?a b c)})
-          q7 (dsl/add-query-from-spec!
+          q8 (dsl/add-query-from-spec!
               g '{:q [{:where [[?a p ?b]] :bind {?c (str ?a "->" ?b)}}]
                   :filter (= ?b b)})
-          q8 (dsl/add-query-from-spec!
+          q9 (dsl/add-query-from-spec!
               g '{:q [{:where [[?a p ?b]]}]
                   :filter (= ?b b)
                   :bind {?c (str ?a "->" ?b)}})]
@@ -190,17 +195,22 @@
            (first @q3)))
       (is (== 3 (count @q4)))
       (is (= '[{?c d} {?c e} {?c e}] @q4))
-      (is (= '{[a b] [{?a a ?b b ?c d} {?a a ?b b ?c e}]
-               [a c] [{?a a ?b c ?c e}]
-               [b e] [{?a b ?b e ?c f}]
-               [c e] [{?a c ?b e ?c f}]}
+      (is (= '{[a b] [{?a a, ?b b, ?c d} {?a a, ?b b, ?c e}],
+               [a c] [{?a a, ?b c, ?c e}]
+               [b e] [{?a b, ?b e, ?c f}]
+               [c e] [{?a c, ?b e, ?c f}]}
              @q5))
+      (is (= '{[a b] [{?c d} {?c e}]
+               [a c] [{?c e}]
+               [b e] [{?c f}]
+               [c e] [{?c f}]}
+             @q6))
       (is (= '#{{?a b, ?b e, ?c f}
                 {?a c, ?b e, ?c f, ?aq cc}}
-             @q6))
+             @q7))
       (is (= '#{{?a b ?b d ?c "b->d"} {?a b ?b e ?c "b->e"}}) @q7)
-      (is (= @q7 @q8))
-      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6 q7 q8])
+      (is (= @q8 @q9))
+      (run! #(f/remove-from-graph! % g) [q1 q2 q3 q4 q5 q6 q7 q8 q9])
       (is (== (+ 3 8) (count (f/vertices g))))))
 #+END_SRC
 
