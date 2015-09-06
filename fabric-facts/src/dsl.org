@@ -52,7 +52,7 @@ The only public part of this namespace consists of this single function:
   (defn add-query-from-spec!
     [g spec]
     (-> (compile-query g spec)
-        (compile-select-qvars g spec)))
+        (compile-query-result g spec)))
 #+END_SRC
 
 ** TODO Examples
@@ -419,16 +419,19 @@ TODO (see tests for various examples)
        (compile-sub-query g nil (first q) spec)
        (rest q))))
 
-  (defn compile-select-qvars
+  (defn compile-query-result-spec
+    [spec]
+    (cond-> spec
+      (:bind spec)      (update :bind compile-query-bindings)
+      (:filter spec)    (update :filter compile-query-option)
+      (:order spec)     (update :order compile-result-order)
+      (:group-by spec)  (update :group-by compile-result-grouping)
+      (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
+                            (update :aggregate compile-result-aggregation))))
+
+  (defn compile-query-result
     [result g spec]
-    (let [spec (cond-> spec
-                 (:bind spec)      (update :bind compile-query-bindings)
-                 (:filter spec)    (update :filter compile-query-option)
-                 (:order spec)     (update :order compile-result-order)
-                 (:group-by spec)  (update :group-by compile-result-grouping)
-                 (:aggregate spec) (-> (assoc :aggregate* (:aggregate spec))
-                                       (update :aggregate compile-result-aggregation)))]
-      (ff/add-query-result! g spec result)))
+    (ff/add-query-result! g (compile-query-result-spec spec) result))
 #+END_SRC
 
 ** Expressions
