@@ -407,16 +407,26 @@ a more efficient manner.
   (defn query-result-handler
     [queries]
     (fn [req]
-      (let [{:keys [id limit offset]} (:params req)
+      (let [{:keys [id limit offset spec]} (:params req)
             q (lookup queries id)]
         (if-let [qq (:query q)]
           (let [limit  (strf/parse-int limit 10 100)
                 offset (strf/parse-int offset 10 0)
-                body   (into (empty @qq) (comp (drop offset) (take limit)) @qq)]
+                res    (if spec
+                         (let [spec (-> (edn/read-string spec)
+                                        (select-keys [:filter :aggregate :order :group-by :select :bind]))
+                               spec (merge (dissoc (:spec q) :q) spec)
+                               cfn  (-> spec
+                                        (dsl/compile-query-result-spec)
+                                        (ff/make-query-result))]
+                           (info "merged result using:" spec)
+                           (cfn @(ff/pre-result-vertex qq)))
+                         @qq)
+                body   (into (empty @qq) (comp (drop offset) (take limit)) res)]
             (edn-response
              {:id id
               :count  (count body)
-              :total  (count @qq)
+              :total  (count res)
               :offset offset
               :spec   (:spec q)
               :body   body}
