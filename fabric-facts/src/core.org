@@ -1023,8 +1023,8 @@ See the [[./dsl.org#query-specification][query specification]] section in the DS
 available options...
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defn add-query-result!
-    [g {:keys [aggregate order group-by] :as spec} q]
+  (defn make-query-result
+    [{:keys [aggregate order group-by] :as spec}]
     (let [in-tx (if (and aggregate (not group-by))
                   (result-pre-aggregator aggregate))
           in-tx (if order
@@ -1036,18 +1036,22 @@ available options...
           cfn   (if group-by
                   (let [gfn (transient-group-by-reducer spec group-by)]
                     (if in-tx
-                      (fn [_ in] (postprocess-group-by (transduce tx gfn (in-tx (peek in)))))
-                      (fn [_ in] (postprocess-group-by (transduce tx gfn (peek in))))))
+                      (fn [in] (postprocess-group-by (transduce tx gfn (in-tx in))))
+                      (fn [in] (postprocess-group-by (transduce tx gfn in)))))
                   (if in-tx
-                    (fn [_ in] (into (if order [] #{}) tx (in-tx (peek in))))
-                    (fn [_ in] (into #{} tx (peek in)))))
-          cfn   (if (and aggregate group-by)
-                  (result-post-aggregator aggregate cfn spec)
-                  cfn)
-          res   (f/add-vertex!
-                 g nil
-                 {::f/collect-fn      (f/collect-pure cfn)
-                  ::f/score-signal-fn f/score-signal-with-new-edges})
+                    (fn [in] (into (if order [] #{}) tx (in-tx in)))
+                    (fn [in] (into #{} tx in))))]
+      (if (and aggregate group-by)
+        (result-post-aggregator aggregate cfn spec)
+        cfn)))
+
+  (defn add-query-result!
+    [g spec q]
+    (let [cfn  (make-query-result spec)
+          res  (f/add-vertex!
+                g nil
+                {::f/collect-fn      (f/collect-pure (fn [_ in] (cfn (peek in))))
+                 ::f/score-signal-fn f/score-signal-with-new-edges})
           qraw (result-vertex q)
           qres (as-query-entity res qraw [q] :query-result)]
       (f/add-edge! g qraw res f/signal-forward nil)
