@@ -372,137 +372,173 @@ a more efficient manner.
   (defn one-off-query-handler
     [model]
     (fn [req]
-      (let [spec    (edn/read-string (-> req :params :q))
-            _       (info :one-off-query spec)
-            q       (add-query model spec false)
-            handler (delayed-response-handler
-                     model
-                     #(deref q)
-                     #(let [{:keys [id limit offset]} (:params req)
-                            limit  (strf/parse-int limit 10 100)
-                            offset (strf/parse-int offset 10 0)
-                            body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
-                        (remove-query model q)
-                        (edn-response
-                         {:count  (count body)
-                          :total  (count @q)
-                          :offset offset
-                          :body   body}
-                         200)))]
-        (trigger-update model)
-        handler)))
+      (try
+        (let [spec    (edn/read-string (-> req :params :q))
+              _       (info :one-off-query spec)
+              q       (add-query model spec false)
+              handler (delayed-response-handler
+                       model
+                       #(deref q)
+                       #(let [{:keys [id limit offset]} (:params req)
+                              limit  (strf/parse-int limit 10 100)
+                              offset (strf/parse-int offset 10 0)
+                              body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                          (remove-query model q)
+                          (edn-response
+                           {:count  (count body)
+                            :total  (count @q)
+                            :offset offset
+                            :body   body}
+                           200)))]
+          (trigger-update model)
+          handler)
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-query-handler
     [queries]
     (fn [req]
-      (let [{:keys [id q]} (:params req)
-            q   (edn/read-string q)
-            id' (register queries id q)]
-        (if id'
-          (if (= id id')
-            (edn-response {:id id' :body "New query registered"} 202)
-            (edn-response {:id id' :body "Query already registered using another ID"} 303))
-          (edn-response {:id id :body "Query ID conflict"} 409)))))
+      (try
+        (let [{:keys [id q]} (:params req)
+              q   (edn/read-string q)
+              id' (register queries id q)]
+          (if id'
+            (if (= id id')
+              (edn-response {:id id' :body "New query registered"} 202)
+              (edn-response {:id id' :body "Query already registered using another ID"} 303))
+            (edn-response {:id id :body "Query ID conflict"} 409)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn query-result-handler
     [queries]
     (fn [req]
-      (let [{:keys [id limit offset spec]} (:params req)
-            q (lookup queries id)]
-        (if-let [qq (:query q)]
-          (let [limit  (strf/parse-int limit 10 100)
-                offset (strf/parse-int offset 10 0)
-                res    (if spec
-                         (let [spec (-> (edn/read-string spec)
-                                        (select-keys [:filter :aggregate :order :group-by :select :bind]))
-                               spec (merge (dissoc (:spec q) :q) spec)
-                               cfn  (-> spec
-                                        (dsl/compile-query-result-spec)
-                                        (ff/make-query-result))]
-                           (info "merged result using:" spec)
-                           (cfn @(ff/pre-result-vertex qq)))
-                         @qq)
-                body   (into (empty @qq) (comp (drop offset) (take limit)) res)]
-            (edn-response
-             {:id id
-              :count  (count body)
-              :total  (count res)
-              :offset offset
-              :spec   (:spec q)
-              :body   body}
-             200))
-          (edn-response {:id id} 404)))))
+      (try
+        (let [{:keys [id limit offset spec]} (:params req)
+              q (lookup queries id)]
+          (if-let [qq (:query q)]
+            (let [limit  (strf/parse-int limit 10 100)
+                  offset (strf/parse-int offset 10 0)
+                  res    (if spec
+                           (let [spec (-> (edn/read-string spec)
+                                          (select-keys [:filter :aggregate :order :group-by :select :bind]))
+                                 spec (merge (dissoc (:spec q) :q) spec)
+                                 cfn  (-> spec
+                                          (dsl/compile-query-result-spec)
+                                          (ff/make-query-result))]
+                             (info "merged result using:" spec)
+                             (cfn @(ff/pre-result-vertex qq)))
+                           @qq)
+                  body   (into (empty @qq) (comp (drop offset) (take limit)) res)]
+              (edn-response
+               {:id id
+                :count  (count body)
+                :total  (count res)
+                :offset offset
+                :spec   (:spec q)
+                :body   body}
+               200))
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn delete-query-handler
     [queries]
     (fn [req]
-      (let [id (-> req :params :id)]
-        (if (deregister queries id)
-          (edn-response {:id id :body "Query scheduled for deletion"} 202)
-          (edn-response {:id id} 404)))))
+      (try
+        (let [id (-> req :params :id)]
+          (if (deregister queries id)
+            (edn-response {:id id :body "Query scheduled for deletion"} 202)
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn list-registry-handler
     [registry]
     (fn [req]
-      (let [items (reduce-kv
-                   (fn [acc k v] (assoc acc k (:spec v)))
-                   {} (list-registry registry))]
-        (edn-response {:body items} 200))))
+      (try
+        (let [items (reduce-kv
+                     (fn [acc k v] (assoc acc k (:spec v)))
+                     {} (list-registry registry))]
+          (edn-response {:body items} 200))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-rule-handler
     [rules]
     (fn [req]
-      (let [{:keys [id q prod]} (:params req)
-            q    (edn/read-string q)
-            prod (edn/read-string prod)
-            spec {:q q :prod (set prod)}
-            id   (or  (register rules id spec))]
-        (if id
-          (edn-response {:id id :body "Rule registered"} 202)
-          (edn-response {:id id :body "Rule ID conflict"} 409)))))
+      (try
+        (let [{:keys [id q prod]} (:params req)
+              q    (edn/read-string q)
+              prod (edn/read-string prod)
+              spec {:q q :prod (set prod)}
+              id   (or  (register rules id spec))]
+          (if id
+            (edn-response {:id id :body "Rule registered"} 202)
+            (edn-response {:id id :body "Rule ID conflict"} 409)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn rule-result-handler
     [rules]
     (fn [req]
-      (let [{:keys [id limit offset]} (:params req)
-            r (lookup rules id)]
-        (if-let [rr (:rule r)]
-          (let [limit  (strf/parse-int limit 10 100)
-                offset (strf/parse-int offset 10 0)
-                body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
-            (edn-response
-             {:id id
-              :count  (count body)
-              :total  (count @rr)
-              :offset offset
-              :spec   (:spec r)
-              :body   body}
-             200))
-          (edn-response {:id id} 404)))))
+      (try
+        (let [{:keys [id limit offset]} (:params req)
+              r (lookup rules id)]
+          (if-let [rr (:rule r)]
+            (let [limit  (strf/parse-int limit 10 100)
+                  offset (strf/parse-int offset 10 0)
+                  body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
+              (edn-response
+               {:id id
+                :count  (count body)
+                :total  (count @rr)
+                :offset offset
+                :spec   (:spec r)
+                :body   body}
+               200))
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn delete-rule-handler
     [rules]
     (fn [req]
-      (let [id (-> req :params :id)]
-        (if (deregister rules id)
-          (edn-response {:id id :body "Rule scheduled for deletion"} 202)
-          (edn-response {:id id} 404)))))
+      (try
+        (let [id (-> req :params :id)]
+          (if (deregister rules id)
+            (edn-response {:id id :body "Rule scheduled for deletion"} 202)
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn add-facts-handler
     [model]
     (fn [req]
-      (let [{:keys [facts uri]} (:params req)]
-        (cond
-          facts (let [facts (edn/read-string facts)]
-                  (go (add-facts model facts))
-                  (edn-response {:body (str "adding " (count facts) " facts")} 202))
-          uri   (let [facts @(d/chain (http/get uri)
-                                      :body
-                                      bs/to-string
-                                      nt/parse-ntriples)]
-                  (go (add-facts model facts))
-                  (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
-          :else (edn-response {:body "No facts or uri param given"} 400)))))
+      (try
+        (let [{:keys [facts uri]} (:params req)]
+          (cond
+            facts (let [facts (edn/read-string facts)]
+                    (go (add-facts model facts))
+                    (edn-response {:body (str "adding " (count facts) " facts")} 202))
+            uri   (let [facts @(d/chain (http/get uri)
+                                        :body
+                                        bs/to-string
+                                        nt/parse-ntriples)]
+                    (go (add-facts model facts))
+                    (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
+            :else (edn-response {:body "No facts or uri param given"} 400)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
 
   (defn wrap-middleware
     [config routes]
