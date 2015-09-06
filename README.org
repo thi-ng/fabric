@@ -386,21 +386,22 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   (prn @people)
   ;; #{{?p toxi} {?p noah} {?p ingo}}
 
-  ;; queries are composable:
-  ;; add filtered join query (reusing above people query) to only select
-  ;; people with age < 20
+  ;; complex queries can be more easily defined via query specs:
+  ;; here, a filtered join query (reusing above people query) to only select
+  ;; people with age < 20 and inject a new result var ?num (result count)
 
   (def children
     (dsl/add-query-from-spec!
-     g '{:q [{:where [[?p age ?age] [?p type person]]
-              :filter (< ?age 20)}]}))
+     g '{:q         [{:where  [[?p age ?age] [?p type person]]
+                      :filter (< ?age 20)}]
+         :aggregate {?num (agg-count)}}))
 
   (ff/add-fact! g '[noah age 13])
   (ff/add-fact! g '[toxi age 40])
 
   (f/execute! ctx)
   (prn @children)
-  ;; #{{?p noah ?age 13}}
+  ;; #{{?p noah ?age 13 ?num 1}}
 
   ;; join queries can also be constructed directly:
   ;; a query returning all creative-works w/ their authors & urls
@@ -411,12 +412,6 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   (f/execute! ctx)
   (prn @projects)
   ;; #{{?prj fabric, ?uri "http://thi.ng/fabric", ?auth toxi}}
-
-  ;; add result transformations (e.g. a counter)
-  (def num-people (ff/add-counter! g (ff/result-vertex people)))
-  (f/execute! ctx)
-  (prn @num-people)
-  ;; 3
 #+END_SRC
 
 [[./fabric-facts/test/core.org][full source]]

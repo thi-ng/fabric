@@ -1052,15 +1052,6 @@ available options...
           qres (as-query-entity res qraw [q] :query-result)]
       (f/add-edge! g qraw res f/signal-forward nil)
       qres))
-
-  (defn add-counter!
-    [g src]
-    (let [v (f/add-vertex!
-             g nil
-             {::f/collect-fn      (f/collect-pure (fn [_ in] (count (peek in))))
-              ::f/score-signal-fn f/score-signal-with-new-edges})]
-      (f/add-edge! g src v f/signal-forward nil)
-      v))
 #+END_SRC
 
 *** Query helpers
