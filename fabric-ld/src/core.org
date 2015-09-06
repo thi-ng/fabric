@@ -431,7 +431,7 @@ a more efficient manner.
                              (info "merged result using:" spec)
                              (cfn @(ff/pre-result-vertex qq)))
                            @qq)
-                  body   (into (empty @qq) (comp (drop offset) (take limit)) res)]
+                  body   (into (empty res) (comp (drop offset) (take limit)) res)]
               (edn-response
                {:id id
                 :count  (count body)
