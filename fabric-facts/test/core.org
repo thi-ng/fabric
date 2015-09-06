@@ -409,18 +409,41 @@
         #(.log js/console (pr-str %))))
 
    (def default-facts
-     '[[knows type symmetric-prop]
-       [knows domain person]
-       [author domain person]
-       [author range creative-work]
-       [parent sub-prop-of ancestor]
-       [ancestor type transitive-prop]
-       [ancestor domain person]
-       [ancestor range person]
-       [toxi author fabric]
-       [fabric type project]
-       [toxi modified 23]
-       [toxi modified 42]])
+     '#{[knows type symmetric-prop]
+        [knows domain person]
+        [author domain person]
+        [author range creative-work]
+        [parent sub-prop-of ancestor]
+        [ancestor type transitive-prop]
+        [ancestor domain person]
+        [ancestor range person]
+        [toxi author fabric]
+        [fabric type project]
+        [toxi modified 23]
+        [toxi modified 42]})
+
+   (def default-and-inferred-facts-1
+     (-> default-facts
+         (conj '[toxi type person] '[fabric type creative-work])
+         (disj '[toxi modified 23])))
+
+   (def default-and-inferred-facts-2
+     (into
+      default-and-inferred-facts-1
+      '#{[noah type person]
+         [fabric tag clojure]
+         [toxi author geom]
+         [noah knows toxi]
+         [ingo type person]
+         [ingo ancestor noah]
+         [toxi ancestor noah]
+         [ingo ancestor toxi]
+         [ingo parent toxi]
+         [geom type project]
+         [geom type creative-work]
+         [toxi knows noah]
+         [geom tag clojure]
+         [toxi parent noah]}))
 
    (def inference-rules
      {:symmetric  ['[[?a ?prop ?b] [?prop type symmetric-prop]]
@@ -456,8 +479,6 @@
            projects     (ff/add-query! g [nil 'type 'project] {})
            knows        (ff/add-query! g [nil 'knows nil] {})
            all          (ff/add-query! g [nil nil nil] {})
-           num-projects (ff/add-counter! g (ff/result-vertex projects))
-           num-types    (ff/add-counter! g (ff/result-vertex types))
            knows-pq     (ff/add-param-query! g '[?s knows ?o] {})
            jq           (ff/add-query-join! g '[[?p author ?prj] [?prj type project] [?p type person]] {})
            tq           (ff/add-query-join! g '[[?p author ?prj] [?prj tag ?t]] {})]
@@ -474,9 +495,7 @@
         :knows        knows
         :knows-pq     knows-pq
         :jq           jq
-        :tq           tq
-        :num-projects num-projects
-        :num-types    num-types}))
+        :tq           tq}))
  #+END_SRC
 
  #+BEGIN_SRC clojure :noweb-ref tests
@@ -486,7 +505,7 @@
            ctx (f/sync-execution-context {:graph g})
            res (f/execute! ctx)]
        (warn :result res)
-       (warn (sort @all))
+       (is (= default-and-inferred-facts-1 @all))
        (run!
         #(ff/add-fact! g %)
         '[[toxi parent noah]
@@ -497,16 +516,16 @@
           [geom tag clojure]
           [fabric tag clojure]])
        (warn :result2 (f/execute! ctx))
-       (warn :all (sort @all))
-       (warn :knows @knows-pq)
-       (warn :jq @jq)
-       (warn :tq @tq)
+       (is (= default-and-inferred-facts-2 @all))
+       (is (= '#{{?s noah, ?o toxi} {?s toxi, ?o noah}} @knows-pq))
+       (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+       (is (= '#{{?p toxi, ?prj fabric, ?t clojure} {?p toxi, ?prj geom, ?t clojure}} @tq))
        (f/signal! (ff/remove-fact! g '[geom tag clojure]) f/sync-vertex-signal)
        (f/signal! (ff/remove-fact! g '[fabric tag clojure]) f/sync-vertex-signal)
        (warn :result3 (f/execute! ctx))
-       (warn :all @all)
-       (warn :jq @jq)
-       (warn :tq @tq)
+       (is (= (disj default-and-inferred-facts-2 '[geom tag clojure] '[fabric tag clojure]) @all))
+       (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+       (is (= #{} @tq))
        ;;(ff/remove-fact-graph-logger log)
        (assoc spec :ctx ctx)))
 
@@ -527,7 +546,7 @@
        (go
          (let [res (<! ctx-chan)]
            (warn :result res)
-           (warn (sort @all))
+           (is (= default-and-inferred-facts-1 @all))
            (run!
             #(ff/add-fact! g %)
             '[[toxi parent noah]
@@ -540,17 +559,18 @@
            (f/notify! ctx)
            (let [res (<! ctx-chan)]
              (warn :result2 res)
-             (warn :all (sort @all))
-             (warn :knows @knows-pq)
-             (warn :jq @jq)
-             (warn :tq @tq)
+             (is (= default-and-inferred-facts-2 @all))
+             (is (= '#{{?s noah, ?o toxi} {?s toxi, ?o noah}} @knows-pq))
+             (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+             (is (= '#{{?p toxi, ?prj fabric, ?t clojure} {?p toxi, ?prj geom, ?t clojure}} @tq))
              (ff/remove-fact! g '[geom tag clojure])
              (ff/remove-fact! g '[fabric tag clojure])
              (f/notify! ctx)
              (let [res (<! ctx-chan)]
                (warn :result3 res)
-               (warn :jq @jq)
-               (warn :tq @tq)
+               (is (= (disj default-and-inferred-facts-2 '[geom tag clojure] '[fabric tag clojure]) @all))
+               (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+               (is (= #{} @tq))
                (f/stop! ctx)
                ;;(ff/remove-fact-graph-logger log)
                (warn :done)
