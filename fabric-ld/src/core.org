@@ -60,7 +60,9 @@
     (start
       [_]
       (info "initializing graph")
-      (let [g (ff/fact-graph {:transform (ff/combine-transforms prefixes 3)})]
+      (let [g (ff/fact-graph
+               (merge {:transform (ff/combine-transforms prefixes 3)}
+                      config))]
         (when-let [path (:edn-path config)]
           (with-open [r (-> path io/reader PushbackReader.)]
             (let [facts (ff/map->facts (edn/read r))]
@@ -819,15 +821,16 @@ a more efficient manner.
                             "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                             "schema"  "http://schema.org/"
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
-     :logger   {:fn   default-logger
-                :path "session-%s.edn"}
-     :graph    {:edn-path "../../../ea3/facts.edn"}
+     :logger   {:fn        default-logger
+                :path      "session-%s.edn"}
+     :graph    {:edn-path  "../../../ea3/facts.edn"
+                :index     (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {}
-     :queries  {:specs {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
-     :rules    {:specs (merge
-                        inf-rules-props
-                        inf-rules-class-semantics
-                        inf-rules-schema)}
+     :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
+     :rules    {:specs     (merge
+                            inf-rules-props
+                            inf-rules-class-semantics
+                            inf-rules-schema)}
      :handler  {:route-provider app-routes
                 :dev true}
      :server   {:port 8000}})
