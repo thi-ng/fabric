@@ -24,7 +24,7 @@
       (is (= :param-query (f/component-type q2)))
       (is (every? set? [@q1 @q2 @q3 @q4]))
       (is (= '#{[alice friend dora] [bob friend charlie] [alice friend bob]} @q1))
-      (is (= '#{{?p email, ?o "a@b.com"} {?p friend, ?o bob} {?p friend, ?o dora}} @q2))
+      (is (= '#{{?p email ?o "a@b.com"} {?p friend ?o bob} {?p friend ?o dora}} @q2))
       (is (== 1 (count @q3)))
       (is (= '#{[bob friend charlie]} @q4))
       (is (== 1 (count @q5)))
@@ -57,11 +57,11 @@
       (ff/add-fact! g '[bob nick bobby])
       (f/execute! (f/sync-execution-context {:graph g}))
       (is (= :join-query (f/component-type jq1)))
-      (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob}} @q1))
-      (is (= '#{{?b alice, ?c dora} {?b bob, ?c charlie} {?b alice, ?c bob}} @q2))
+      (is (= '#{{?a alice ?b dora} {?a bob ?b charlie} {?a alice ?b bob}} @q1))
+      (is (= '#{{?b alice ?c dora} {?b bob ?c charlie} {?b alice ?c bob}} @q2))
       (is (= '#{{?a alice ?b bob ?c charlie}} @jq1))
       (is (= @jq1 @jq2))
-      (is (= '#{{?a alice, ?b dora} {?a bob, ?b charlie} {?a alice, ?b bob, ?n bobby}} @jq3))
+      (is (= '#{{?a alice ?b dora} {?a bob ?b charlie} {?a alice ?b bob ?n bobby}} @jq3))
       (is (= @jq3 @jq4))
       (is (= '#{{?a alice ?b bob ?c charlie}} @jq5))
       (is (= @jq5 @jq6))
@@ -101,16 +101,16 @@
       (f/execute! ctx)
       (is (= :path-query (f/component-type pq1)))
       (is (= '#{{?s a ?o d}} @pq1))
-      (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d}
-                {?s b, ?o c} {?s b, ?o d}
-                {?s c, ?o d}}
+      (is (= '#{{?s a ?o b} {?s a ?o c} {?s a ?o d}
+                {?s b ?o c} {?s b ?o d}
+                {?s c ?o d}}
              @pq2))
-      (is (= '#{{?s a, ?o c} {?s a, ?o d} {?s b, ?o e}} @pq3))
+      (is (= '#{{?s a ?o c} {?s a ?o d} {?s b ?o e}} @pq3))
       (is (= '#{{?o c} {?o d}} @pq4))
       (is (= '#{{?s a} {?s b}} @pq5))
-      (is (= '#{{?s a, ?o b} {?s a, ?o c} {?s a, ?o d} {?s a, ?o e}
-                {?s b, ?o c} {?s b, ?o d} {?s b, ?o e}
-                {?s c, ?o d} {?s c, ?o e}}
+      (is (= '#{{?s a ?o b} {?s a ?o c} {?s a ?o d} {?s a ?o e}
+                {?s b ?o c} {?s b ?o d} {?s b ?o e}
+                {?s c ?o d} {?s c ?o e}}
              @pq6))
       (warn :pq1 @pq1)
       (warn :pq2 @pq2)
@@ -181,32 +181,32 @@
               [c q cc]])
       (f/execute! (f/sync-execution-context {:graph g}))
       (is (= :query-result (f/component-type q1)))
-      (is (= '#{{?a a, ?b b, ?c e, ?aq aa}
-                {?a a, ?b c, ?c e, ?aq aa, ?bq cc}
-                {?a a, ?b b, ?c d, ?aq aa}
-                {?a c, ?b e, ?c f, ?aq cc}
-                {?a b, ?b e, ?c f}}
+      (is (= '#{{?a a ?b b ?c e ?aq aa}
+                {?a a ?b c ?c e ?aq aa ?bq cc}
+                {?a a ?b b ?c d ?aq aa}
+                {?a c ?b e ?c f ?aq cc}
+                {?a b ?b e ?c f}}
              @q1))
-      (is (= '#{{?a c, ?b e, ?c f, ?aq cc}} @q2))
+      (is (= '#{{?a c ?b e ?c f ?aq cc}} @q2))
       (is (== 1 (count @q3)))
-      (is ('#{{?a a, ?b b, ?c e, ?aq aa}
-              {?a a, ?b c, ?c e, ?aq aa, ?bq cc}
-              {?a a, ?b b, ?c d, ?aq aa}}
+      (is ('#{{?a a ?b b ?c e ?aq aa}
+              {?a a ?b c ?c e ?aq aa ?bq cc}
+              {?a a ?b b ?c d ?aq aa}}
            (first @q3)))
       (is (== 3 (count @q4)))
       (is (= '[{?c d} {?c e} {?c e}] @q4))
-      (is (= '{[a b] [{?a a, ?b b, ?c d} {?a a, ?b b, ?c e}],
-               [a c] [{?a a, ?b c, ?c e}]
-               [b e] [{?a b, ?b e, ?c f}]
-               [c e] [{?a c, ?b e, ?c f}]}
+      (is (= '{[a b] [{?a a ?b b ?c d} {?a a ?b b ?c e}]
+               [a c] [{?a a ?b c ?c e}]
+               [b e] [{?a b ?b e ?c f}]
+               [c e] [{?a c ?b e ?c f}]}
              @q5))
       (is (= '{[a b] [{?c d} {?c e}]
                [a c] [{?c e}]
                [b e] [{?c f}]
                [c e] [{?c f}]}
              @q6))
-      (is (= '#{{?a b, ?b e, ?c f}
-                {?a c, ?b e, ?c f, ?aq cc}}
+      (is (= '#{{?a b ?b e ?c f}
+                {?a c ?b e ?c f ?aq cc}}
              @q7))
       (is (= '#{{?a b ?b d ?c "b->d"} {?a b ?b e ?c "b->e"}}) @q7)
       (is (= @q8 @q9))
@@ -236,12 +236,12 @@
               [c p e]
               [e p f]])
       (f/execute! (f/sync-execution-context {:graph g}))
-      (is (= '#{{?a a, ?b b} {?a a, ?b c} {?a a, ?b d} {?a a, ?b e} {?a a, ?b f}
-                {?a b, ?b d} {?a b, ?b e} {?a b, ?b f}
-                {?a c, ?b e} {?a c, ?b f}
-                {?a e, ?b f}}
+      (is (= '#{{?a a ?b b} {?a a ?b c} {?a a ?b d} {?a a ?b e} {?a a ?b f}
+                {?a b ?b d} {?a b ?b e} {?a b ?b f}
+                {?a c ?b e} {?a c ?b f}
+                {?a e ?b f}}
              @q1))
-      (is (= '#{{?a a, ?b d} {?a a, ?b e} {?a b, ?b f} {?a c, ?b f}} @q2))
+      (is (= '#{{?a a ?b d} {?a a ?b e} {?a b ?b f} {?a c ?b f}} @q2))
       (is (= '#{{?b d} {?b e} {?b f}} @q3))))
 #+END_SRC
 
@@ -294,24 +294,24 @@
       (run! #(ff/add-fact! g %)
             '[[b1 price 10] [b2 price 20] [b1 price 70] [b1 price 20]])
       (f/execute! (f/sync-execution-context {:graph g}))
-      (is (= '[{?b b1, ?p 10, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-               {?b b1, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-               {?b b1, ?p 70, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}
-               {?b b2, ?p 20, ?total 120, ?avg 30, ?mean 20, ?num 4, ?min 10, ?max 70}]
+      (is (= '[{?b b1 ?p 10 ?total 120 ?avg 30 ?mean 20 ?num 4 ?min 10 ?max 70}
+               {?b b1 ?p 20 ?total 120 ?avg 30 ?mean 20 ?num 4 ?min 10 ?max 70}
+               {?b b1 ?p 70 ?total 120 ?avg 30 ?mean 20 ?num 4 ?min 10 ?max 70}
+               {?b b2 ?p 20 ?total 120 ?avg 30 ?mean 20 ?num 4 ?min 10 ?max 70}]
              @q1))
-      (is (= '{b1 [{?b b1, ?p 10, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
-                   {?b b1, ?p 20, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}
-                   {?b b1, ?p 70, ?total 100, ?avg 33, ?mean 20, ?num 3, ?min 10, ?max 70}]
-               b2 [{?b b2, ?p 20, ?total 20, ?avg 20, ?mean 20, ?num 1, ?min 20, ?max 20}]}
+      (is (= '{b1 [{?b b1 ?p 10 ?total 100 ?avg 33 ?mean 20 ?num 3 ?min 10 ?max 70}
+                   {?b b1 ?p 20 ?total 100 ?avg 33 ?mean 20 ?num 3 ?min 10 ?max 70}
+                   {?b b1 ?p 70 ?total 100 ?avg 33 ?mean 20 ?num 3 ?min 10 ?max 70}]
+               b2 [{?b b2 ?p 20 ?total 20 ?avg 20 ?mean 20 ?num 1 ?min 20 ?max 20}]}
              @q2))
       (is (= '[{?total 120 ?avg 30}] @q3))
-      (is (= '{b1 {?total 100, ?avg 33}, b2 {?total 20, ?avg 20}} @q4))
-      (is (= '{0.0 [{?b b1, ?p 10, ?total 50, ?avg 17, ?mean 20, ?num 3, ?min 10, ?max 20}
-                    {?b b1, ?p 20, ?total 50, ?avg 17, ?mean 20, ?num 3, ?min 10, ?max 20}
-                    {?b b2, ?p 20, ?total 50, ?avg 17, ?mean 20, ?num 3, ?min 10, ?max 20}],
-               50.0 [{?b b1, ?p 70, ?total 70, ?avg 70, ?mean 70, ?num 1, ?min 70, ?max 70}]}
+      (is (= '{b1 {?total 100 ?avg 33} b2 {?total 20 ?avg 20}} @q4))
+      (is (= '{0.0 [{?b b1 ?p 10 ?total 50 ?avg 17 ?mean 20 ?num 3 ?min 10 ?max 20}
+                    {?b b1 ?p 20 ?total 50 ?avg 17 ?mean 20 ?num 3 ?min 10 ?max 20}
+                    {?b b2 ?p 20 ?total 50 ?avg 17 ?mean 20 ?num 3 ?min 10 ?max 20}]
+               50.0 [{?b b1 ?p 70 ?total 70 ?avg 70 ?mean 70 ?num 1 ?min 70 ?max 70}]}
              @q5))
-      (is (= '{b1 #{{?b b1, ?pc #{70 20 10}}}, b2 #{{?b b2, ?pc #{20}}}} @q6))))
+      (is (= '{b1 #{{?b b1 ?pc #{70 20 10}}} b2 #{{?b b2 ?pc #{20}}}} @q6))))
 #+END_SRC
 
 *** DSL expressions
@@ -380,6 +380,48 @@
     (is (== 0 ((dsl/compile-expr '(agg-count)) nil)))
     (is (= #{50 10} ((dsl/compile-expr '(agg-collect ?a)) '[{?a 50} {?b 25} {?a 10} {?b 5}])))
     )
+#+END_SRC
+
+*** Alias indexing
+
+#+BEGIN_SRC clojure :noweb-ref tests
+  (deftest test-alias-index
+    (let [g (ff/fact-graph {:index (ff/alias-index-vertex #{'same-as 'equiv})})
+          ctx (f/sync-execution-context {:graph g})
+          q1 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?s ?p ?o]]}]})
+          q2 (dsl/add-query-from-spec!
+              g '{:q [{:where [[a ?p ?o]]}
+                      {:optional [[?o name ?n]]}]})
+          q3 (dsl/add-query-from-spec!
+              g '{:q [{:where [[aa ?p ?o]]}
+                      {:optional [[?o name ?n]]}]})
+          facts '#{[a p1 b]
+                   [b name bob]
+                   [a same-as aa]
+                   [p1 same-as p2]
+                   [b equiv bb]
+                   [aa p2 bb]}]
+      (run! #(ff/add-fact! g %) facts)
+      (f/execute! ctx)
+      (is (= '#{{?s a ?p p1 ?o b}
+                {?s a ?p same-as ?o aa}
+                {?s b ?p equiv ?o bb}
+                {?s aa ?p p2 ?o bb}
+                {?s p1 ?p same-as ?o p2}
+                {?s b ?p name ?o bob}}
+             @q1))
+      (is (= '#{{?p p1 ?o b ?n bob}
+                {?p p2 ?o bb}
+                {?p same-as ?o aa}}
+             @q2))
+      (is (= @q2 @q3))
+      (f/signal! (ff/remove-fact! g '[a same-as aa]) f/sync-vertex-signal)
+      (f/execute! ctx)
+      (is (== 5 (count @q1)))
+      (is (= '#{{?p p1 ?o b ?n bob}} @q2))
+      (is (= '#{{?p p2 ?o bb}} @q3))
+      (doseq [i (ff/fact-indices g)] (debug :index @i))))
 #+END_SRC
 
 *** Map conversion
@@ -527,14 +569,14 @@
           [fabric tag clojure]])
        (warn :result2 (f/execute! ctx))
        (is (= default-and-inferred-facts-2 @all))
-       (is (= '#{{?s noah, ?o toxi} {?s toxi, ?o noah}} @knows-pq))
-       (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
-       (is (= '#{{?p toxi, ?prj fabric, ?t clojure} {?p toxi, ?prj geom, ?t clojure}} @tq))
+       (is (= '#{{?s noah ?o toxi} {?s toxi ?o noah}} @knows-pq))
+       (is (= '#{{?p toxi ?prj fabric} {?p toxi ?prj geom}} @jq))
+       (is (= '#{{?p toxi ?prj fabric ?t clojure} {?p toxi ?prj geom ?t clojure}} @tq))
        (f/signal! (ff/remove-fact! g '[geom tag clojure]) f/sync-vertex-signal)
        (f/signal! (ff/remove-fact! g '[fabric tag clojure]) f/sync-vertex-signal)
        (warn :result3 (f/execute! ctx))
        (is (= (disj default-and-inferred-facts-2 '[geom tag clojure] '[fabric tag clojure]) @all))
-       (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+       (is (= '#{{?p toxi ?prj fabric} {?p toxi ?prj geom}} @jq))
        (is (= #{} @tq))
        ;;(ff/remove-fact-graph-logger log)
        (assoc spec :ctx ctx)))
@@ -570,16 +612,16 @@
            (let [res (<! ctx-chan)]
              (warn :result2 res)
              (is (= default-and-inferred-facts-2 @all))
-             (is (= '#{{?s noah, ?o toxi} {?s toxi, ?o noah}} @knows-pq))
-             (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
-             (is (= '#{{?p toxi, ?prj fabric, ?t clojure} {?p toxi, ?prj geom, ?t clojure}} @tq))
+             (is (= '#{{?s noah ?o toxi} {?s toxi ?o noah}} @knows-pq))
+             (is (= '#{{?p toxi ?prj fabric} {?p toxi ?prj geom}} @jq))
+             (is (= '#{{?p toxi ?prj fabric ?t clojure} {?p toxi ?prj geom ?t clojure}} @tq))
              (ff/remove-fact! g '[geom tag clojure])
              (ff/remove-fact! g '[fabric tag clojure])
              (f/notify! ctx)
              (let [res (<! ctx-chan)]
                (warn :result3 res)
                (is (= (disj default-and-inferred-facts-2 '[geom tag clojure] '[fabric tag clojure]) @all))
-               (is (= '#{{?p toxi, ?prj fabric} {?p toxi, ?prj geom}} @jq))
+               (is (= '#{{?p toxi ?prj fabric} {?p toxi ?prj geom}} @jq))
                (is (= #{} @tq))
                (f/stop! ctx)
                ;;(ff/remove-fact-graph-logger log)
