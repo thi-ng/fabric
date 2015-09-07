@@ -386,7 +386,7 @@
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-alias-index
-    (let [g (ff/fact-graph {:index (ff/alias-index-vertex #{'same-as 'equiv})})
+    (let [g (ff/fact-graph {:index (ff/alias-index-vertex #{'same-as})})
           ctx (f/sync-execution-context {:graph g})
           q1 (dsl/add-query-from-spec!
               g '{:q [{:where [[?s ?p ?o]]}]})
@@ -396,6 +396,8 @@
           q3 (dsl/add-query-from-spec!
               g '{:q [{:where [[aa ?p ?o]]}
                       {:optional [[?o name ?n]]}]})
+          q4 (dsl/add-query-from-spec!
+              g '{:q [{:where [[?s ?p b]]}]})
           facts '#{[a p1 b]
                    [b name bob]
                    [a same-as aa]
@@ -404,24 +406,43 @@
                    [aa p2 bb]}]
       (run! #(ff/add-fact! g %) facts)
       (f/execute! ctx)
+      (doseq [i @(ff/fact-indices g)] (warn :index @i))
       (is (= '#{{?s a ?p p1 ?o b}
                 {?s a ?p same-as ?o aa}
-                {?s b ?p equiv ?o bb}
                 {?s aa ?p p2 ?o bb}
-                {?s p1 ?p same-as ?o p2}
-                {?s b ?p name ?o bob}}
+                {?s b ?p equiv ?o bb}
+                {?s b ?p name ?o bob}
+                {?s p1 ?p same-as ?o p2}}
              @q1))
       (is (= '#{{?p p1 ?o b ?n bob}
                 {?p p2 ?o bb}
                 {?p same-as ?o aa}}
              @q2))
       (is (= @q2 @q3))
+      (is (= '#{{?s a ?p p1}} @q4))
+      (ff/add-fact! g '[equiv same-as same-as])
+      (f/execute! ctx)
+      (doseq [i @(ff/fact-indices g)] (warn :index @i))
+      (is (= '#{{?s a ?p p1 ?o b}
+                {?s a ?p same-as ?o aa}
+                {?s aa ?p p2 ?o bb}
+                {?s b ?p equiv ?o bb}
+                {?s b ?p name ?o bob}
+                {?s equiv ?p same-as ?o same-as}
+                {?s p1 ?p same-as ?o p2}}
+             @q1))
+      (is (= '#{{?p p1 ?o b ?n bob}
+                {?p p2 ?o bb}
+                {?p same-as ?o aa}}
+             @q2))
+      (is (= @q2 @q3))
+      (is (= '#{{?s a ?p p1} {?s aa ?p p2} {?s b, ?p equiv}} @q4))
       (f/signal! (ff/remove-fact! g '[a same-as aa]) f/sync-vertex-signal)
       (f/execute! ctx)
-      (is (== 5 (count @q1)))
+      (is (== 6 (count @q1)))
       (is (= '#{{?p p1 ?o b ?n bob}} @q2))
       (is (= '#{{?p p2 ?o bb}} @q3))
-      (doseq [i (ff/fact-indices g)] (debug :index @i))))
+      (doseq [i @(ff/fact-indices g)] (warn :index @i))))
 #+END_SRC
 
 *** Map conversion
