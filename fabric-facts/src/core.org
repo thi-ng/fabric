@@ -55,6 +55,9 @@ and their roles are described in more detail throughout this document.
     (cache! [_ type k v])
     (expire! [_ type k]))
 
+  (defprotocol IFactIndex
+    (index-signal-handler [_]))
+
   (defprotocol IFactQuery
     (raw-pattern [_]))
 
@@ -492,17 +495,17 @@ keys:
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :len       - fact length (default 3)
-    :index     - index vertex ctor (default index-vertex)
+    :index     - index vertex ctor (default default-index-vertex)
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
     ([{:keys [graph len index transform]
        :or   {graph     (f/compute-graph)
               len       3
-              index     index-vertex
+              index     default-index-vertex
               transform identity-transform}}]
      (map->FactGraph
-      {:indices (mapv #(index graph %) (range len))
+      {:indices (mapv #(add-index-vertex! graph (index %)) (range len))
        :facts   (atom {})
        :cache   (atom {})
        :ftx     transform
@@ -518,11 +521,97 @@ following section shows how these vertices are used (users don't need
 to deal with them directly, though).
 
 #+BEGIN_SRC clojure :noweb-ref index-v
-(defn- index-vertex
-  [g idx]
-  (f/add-vertex!
-   g {} {::f/collect-fn      (collect-index idx)
-         ::f/score-signal-fn f/score-signal-with-new-edges}))
+  (deftype IndexVertex
+      [id index prev-index uncollected signal-map new-edges outs
+       signal-fn collect-fn]
+    #?@(:clj
+         [clojure.lang.IDeref
+          (deref
+           [_] @index)]
+         :cljs
+         [IDeref
+          (-deref
+           [_] @index)])
+    f/IVertex
+    (vertex-id
+      [_] id)
+    (set-value!
+      [_ val] (reset! index val) _)
+    (update-value!
+      [_ f] (swap! index f) _)
+    (previous-value
+      [_] @prev-index)
+    (collect!
+      [_]
+      (collect-fn _)
+      (reset! uncollected [])
+      _)
+    (collect-final!
+      [_] _)
+    (score-collect
+      [_] (count @uncollected))
+    (connect-to!
+      [_ v sig-fn opts]
+      (swap! outs assoc v [sig-fn opts])
+      (swap! new-edges inc)
+      (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
+      _)
+    (neighbors
+      [_] (keys @outs))
+    (disconnect-neighbor!
+      [_ v]
+      (when v
+        (debug id "disconnect from" (f/vertex-id v))
+        (swap! outs dissoc v))
+      _)
+    (disconnect-all!
+      [_]
+      (run! #(f/disconnect-neighbor! _ %) (keys @outs))
+      _)
+    (new-edge-count
+      [_] @new-edges)
+    (score-signal
+      [_] (+ @new-edges (if (= @index @prev-index) 0 1)))
+    (signal!
+      [_ handler]
+      (reset! prev-index @index)
+      (reset! new-edges 0)
+      (handler _ @outs))
+    (receive-signal
+      [_ src sig]
+      (if-not (= sig (@signal-map src))
+        (do (swap! uncollected conj sig)
+            (swap! signal-map assoc src sig)
+            true)
+        (debug id " ignoring unchanged signal: " (pr-str sig))))
+    (signal-map
+      [_] @signal-map)
+    (uncollected-signals
+      [_] @uncollected)
+    IFactIndex
+    (index-signal-handler
+      [_] signal-fn))
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+  (defn add-index-vertex!
+    [g ctor]
+    (f/add-vertex! g nil nil ctor))
+
+  (defn default-index-vertex
+    [spo]
+    (fn
+      [id _ _]
+      (IndexVertex.
+       id
+       (atom {})              ;; index
+       (atom nil)             ;; prev
+       (atom [])              ;; uncollected
+       (atom {})              ;; sig-map
+       (atom 0)               ;; new-edges
+       (atom {})              ;; outs
+       signal-index-select
+       (collect-index spo))))
 #+END_SRC
 
 ** Queries
