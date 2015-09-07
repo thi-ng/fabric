@@ -16,7 +16,7 @@
          - [[#index-vertices][Index vertices]]
              - [[#indexvertex-type][IndexVertex type]]
              - [[#default-index-vertex][Default index vertex]]
-             - [[#alias-index-vertex][Alias index vertex]]
+             - [[#alias-index-vertex-fact-triples-only][Alias index vertex (fact triples only)]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
          - [[#index-selection][Index selection]]
@@ -194,12 +194,19 @@ instance (used as backend) and provides an extended API via the
 
 The =FactGraph= indexes all facts by their individual items (e.g.
 subject, predicate and object values). These indices are special
-vertices, automatically added during graph construction and all fact
-vertices are automatically connected to (and only to!) these indices.
-When queries are added to the graph, they indirectly attach themselves
-to these indices (via intermediate index selection vertices, see
-Queries section below) and are notified each time their index
-selection is changing.
+vertices, are customizable, and automatically added during graph
+construction. All fact vertices are automatically connected to (and
+only to!) these indices. When queries are added to the graph, they
+indirectly attach themselves to these indices (via intermediate index
+selection vertices, see [[#queries][Queries]] section below) and are notified each
+time their index selection is changing.
+
+The module currently implements two types of indices:
+
+- plain fact components
+- indexing with dynamic entity aliasing (equivalence/synonym)
+
+Both are described (incl. examples) [[#index-vertices][further below]].
 
 **** Fact transformation
 
@@ -660,7 +667,82 @@ to deal with them directly, though).
        (collect-index idx))))
 #+END_SRC
 
-**** Alias index vertex
+**** Alias index vertex (fact triples only)
+
+An alias index vertex allows the declaration of equivalent fact items and
+their interchanged use in queries. For example we might configure such
+an index with an initial =same-as= property like this:
+
+#+BEGIN_SRC clojure
+  (def graph (ff/fact-graph (ff/alias-index-vertex '#{same-as})))
+#+END_SRC
+
+With the graph configured that way, any fact added which has =same-as=
+in predicate (middle) position, will have its subject and object
+values declared as synonyms/aliases. Example:
+
+#+BEGIN_SRC clojure
+  ;; facts: bob is a person and his homepage
+  (ff/add-fact! graph '[bob type person])
+  (ff/add-fact! graph '[bob url "http://bob.com"])
+
+  ;; declare further that...
+  (ff/add-fact! graph '[bobby same-as bob])
+
+  ;; at this point bob & bobby are semantically merged to refer to the
+  ;; same entity and one could query the graph for all facts about
+  ;; bobby, but retrieve the facts about both bob AND bobby
+  (ff/add-query! graph '[bobby nil nil])
+
+  ;; => [bob type person] [bob url "http://bob.com"]
+#+END_SRC
+
+***** Behaviors
+
+The alias merging is implemented on top of a Disjoint set (or
+Unionfind) datastructure and has the following features and behaviors:
+
+- *Order independence* - declaring an equivalence before adding facts
+  produces the same result as declaring it after facts have been
+  added.
+
+- *Indempodent* - declaring the same equivalence more than once has no
+  further effect (apart from if the fact expressing the equivalence
+  has been removed meanwhile).
+
+- *Recursive merging* - equivalences can be merged into bigger sets,
+  e.g. the 2 facts =[a same-as b] [b same-as c]= will alias A,B and C.
+  This too works with declaring new properties defining aliases
+  themselves:
+
+#+BEGIN_SRC clojure
+  ;; again, configure graph to use 'same-as' property to indicate aliases
+  (def graph (ff/fact-graph (ff/alias-index-vertex '#{same-as})))
+
+  ;; add fact declaring new alias property
+  (ff/add-fact! graph '[equiv same-as same-as])
+
+  ;; now aliases can be expressed using either 'same-as' or 'equiv'
+  (ff/add-fact! graph '[bob same-as bobby])
+  (ff/add-fact! graph '[bb equiv bob])
+#+END_SRC
+
+In query patterns, aliases are *not* resolved for qvars. I.e. using
+the above graph/facts as example, the query pattern =[bobby ?pred
+?obj]= *will match* the facts about subject =bob= and =bobby=, but the
+pattern =[?subj url "http://bob.com"]= will always only bind qvar
+=?subj= to =bob=, but not relate any of =bob='s aliases (only the
+original facts are matched). That also means the following query (with
+filter) will only produce an empty result set:
+
+#+BEGIN_SRC clojure
+  {:where [[?subj url "http://bob.com"]] :filter (= ?subj "bobby")}
+#+END_SRC
+
+/(Queries are described in more detail in another section of this
+document.)/
+
+***** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref index-v
   (defn collect-alias-index
@@ -768,8 +850,8 @@ This diagram illustrates how queries are generally implemented via
 multiple vertices in the graph, though we here use a graph with
 triples only (SPO facts). There're two queries here:
 
-Q1: All "friend" facts
-Q2: All facts about subject "alice"
+- *Q1* : All "friend" facts
+- *Q2* : All facts about subject "alice"
 
 - Row 1 : 4 facts stored in the graph
 - Row 2 : S, P, O index vertices
