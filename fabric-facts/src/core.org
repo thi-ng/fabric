@@ -18,7 +18,9 @@
              - [[#default-index-vertex][Default index vertex]]
              - [[#alias-index-vertex-fact-triples-only][Alias index vertex (fact triples only)]]
      - [[#queries][Queries]]
-         - [[#overview--example][Overview & example]]
+         - [[#overview][Overview]]
+         - [[#highlevel-query-declaration][Highlevel query declaration]]
+         - [[#example][Example]]
          - [[#index-selection][Index selection]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
@@ -95,7 +97,7 @@ Example facts:
 ;; toxi is author of fabric
 '[toxi author fabric]
 
-;; in transaction UUID we state "XYZ" has a a template function f
+;; in transaction UUID we state "XYZ" has a template function f
 [#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" "XYZ" :template-fn (fn [title] [:div [:h1 title]])]
 #+END_SRC
 
@@ -674,7 +676,7 @@ their interchanged use in queries. For example we might configure such
 an index with an initial =same-as= property like this:
 
 #+BEGIN_SRC clojure
-  (def graph (ff/fact-graph (ff/alias-index-vertex '#{same-as})))
+  (def graph (ff/fact-graph {:index (ff/alias-index-vertex '#{same-as})}))
 #+END_SRC
 
 With the graph configured that way, any fact added which has =same-as=
@@ -717,7 +719,7 @@ Unionfind) datastructure and has the following features and behaviors:
 
 #+BEGIN_SRC clojure
   ;; again, configure graph to use 'same-as' property to indicate aliases
-  (def graph (ff/fact-graph (ff/alias-index-vertex '#{same-as})))
+  (def graph (ff/fact-graph {:index (ff/alias-index-vertex '#{same-as})}))
 
   ;; add fact declaring new alias property
   (ff/add-fact! graph '[equiv same-as same-as])
@@ -739,7 +741,7 @@ filter) will only produce an empty result set:
   {:where [[?subj url "http://bob.com"]] :filter (= ?subj "bobby")}
 #+END_SRC
 
-/(Queries are described in more detail in another section of this
+/(Queries are described in more detail in the next section of this
 document.)/
 
 ***** Implementation
@@ -844,7 +846,36 @@ document.)/
 #+END_SRC
 
 ** Queries
-*** Overview & example
+*** Overview
+
+Fact queries are by far the major key operation and functional aspect
+provided by this module. In fact, the =FactGraph= and vertices setup
+discussed above are really just means to an end - queries.
+
+Queries allow us to treat (parts of) a =FactGraph= like a database to
+answer questions using the facts stored, or even manipulate the sets
+of facts by inferring new facts (or contradictions) and add/remove
+them to/fron the graph. Automatically.
+
+Queries are defined declaratively and attached to the graph as
+(potentially nested trees, or at the very least, as vertex chains).
+That approach allows for the caching of intermediate results and their
+reuse by other queries, thus minimizing work effort.
+
+Queries remain part of the graph until removed again and take part in
+every execution cycle of an attached [[../../fabric-core/src/core.org#execution-contexts][execution context]].
+
+*** Highlevel query declaration
+
+The query operations provided in this namespace are considered the
+low-level raw building blocks for constructing query trees and are
+therefore meant for advanced users. The [[./dsl.org][DSL namespace]] provides a much
+more userfriendly and concise approach to define complex queries using
+a fully-featured, extensible, hashmap based DSL and expressions. These
+query specs are then compiled into query trees using the lowlevel
+forms provided here (but also offer many more additional features).
+
+*** Example
 
 This diagram illustrates how queries are generally implemented via
 multiple vertices in the graph, though we here use a graph with
