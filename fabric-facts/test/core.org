@@ -398,6 +398,8 @@
                       {:optional [[?o name ?n]]}]})
           q4 (dsl/add-query-from-spec!
               g '{:q [{:where [[?s ?p b]]}]})
+          q5 (dsl/add-query-from-spec!
+              g '{:q [{:where [[c ?p ?o]]}]})
           facts '#{[a p1 b]
                    [b name bob]
                    [a same-as aa]
@@ -406,7 +408,7 @@
                    [aa p2 bb]}]
       (run! #(ff/add-fact! g %) facts)
       (f/execute! ctx)
-      (doseq [i @(ff/fact-indices g)] (warn :index @i))
+      ;;(doseq [i @(ff/fact-indices g)] (warn :index @i))
       (is (= '#{{?s a ?p p1 ?o b}
                 {?s a ?p same-as ?o aa}
                 {?s aa ?p p2 ?o bb}
@@ -422,7 +424,7 @@
       (is (= '#{{?s a ?p p1}} @q4))
       (ff/add-fact! g '[equiv same-as same-as])
       (f/execute! ctx)
-      (doseq [i @(ff/fact-indices g)] (warn :index @i))
+      ;;(doseq [i @(ff/fact-indices g)] (warn :index @i))
       (is (= '#{{?s a ?p p1 ?o b}
                 {?s a ?p same-as ?o aa}
                 {?s aa ?p p2 ?o bb}
@@ -439,10 +441,18 @@
       (is (= '#{{?s a ?p p1} {?s aa ?p p2} {?s b, ?p equiv}} @q4))
       (f/signal! (ff/remove-fact! g '[a same-as aa]) f/sync-vertex-signal)
       (f/execute! ctx)
+      ;;(doseq [i @(ff/fact-indices g)] (warn :index @i))
       (is (== 6 (count @q1)))
       (is (= '#{{?p p1 ?o b ?n bob}} @q2))
       (is (= '#{{?p p2 ?o bb}} @q3))
-      (doseq [i @(ff/fact-indices g)] (warn :index @i))))
+      (run! #(ff/add-fact! g %) '[[a alias c] [alias same-as equiv]])
+      (f/execute! ctx)
+      ;;(doseq [i @(ff/fact-indices g)] (warn :index @i))
+      (debug :all (ff/facts g))
+      (is (= '#{{?p p1, ?o b, ?n bob} {?p alias, ?o c}} @q2))
+      (is (= '#{{?p p2, ?o bb}} @q3))
+      (is (= '#{{?s b, ?p equiv} {?s aa, ?p p2} {?s a, ?p p1}} @q4))
+      (is (= '#{{?p p1, ?o b} {?p alias, ?o c}} @q5))))
 #+END_SRC
 
 *** Map conversion

@@ -665,59 +665,66 @@ to deal with them directly, though).
 #+BEGIN_SRC clojure :noweb-ref index-v
   (defn collect-alias-index
     [g props idx]
-    (let [rf (fn [[index aliases :as acc] [op vid t]]
-               (let [x               (nth t idx)
-                     [s p o]         t
-                     [index aliases] (case op
-                                       :add    [(assoc index x (conj (or (index x) #{}) vid))
-                                                (uf/register aliases x)]
-                                       :remove (if-let [idx (index x)]
-                                                 (if (= #{vid} idx)
-                                                   (let [index (dissoc index x)
-                                                         comp  (disj (uf/component aliases x) x)]
-                                                     [index
-                                                      (if (some index comp)
-                                                        aliases
-                                                        (uf/unregister aliases x))])
-                                                   [(assoc index x (disj idx vid))
-                                                    aliases])
-                                                 acc)
-                                       (do (warn "ignoring unknown index signal op:" op)
-                                           acc))
-                     aliases         (if (props p)
-                                       (case op
-                                         :add    (let [_ (warn idx :unify s o :pred p)
-                                                       aliases (uf/union aliases s o)
-                                                       facts' (cond
-                                                                (props o) (into #{} (filter #(= s (nth % 1))) (facts g))
-                                                                (props s) (into #{} (filter #(= o (nth % 1))) (facts g))
-                                                                :else nil)]
-                                                   (warn idx :unify-facts facts')
-                                                   (reduce
-                                                    (fn [acc [s _ o]]
-                                                      (warn idx :unify s o)
-                                                      (uf/union acc s o))
-                                                    aliases facts'))
-                                         :remove (-> aliases
-                                                     (uf/unregister s)
-                                                     (uf/unregister o)
-                                                     (uf/register s)
-                                                     (uf/register o))
-                                         aliases)
-                                       aliases)]
-                 [index aliases]))]
+    (let [props (atom (set props))
+          rf    (fn [[index aliases :as acc] [op vid t]]
+                  (let [[s p o] t
+                        x (nth t idx)
+
+                        [index aliases]
+                        (case op
+                          :add    [(assoc index x (conj (or (index x) #{}) vid))
+                                   (uf/register aliases x)]
+                          :remove (if-let [idx (index x)]
+                                    (if (= #{vid} idx)
+                                      (let [index (dissoc index x)
+                                            comp  (disj (uf/component aliases x) x)]
+                                        [index
+                                         (if (some index comp)
+                                           aliases
+                                           (uf/unregister aliases x))])
+                                      [(assoc index x (disj idx vid))
+                                       aliases])
+                                    acc)
+                          (do (warn "ignoring unknown index signal op:" op)
+                              acc))
+
+                        aliases
+                        (if (@props p)
+                          (case op
+                            :add    (let [_ (debug idx :unify s o :pred p)
+                                          aliases (uf/union aliases s o)
+                                          facts'  (cond
+                                                    (@props o)
+                                                    (do
+                                                      (swap! props conj s)
+                                                      (into #{} (filter #(= s (nth % 1))) (facts g)))
+
+                                                    (@props s)
+                                                    (do
+                                                      (swap! props conj o)
+                                                      (into #{} (filter #(= o (nth % 1))) (facts g)))
+
+                                                    :else nil)]
+                                      (debug idx :unify-facts facts')
+                                      (reduce
+                                       (fn [acc [s _ o]]
+                                         (debug idx :unify s o)
+                                         (uf/union acc s o))
+                                       aliases facts'))
+                            :remove (-> aliases
+                                        (uf/unregister s)
+                                        (uf/unregister o)
+                                        (uf/register s)
+                                        (uf/register o))
+                            aliases)
+                          aliases)]
+                    [index aliases]))]
       (f/collect-pure
        (fn [val incoming]
-         (debug idx :old-index val)
+         ;;(debug idx :old-index val)
          (let [val (reduce rf val incoming)]
-           (debug idx :new-index val)
+           ;;(debug idx :new-index val)
            val)))))
-
-  ;; a p b
-  ;; a q bb
-  ;; b name bob
-  ;; b equiv bb
-  ;; equiv same-as same-as
 
   (defn signal-alias-index-select
     [[idx sel]]
