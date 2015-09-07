@@ -14,6 +14,9 @@
              - [[#graph-implementation][Graph implementation]]
              - [[#constructor][Constructor]]
          - [[#index-vertices][Index vertices]]
+             - [[#indexvertex-type][IndexVertex type]]
+             - [[#default-index-vertex][Default index vertex]]
+             - [[#alias-index-vertex][Alias index vertex]]
      - [[#queries][Queries]]
          - [[#overview--example][Overview & example]]
          - [[#index-selection][Index selection]]
@@ -45,6 +48,7 @@ and their roles are described in more detail throughout this document.
 
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
+    (facts [_])
     (fact-indices [_])
     (fact-transform [_])
     (add-fact! [_ t])
@@ -54,6 +58,9 @@ and their roles are described in more detail throughout this document.
     (cached [_ type k])
     (cache! [_ type k v])
     (expire! [_ type k]))
+
+  (defprotocol IFactIndex
+    (index-signal-handler [_]))
 
   (defprotocol IFactQuery
     (raw-pattern [_]))
@@ -450,6 +457,8 @@ keys:
     (notify-watches
       [_ evt] (f/notify-watches g evt))
     IFactGraph
+    (facts
+      [_] (keys @facts))
     (fact-indices
       [_] indices)
     (fact-transform
@@ -461,7 +470,7 @@ keys:
             (let [v (f/add-vertex! g f' nil fact-vertex)]
               (f/notify-watches g [:add-fact f])
               (debug :add-fact f f')
-              (run! #(f/add-edge! g v % signal-fact :add) indices)
+              (run! #(f/add-edge! g v % signal-fact :add) @indices)
               (swap! facts assoc f' v)
               v))))
     (remove-fact!
@@ -470,7 +479,7 @@ keys:
         (if-let [v (@facts f')]
           (do
             (debug :remove-fact f f')
-            (run! #(f/add-edge! g v % signal-fact :remove) indices)
+            (run! #(f/add-edge! g v % signal-fact :remove) @indices)
             (swap! facts dissoc f')
             (f/notify-watches g [:remove-fact f])
             (f/remove-vertex! g v)
@@ -492,21 +501,24 @@ keys:
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :len       - fact length (default 3)
-    :index     - index vertex ctor (default index-vertex)
+    :index     - index vertex ctor (default default-index-vertex)
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
     ([{:keys [graph len index transform]
        :or   {graph     (f/compute-graph)
               len       3
-              index     index-vertex
+              index     default-index-vertex
               transform identity-transform}}]
-     (map->FactGraph
-      {:indices (mapv #(index graph %) (range len))
-       :facts   (atom {})
-       :cache   (atom {})
-       :ftx     transform
-       :g       graph})))
+     (let [indices (atom nil)
+           g       (map->FactGraph
+                    {:indices indices
+                     :facts   (atom {})
+                     :cache   (atom {})
+                     :ftx     transform
+                     :g       graph})]
+       (reset! indices (mapv #(add-index-vertex! graph (index g %)) (range len)))
+       g)))
 #+END_SRC
 
 *** Index vertices
@@ -517,12 +529,236 @@ create a single fact component index vertex. The diagram in the
 following section shows how these vertices are used (users don't need
 to deal with them directly, though).
 
+**** IndexVertex type
+
 #+BEGIN_SRC clojure :noweb-ref index-v
-(defn- index-vertex
-  [g idx]
-  (f/add-vertex!
-   g {} {::f/collect-fn      (collect-index idx)
-         ::f/score-signal-fn f/score-signal-with-new-edges}))
+  (deftype IndexVertex
+      [id index prev-index uncollected signal-map new-edges outs
+       signal-fn collect-fn]
+    #?@(:clj
+         [clojure.lang.IDeref
+          (deref
+           [_] @index)]
+         :cljs
+         [IDeref
+          (-deref
+           [_] @index)])
+    f/IVertex
+    (vertex-id
+      [_] id)
+    (set-value!
+      [_ val] (reset! index val) _)
+    (update-value!
+      [_ f] (swap! index f) _)
+    (previous-value
+      [_] @prev-index)
+    (collect!
+      [_]
+      (collect-fn _)
+      (reset! uncollected [])
+      _)
+    (collect-final!
+      [_] _)
+    (score-collect
+      [_] (count @uncollected))
+    (connect-to!
+      [_ v sig-fn opts]
+      (swap! outs assoc v [sig-fn opts])
+      (swap! new-edges inc)
+      (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
+      _)
+    (neighbors
+      [_] (keys @outs))
+    (disconnect-neighbor!
+      [_ v]
+      (when v
+        (debug id "disconnect from" (f/vertex-id v))
+        (swap! outs dissoc v))
+      _)
+    (disconnect-all!
+      [_]
+      (run! #(f/disconnect-neighbor! _ %) (keys @outs))
+      _)
+    (new-edge-count
+      [_] @new-edges)
+    (score-signal
+      [_] (+ @new-edges (if (= @index @prev-index) 0 1)))
+    (signal!
+      [_ handler]
+      (reset! prev-index @index)
+      (reset! new-edges 0)
+      (handler _ @outs))
+    (receive-signal
+      [_ src sig]
+      (if-not (= sig (@signal-map src))
+        (do (swap! uncollected conj sig)
+            (swap! signal-map assoc src sig)
+            true)
+        (debug id " ignoring unchanged signal: " (pr-str sig))))
+    (signal-map
+      [_] @signal-map)
+    (uncollected-signals
+      [_] @uncollected)
+    IFactIndex
+    (index-signal-handler
+      [_] signal-fn))
+#+END_SRC
+
+**** Default index vertex
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+  (defn add-index-vertex!
+    [g ctor]
+    (f/add-vertex! g nil nil ctor))
+
+  (defn- collect-index
+    [idx]
+    (let [tx (map (fn [[op vid t]] [op vid (nth t idx)]))
+          rf (completing
+              (fn [acc [op vid x]]
+                (case op
+                  :add    (assoc acc x (conj (or (acc x) #{}) vid))
+                  :remove (if-let [idx (acc x)]
+                            (if (= #{vid} idx)
+                              (dissoc acc x)
+                              (assoc acc x (disj idx vid)))
+                            acc)
+                  (do (warn "ignoring unknown index signal op:" op)
+                      acc))))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug :old-index val)
+         (let [val (transduce tx rf val incoming)]
+           ;;(debug :new-index val)
+           val)))))
+
+  (defn- signal-index-select
+    [[idx sel]]
+    (if sel
+      (if-let [choices (and (map? sel) (::choices sel))]
+        (fn [vertex _]
+          (let [res (into #{} (mapcat identity) (vals (select-keys* @vertex choices)))]
+            [idx (if (seq res) res ::none)]))
+        (fn [vertex _]
+          [idx (@vertex sel ::none)]))
+      (fn [vertex _]
+        [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
+
+  (defn default-index-vertex
+    [g idx]
+    (fn
+      [id _ _]
+      (IndexVertex.
+       id
+       (atom {})              ;; index
+       (atom nil)             ;; prev
+       (atom [])              ;; uncollected
+       (atom {})              ;; sig-map
+       (atom 0)               ;; new-edges
+       (atom {})              ;; outs
+       signal-index-select
+       (collect-index idx))))
+#+END_SRC
+
+**** Alias index vertex
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+  (defn collect-alias-index
+    [g props idx]
+    (let [props (atom (set props))
+          rf    (fn [[index aliases :as acc] [op vid t]]
+                  (let [[s p o] t
+                        x (nth t idx)
+
+                        [index aliases]
+                        (case op
+                          :add    [(assoc index x (conj (or (index x) #{}) vid))
+                                   (uf/register aliases x)]
+                          :remove (if-let [idx (index x)]
+                                    (if (= #{vid} idx)
+                                      (let [index (dissoc index x)
+                                            comp  (disj (uf/component aliases x) x)]
+                                        [index
+                                         (if (some index comp)
+                                           aliases
+                                           (uf/unregister aliases x))])
+                                      [(assoc index x (disj idx vid))
+                                       aliases])
+                                    acc)
+                          (do (warn "ignoring unknown index signal op:" op)
+                              acc))
+
+                        aliases
+                        (if (@props p)
+                          (case op
+                            :add    (let [_ (debug idx :unify s o :pred p)
+                                          aliases (uf/union aliases s o)
+                                          facts'  (cond
+                                                    (@props o)
+                                                    (do
+                                                      (swap! props conj s)
+                                                      (into #{} (filter #(= s (nth % 1))) (facts g)))
+
+                                                    (@props s)
+                                                    (do
+                                                      (swap! props conj o)
+                                                      (into #{} (filter #(= o (nth % 1))) (facts g)))
+
+                                                    :else nil)]
+                                      (debug idx :unify-facts facts')
+                                      (reduce
+                                       (fn [acc [s _ o]]
+                                         (debug idx :unify s o)
+                                         (uf/union acc s o))
+                                       aliases facts'))
+                            :remove (-> aliases
+                                        (uf/unregister s)
+                                        (uf/unregister o)
+                                        (uf/register s)
+                                        (uf/register o))
+                            aliases)
+                          aliases)]
+                    [index aliases]))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug idx :old-index val)
+         (let [val (reduce rf val incoming)]
+           ;;(debug idx :new-index val)
+           val)))))
+
+  (defn signal-alias-index-select
+    [[idx sel]]
+    (if sel
+      (if-let [choices (and (map? sel) (::choices sel))]
+        (fn [vertex _]
+          (let [[index aliases] @vertex
+                choices (into #{} (mapcat #(uf/component aliases %)) choices)
+                _ (info :index-sel idx :sel sel :choices choices)
+                res (into #{} (mapcat identity) (vals (select-keys* index choices)))]
+            [idx (if (seq res) res ::none)]))
+        (fn [vertex _]
+          (let [[index aliases] @vertex
+                choices (uf/component aliases sel)
+                _ (info :index-sel idx :sel sel :choices choices)
+                res (into #{} (mapcat identity) (vals (select-keys* index choices)))]
+            [idx (if (seq res) res ::none)])))
+      (fn [vertex _]
+        [idx (if-let [v (vals (first @vertex))] (into #{} (mapcat identity) v) ::none)])))
+
+  (defn alias-index-vertex
+    [alias-props]
+    (fn [g idx]
+      (fn [id _ _]
+        (IndexVertex.
+         id
+         (atom [{} (uf/disjoint-set)])
+         (atom nil)               ;; prev
+         (atom [])                ;; uncollected
+         (atom {})                ;; sig-map
+         (atom 0)                 ;; new-edges
+         (atom {})                ;; outs
+         signal-alias-index-select
+         (collect-alias-index g alias-props idx)))))
 #+END_SRC
 
 ** Queries
@@ -629,7 +865,7 @@ In code form this same graph could be constructed like this:
     [g sel]
     (if-let [sel' (cached g ::index-sel sel)]
       (do (debug :reuse-index-sel sel) sel')
-      (let [index  ((fact-indices g) (first sel))
+      (let [index  (@(fact-indices g) (first sel))
             vertex (f/add-vertex!
                     g nil
                     {::f/score-signal-fn f/score-signal-with-new-edges
@@ -657,7 +893,7 @@ In code form this same graph could be constructed like this:
                              true)
                          (do (f/disconnect-neighbor! vertex parent)
                              false))))]
-        (f/add-edge! g index vertex (signal-index-select sel) nil)
+        (f/add-edge! g index vertex ((index-signal-handler index) sel) nil)
         (cache! g ::index-sel sel isel))))
 
   (defn index-sel-choice
@@ -1512,39 +1748,6 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   (defn- signal-fact
     [vertex op] [op (f/vertex-id vertex) @vertex])
 
-  (defn- collect-index
-    [spo]
-    (let [tx (map (fn [[op id t]] [op id (nth t spo)]))
-          rf (completing
-              (fn [acc [op id x]]
-                (case op
-                  :add    (assoc acc x (conj (or (acc x) #{}) id))
-                  :remove (if-let [idx (acc x)]
-                            (if (= #{id} idx)
-                              (dissoc acc x)
-                              (assoc acc x (disj idx id)))
-                            acc)
-                  (do (warn "ignoring unknown index signal op:" op)
-                      acc))))]
-      (f/collect-pure
-       (fn [val incoming]
-         ;;(debug :old-index val)
-         (let [val (transduce tx rf val incoming)]
-           ;;(debug :new-index val)
-           val)))))
-
-  (defn- signal-index-select
-    [[idx sel]]
-    (if sel
-      (if-let [choices (and (map? sel) (::choices sel))]
-        (fn [vertex _]
-          (let [res (into #{} (mapcat identity) (vals (select-keys* @vertex choices)))]
-            [idx (if (seq res) res ::none)]))
-        (fn [vertex _]
-          [idx (@vertex sel ::none)]))
-      (fn [vertex _]
-        [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
-
   (def ^:private collect-select
     (f/collect-pure
      (fn [val incoming]
@@ -1732,6 +1935,7 @@ The following example demonstrates all these rules:
           [thi.ng.fabric.core :as f]
           [thi.ng.xerror.core :as err]
           [thi.ng.strf.core :as strf]
+          [thi.ng.dstruct.unionfind :as uf]
           [clojure.set :as set]
           [clojure.data.int-map :as imap]
           [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
