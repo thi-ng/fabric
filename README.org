@@ -12,11 +12,21 @@ Clojure & Clojurescript. Written in a Literate Programming format.
      - [[#overview][Overview]]
          - [[#general-compute-graph-concepts][General Compute Graph concepts]]
          - [[#features][Features]]
-         - [[#motivation--use-cases][Motivation & use cases]]
-         - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
-         - [[#resources--related-work][Resources / related work]]
-         - [[#benchmarks][Benchmarks]]
+     - [[#modules][Modules]]
      - [[#status][Status]]
+     - [[#motivation--use-cases][Motivation & use cases]]
+         - [[#alternative-programming-model][Alternative programming model]]
+         - [[#pervasive-caching-easy-introspection-algorithm-visualization][Pervasive caching, easy introspection, algorithm visualization]]
+         - [[#reactive-programming-wip][Reactive programming (WIP)]]
+         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
+         - [[#self-organizing-workflows][Self-organizing workflows]]
+         - [[#semantic-knowledge-graphs-queries--reasoning][(Semantic) knowledge graphs, queries & reasoning]]
+         - [[#toolkit-w-clojurescript-support][Toolkit w/ Clojurescript support]]
+     - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
+     - [[#resources--related-work][Resources / related work]]
+     - [[#benchmarks][Benchmarks]]
+         - [[#single-source-shortest-path][Single-source shortest path]]
+         - [[#vertex-coloring][Vertex coloring]]
      - [[#example-usage][Example usage]]
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
@@ -24,7 +34,6 @@ Clojure & Clojurescript. Written in a Literate Programming format.
          - [[#fabric-ld-server-example][fabric-ld server example]]
          - [[#fabric-facts-module-example][fabric-facts module example]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
- - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
      - [[#building-this-project][Building this project]]
@@ -40,7 +49,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.310"]
+  [thi.ng/fabric "0.0.312"]
 #+END_SRC
 
 ** Overview
@@ -124,37 +133,51 @@ Extra features provided by sub-modules:
 - Easy-to-use API
 - Literate programming format w/ diagrams & examples
 
-See the README of the *[[./fabric-facts/README.org][fabric-facts]]* & *[[./fabric-ld/README.org][fabric-ld]]* modules for full feature sets.
+See the README of modules below for full feature sets...
 
-*** Motivation & use cases
-**** Alternative programming model
+** Modules
+
+- *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
+
+- *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
+
+- *[[./fabric-ld/README.org][fabric-ld]]* - Component based Linked Data HTTP server & query endpoint setup (WIP)
+
+- *fabric-redis* - Redis backend (WIP, not yet included)
+
+** Status
+
+ALPHA quality, in active development.
+
+** Motivation & use cases
+*** Alternative programming model
 
 Some algorithms can be expressed more simply using the Signal/Collect
 model and allow for parallel execution.
 
-**** Pervasive caching, easy introspection, algorithm visualization
+*** Pervasive caching, easy introspection, algorithm visualization
 
 Intermediate results can be easily reused by multiple consumbers and
 retrieved through vertex inspection. Compute graphs can also be
 visualized, allowing for the development of visual programming tools.
 
-**** Reactive programming (WIP)
+*** Reactive programming (WIP)
 
 Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
 mandatory integration or reliance on React.js or DOM rendering cycle
 
-**** Single machine or distributed processing
+*** Single machine or distributed processing
 
 Distributed, multi-environment graphs not yet implemented (WIP)
 
-**** Self-organizing workflows
+*** Self-organizing workflows
 
 Think self-updating visualizations when inputs are changing. Using
 custom collection thresholds, this model can also be extended to only
 operate when a minimum number of new signals has been received
 (throttling) or after a period of time since the last computation.
 
-**** (Semantic) knowledge graphs, queries & reasoning
+*** (Semantic) knowledge graphs, queries & reasoning
 
 - Use compute graphs as auto-updating database using attached queries
   & inference rules to automatically add or retract facts when certain
@@ -170,11 +193,11 @@ operate when a minimum number of new signals has been received
   functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
   module)
 
-**** Toolkit w/ Clojurescript support
+*** Toolkit w/ Clojurescript support
 
 - Provide same functionality for both Clojure & Clojurescript
 
-*** Differences to Map-Reduce and dataflow DAGs
+** Differences to Map-Reduce and dataflow DAGs
 
 - Ordered OR unordered processing
 - Scored / thresholded processing
@@ -188,15 +211,14 @@ operate when a minimum number of new signals has been received
   has converged (i.e. no more active signals or outstanding
   collections)
 
-*** Resources / related work
+** Resources / related work
 
 - http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
 - http://www.semantic-web-journal.net/system/files/swj971.pdf
 - http://signalcollect.com
 
-*** Benchmarks
-
-**** Single-source shortest path
+** Benchmarks
+*** Single-source shortest path
 
 10,000 vertices, 30,000 paths, max. length 3 hops
 
@@ -207,7 +229,7 @@ Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
 | Total   | 221ms               | 182ms         | 229ms                 | 309ms       | 130ms    |
 | Per op  | 6.1µs               | 3.1µs         | 4.0µs                 | 2.5µs       | 4.0µs    |
 
-**** Vertex coloring
+*** Vertex coloring
 
 1000 vertices, max. 180 colors, 5% edge probability
 
@@ -221,10 +243,6 @@ Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
 | Colls   | 42960               | 12839         | 4001                  | 4772        | 6251     |
 
 TODO add charts
-
-** Status
-
-ALPHA quality, in active development.
 
 ** Example usage
 
@@ -539,15 +557,6 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   ;; :total 2280.0
 #+END_SRC
 
-* Modules
-
-- *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
-
-- *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
-
-- *[[./fabric-ld/README.org][fabric-ld]]* - Component based Linked Data HTTP server & query endpoint setup (WIP)
-
-- *fabric-redis* - Redis backend (WIP, not yet included)
 
 * Project definition
 
@@ -622,7 +631,8 @@ dependencies to all currently existing modules.
     :min-lein-vesion "2.4.0"
 
     :dependencies [[thi.ng/fabric-core "<<conf-version()>>"]
-                   [thi.ng/fabric-facts "<<conf-version()>>"]]
+                   [thi.ng/fabric-facts "<<conf-version()>>"]
+                   [thi.ng/fabric-ld "<<conf-version()>>"]]
 
     :pom-addition [:developers [:developer
                                 [:name "Karsten Schmidt"]
@@ -634,6 +644,7 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                                    |
 |-----------+------------+----------------------------------------------------------------------------------|
+|   0.0.312 | 2015-09-08 | no code changes, only include ld module as dependency to main fabric artefact        |
 |   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                  |
 |   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL        |
 |   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
