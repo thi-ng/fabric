@@ -1,0 +1,1036 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_4_gh:
+ - [[#namespace-thingfabricldcore][Namespace: thi.ng.fabric.ld.core]]
+     - [[#module-overview][Module overview]]
+     - [[#components][Components]]
+         - [[#protocols][Protocols]]
+         - [[#factgraph-component-wrapper][FactGraph component wrapper]]
+         - [[#fact-log][Fact log]]
+         - [[#graph-model][Graph model]]
+         - [[#entity-registries][Entity registries]]
+             - [[#uri-prefix-registry][URI prefix registry]]
+             - [[#query-registry][Query registry]]
+             - [[#inference-rule-registry][Inference rule registry]]
+             - [[#registry-helpers][Registry helpers]]
+         - [[#handlers][Handlers]]
+         - [[#aleph-server][Aleph server]]
+         - [[#inference-rules][Inference rules]]
+             - [[#property-rules][Property rules]]
+             - [[#class-semantics][Class semantics]]
+             - [[#rdf-schema-rules][RDF Schema rules]]
+     - [[#component-system-creation][Component system creation]]
+         - [[#default-configuration][Default configuration]]
+         - [[#default-system-definition][Default system definition]]
+     - [[#repl][REPL]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
+* Namespace: thi.ng.fabric.ld.core
+
+** Module overview
+
+This diagram illustrates the default setup of the component system
+defined by this module. Users are not required to use this verbatim
+and each component has its own configuration options. All components
+are defined using Stuart Sierra's component library/lifecycle
+protocols.
+
+[[../../assets/ld-overview.png]]
+
+#+BEGIN_SRC dot :tangle ../../assets/overview.dot
+digraph g {
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
+  edge[fontname="Inconsolata",fontsize=9];
+  rankdir=LR;
+
+  FactGraph -> LDGraph -> LDGraphModel;
+  FactGraph -> FactLogger;
+
+  PrefixRegistry -> LDGraph;
+  LDGraphModel -> QueryRegistry -> Handler;
+  LDGraphModel -> RuleRegistry -> Handler;
+  LDGraphModel -> Handler;
+
+  RouteProvider -> Handler;
+
+  Handler -> AlephServer;
+}
+#+END_SRC
+
+** Components
+*** Protocols
+
+#+BEGIN_SRC clojure :noweb-ref protocols
+  (defprotocol IGraphAccess
+    (get-graph [_]))
+
+  (defprotocol IGraphModel
+    (trigger-update! [_])
+    (result-event-bus [_])
+    (add-facts! [_ facts])
+    (remove-facts! [_ facts])
+    (add-query! [_ q notify?])
+    (remove-query! [_ q])
+    (add-rule! [_ rule])
+    (remove-rule! [_ rule]))
+
+  (defprotocol IEntityRegistry
+    (register! [_ id val])
+    (deregister! [_ id])
+    (lookup [_ id])
+    (list-registry [_]))
+
+  (defprotocol IHandler
+    (route-map [_]))
+#+END_SRC
+
+*** FactGraph component wrapper
+
+#+BEGIN_SRC clojure :noweb-ref graph
+  (defrecord LDGraph [graph prefixes config]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "initializing graph...")
+      (let [g (ff/fact-graph
+               (merge {:transform (ff/combine-transforms prefixes 3)}
+                      config))]
+        (doseq [path (:edn-paths config)]
+          (with-open [r (-> path io/reader PushbackReader.)]
+            (let [facts (ff/map->facts (edn/read r))]
+              (info "adding" (count facts) "facts from" path)
+              (run! #(ff/add-fact! g %) facts))))
+        (assoc _ :graph g)))
+    (stop
+      [_]
+      (info "stop graph component")
+      (assoc _ :graph nil))
+    IGraphAccess
+    (get-graph [_] graph))
+
+  (defn make-graph
+    [config]
+    (map->LDGraph {:config config}))
+#+END_SRC
+
+*** Fact log
+
+#+BEGIN_SRC clojure :noweb-ref logger
+  (defrecord FactLogger [config graph logger prefixes]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting fact logger")
+      (let [log-fn ((:fn config) config prefixes)
+            logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
+        (assoc _ :logger logger)))
+    (stop
+      [_]
+      (info "stop fact logger")
+      (ff/remove-fact-graph-logger logger)
+      (assoc _ :graph nil :logger nil :prefixes nil)))
+
+  (defn make-logger
+    [config]
+    (map->FactLogger {:config config}))
+
+  (defn default-logger
+    [config prefixes]
+    (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
+          path    (format (:path config) session)]
+      (info "fact logger writing to:" path)
+      (fn [evt]
+        (info :fact-log evt)
+        (spit path (str (pr-str evt) "\n") :append true))))
+#+END_SRC
+
+*** Graph model
+
+#+BEGIN_SRC clojure :noweb-ref model
+  (defn- model-work-queue-processor
+    [queue rbus]
+    (let [res (async/tap rbus (async/chan))]
+      (go-loop []
+        (if-let [work (<! queue)]
+          (let [[type f] work]
+            (info "executing queue item:" type)
+            (f)
+            (if (<! res)
+              (recur)
+              (info "contex finished")))
+          (info "work queue closed")))))
+
+  (defn- model-result-log
+    [rbus]
+    (let [logtap  (async/tap rbus (async/chan))]
+      (go-loop []
+        (when-let [res (<! logtap)]
+          (info "context stats:" res)
+          (recur)))))
+
+  (defrecord LDGraphModel [graph ctx queue rbus rbus-in]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting graph model")
+      (let [queue   (async/chan)
+            rbus-in (async/chan)
+            rbus    (async/mult rbus-in)
+            ctx     (f/async-execution-context {:graph (get-graph graph) :result rbus-in})]
+        (model-work-queue-processor queue rbus)
+        (model-result-log rbus)
+        (f/execute! ctx)
+        (assoc _ :ctx ctx :queue queue :rbus rbus :rbus-in rbus-in)))
+    (stop
+      [_]
+      (info "stop graph model")
+      (f/stop! ctx)
+      (async/close! rbus-in)
+      (async/close! queue)
+      (assoc _ :graph nil :ctx nil :queue nil :rbus nil :rbus-in nil))
+    IGraphAccess
+    (get-graph
+      [_] (get-graph graph))
+    IGraphModel
+    (trigger-update!
+      [_] (f/notify! ctx))
+    (result-event-bus
+      [_] rbus)
+    (add-facts!
+      [_ facts]
+      (go
+        (>! queue
+            [:add-facts
+             (fn []
+               (let [g (get-graph graph)]
+                 (run! #(ff/add-fact! g %) facts)
+                 (f/notify! ctx)))]))
+      _)
+    (remove-facts!
+      [_ facts]
+      (go
+        (>! queue
+            [:remove-facts
+             (fn []
+               (let [g (get-graph graph)]
+                 (run! #(ff/remove-fact! g %) facts)
+                 (f/notify! ctx)))]))
+      _)
+    (add-query!
+      [_ q notify?]
+      (let [out (promise)]
+        (go
+          (>! queue
+              [:add-query
+               (fn []
+                 (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
+                   (f/notify! ctx)
+                   (deliver out q)))]))
+        @out))
+    (remove-query!
+      [_ q]
+      (go
+        (>! queue
+            [:remove-query
+             (fn []
+               (f/remove-from-graph! q (get-graph graph))
+               (f/notify! ctx))]))
+      _)
+    (add-rule!
+      [_ rule]
+      (let [out (promise)]
+        (go
+          (>! queue
+              [:add-rule
+               (fn []
+                 (let [r (ff/add-rule! (get-graph graph) rule)]
+                   (f/notify! ctx)
+                   (deliver out r)))]))
+        @out))
+    (remove-rule!
+      [_ rule]
+      (go
+        (>! queue
+            [:remove-rule
+             (fn []
+               (f/remove-from-graph! rule (get-graph graph))
+               (f/notify! ctx))]))
+      _))
+
+  (defn make-graph-model
+    [config]
+    (map->LDGraphModel {}))
+#+END_SRC
+
+*** Entity registries
+**** URI prefix registry
+
+The =PrefixRegistry= keeps track of vocabulary URI prefixes and also
+implements the =ITwoWayTransform= defined in the [[../../fabric-facts/src/core.org][fabric-facts.core]]
+namespace. It is used as fact transform by the graph to store facts in
+a more efficient manner.
+
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord PrefixRegistry [config registry]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting prefix registry")
+      (let [this (assoc _ :registry (atom {:prefixes {}}))]
+        (run! (fn [[pre uri]] (register! this pre uri)) (:prefixes config))
+        this))
+    (stop
+      [_]
+      (info "stopping prefix registry")
+      (assoc _ :registry nil))
+    IEntityRegistry
+    (register!
+      [_ prefix uri]
+      (info "register! prefix:" prefix uri)
+      (swap! registry
+             (fn [reg]
+               (let [reg (assoc-in reg [:prefixes prefix] uri)]
+                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      _)
+    (deregister!
+      [_ prefix]
+      (info "deregister! prefix:" prefix)
+      (swap! registry
+             (fn [reg]
+               (let [reg (update reg :prefixes dissoc prefix)]
+                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      _)
+    (list-registry
+      [_] (:prefixes @registry))
+    (lookup
+      [_ prefix] (get-in @registry [:prefixes prefix]))
+    ff/ITwoWayTransform
+    (transform
+      [_ x] (ff/->prefix-string (:sorted @registry) x))
+    (untransform
+      [_ x] (ff/<-prefix-string (:prefixes @registry) x)))
+
+  (defn make-prefix-registry
+    [config]
+    (map->PrefixRegistry {:config config}))
+#+END_SRC
+
+**** Query registry
+
+***** TODO define vocab for queries defined in graph
+***** Impl
+
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord QueryRegistry [model registry config]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting query registry")
+      (let [this (assoc _ :registry (atom {}))]
+        (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
+        this))
+    (stop
+      [_]
+      (info "stopping query registry")
+      (assoc _ :registry nil :model nil))
+    IEntityRegistry
+    (register!
+      [_ id spec]
+      (if-let [id' (find-cached @registry spec)]
+        id'
+        (let [id (or id (str (java.util.UUID/randomUUID)))]
+          (when-not (@registry id)
+            (info "register! query:" id spec)
+            (let [q (add-query! model spec true)]
+              (swap! registry assoc id {:spec spec :query q})
+              id)))))
+    (deregister!
+      [_ id]
+      (when-let [q (:query (@registry id))]
+        (info "deregister! query:" id)
+        (remove-query! model q)
+        (swap! registry dissoc id)
+        q))
+    (lookup
+      [_ id] (@registry id))
+    (list-registry
+      [_] @registry))
+
+  (defn make-query-registry
+    [config]
+    (map->QueryRegistry {:config config}))
+#+END_SRC
+
+**** Inference rule registry
+***** TODO define vocab for queries defined in graph
+***** Impl
+
+#+BEGIN_SRC clojure :noweb-ref registry
+  (defrecord RuleRegistry [model registry config]
+    comp/Lifecycle
+    (start
+      [_]
+      (info "starting rule registry")
+      (let [this (assoc _ :registry (atom {}))]
+        (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
+        this))
+    (stop
+      [_]
+      (info "stopping rule registry")
+      (assoc _ :registry nil :model nil))
+    IEntityRegistry
+    (register!
+      [_ id spec]
+      (if-let [id' (find-cached @registry spec)]
+        id'
+        (let [id (or id (str (java.util.UUID/randomUUID)))]
+          (when-not (@registry id)
+            (info "register! rule:" id spec)
+            (let [prod  (compile-rule-production id (:prod spec))
+                  query (add-query! model (:q spec) false)
+                  rule  (add-rule! model {:id id :query query :production prod})]
+              (swap! registry assoc id {:spec spec :rule rule})
+              id)))))
+    (deregister!
+      [_ id]
+      (when-let [r (:rule (@registry id))]
+        (info "deregister! rule:" id)
+        (remove-rule! model r)
+        (swap! registry dissoc id)
+        r))
+    (lookup
+      [_ id] (@registry id))
+    (list-registry
+      [_] @registry))
+
+  (defn make-rule-registry
+    [config]
+    (map->RuleRegistry {:config config}))
+#+END_SRC
+
+**** Registry helpers
+
+#+BEGIN_SRC clojure :noweb-ref registry-helpers
+  (defn find-cached
+    [cache spec]
+    (some (fn [[id q]] (if (= (:spec q) spec) id)) cache))
+
+  (defn compile-production-item
+    [[op fact]]
+    (let [fact (map #(if (ff/qvar? %) (fn [r] (r %)) (fn [_] %)) fact)]
+      (case op
+        :add    (fn [g res] (ff/add-fact! g (mapv #(% res) fact)))
+        :remove (fn [g res] (ff/remove-fact! g (mapv #(% res) fact)))
+        (throw (IllegalArgumentException. (str "invalid production op: " op))))))
+
+  (defn compile-rule-production
+    [rule-id prod]
+    (let [prods (mapv compile-production-item prod)]
+      (fn [g _ res] (info :infer rule-id res) (run! #(% g res) prods))))
+#+END_SRC
+
+*** Handlers
+
+#+BEGIN_SRC clojure :noweb-ref handler
+  (defn edn-response
+    [body status]
+    (-> (pr-str {:body body})
+        (resp/response)
+        (resp/status status)
+        (resp/content-type "application/edn")))
+
+  (defn delayed-response-handler
+    [model ready? handler]
+    (d/->deferred
+     (go
+       (let [ch  (async/tap (result-event-bus model) (async/chan))]
+         (loop []
+           (let [res (<! ch)]
+             (if (ready?)
+               (do
+                 (async/untap (result-event-bus model) ch)
+                 (async/close! ch)
+                 (debug :result res)
+                 (handler))
+               (recur))))))))
+
+  (defn one-off-query-handler
+    [model]
+    (fn [req]
+      (try
+        (let [spec    (edn/read-string (-> req :params :q))
+              _       (info :one-off-query spec)
+              q       (add-query! model spec false)
+              handler (delayed-response-handler
+                       model
+                       #(deref q)
+                       #(let [{:keys [id limit offset]} (:params req)
+                              limit  (strf/parse-int limit 10 100)
+                              offset (strf/parse-int offset 10 0)
+                              body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                          (remove-query! model q)
+                          (edn-response
+                           {:count  (count body)
+                            :total  (count @q)
+                            :offset offset
+                            :body   body}
+                           200)))]
+          (trigger-update! model)
+          handler)
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn register-query-handler
+    [queries]
+    (fn [req]
+      (try
+        (let [{:keys [id q]} (:params req)
+              q   (edn/read-string q)
+              id' (register! queries id q)]
+          (if id'
+            (if (= id id')
+              (edn-response {:id id' :body "New query registered"} 202)
+              (edn-response {:id id' :body "Query already registered using another ID"} 303))
+            (edn-response {:id id :body "Query ID conflict"} 409)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn query-result-handler
+    [queries]
+    (fn [req]
+      (try
+        (let [{:keys [id limit offset spec]} (:params req)
+              q (lookup queries id)]
+          (if-let [qq (:query q)]
+            (let [limit  (strf/parse-int limit 10 100)
+                  offset (strf/parse-int offset 10 0)
+                  res    (if spec
+                           (let [spec (-> (edn/read-string spec)
+                                          (select-keys [:filter :aggregate :order :group-by :select :bind]))
+                                 spec (merge (dissoc (:spec q) :q) spec)
+                                 cfn  (-> spec
+                                          (dsl/compile-query-result-spec)
+                                          (ff/make-query-result))]
+                             (info "merged result using:" spec)
+                             (cfn @(ff/pre-result-vertex qq)))
+                           @qq)
+                  body   (into (empty res) (comp (drop offset) (take limit)) res)]
+              (edn-response
+               {:id id
+                :count  (count body)
+                :total  (count res)
+                :offset offset
+                :spec   (:spec q)
+                :body   body}
+               200))
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn delete-query-handler
+    [queries]
+    (fn [req]
+      (try
+        (let [id (-> req :params :id)]
+          (if (deregister! queries id)
+            (edn-response {:id id :body "Query scheduled for deletion"} 202)
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn list-registry-handler
+    [registry]
+    (fn [req]
+      (try
+        (let [items (reduce-kv
+                     (fn [acc k v] (assoc acc k (:spec v)))
+                     {} (list-registry registry))]
+          (edn-response {:body items} 200))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn register-rule-handler
+    [rules]
+    (fn [req]
+      (try
+        (let [{:keys [id q prod]} (:params req)
+              q    (edn/read-string q)
+              prod (edn/read-string prod)
+              spec {:q q :prod (set prod)}
+              id   (or  (register! rules id spec))]
+          (if id
+            (edn-response {:id id :body "Rule registered"} 202)
+            (edn-response {:id id :body "Rule ID conflict"} 409)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn rule-result-handler
+    [rules]
+    (fn [req]
+      (try
+        (let [{:keys [id limit offset]} (:params req)
+              r (lookup rules id)]
+          (if-let [rr (:rule r)]
+            (let [limit  (strf/parse-int limit 10 100)
+                  offset (strf/parse-int offset 10 0)
+                  body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
+              (edn-response
+               {:id id
+                :count  (count body)
+                :total  (count @rr)
+                :offset offset
+                :spec   (:spec r)
+                :body   body}
+               200))
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn delete-rule-handler
+    [rules]
+    (fn [req]
+      (try
+        (let [id (-> req :params :id)]
+          (if (deregister! rules id)
+            (edn-response {:id id :body "Rule scheduled for deletion"} 202)
+            (edn-response {:id id} 404)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn add-facts-handler
+    [model]
+    (fn [req]
+      (try
+        (let [{:keys [facts uri]} (:params req)]
+          (cond
+            facts (let [facts (edn/read-string facts)]
+                    (add-facts! model facts)
+                    (edn-response {:body (str "adding " (count facts) " facts")} 202))
+            uri   (let [facts @(d/chain (http/get uri)
+                                        :body
+                                        bs/to-string
+                                        nt/parse-ntriples)]
+                    (add-facts! model facts)
+                    (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
+            :else (edn-response {:body "No facts or uri param given"} 400)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn wrap-middleware
+    [config routes]
+    (let [defaults (assoc-in site-defaults [:security :anti-forgery] false)
+          routes   (-> routes
+                       (wrap-defaults defaults))
+          routes   (if (:dev config)
+                     (wrap-stacktrace routes)
+                     routes)]
+      routes))
+
+  (defn app-routes
+    [config model queries rules]
+    (wrap-middleware
+     config
+     (compojure/routes
+      (POST   "/facts"       [] (add-facts-handler model))
+      (POST   "/query"       [] (one-off-query-handler model))
+      (POST   "/queries"     [] (register-query-handler queries))
+      (GET    "/queries"     [] (list-registry-handler queries))
+      (GET    "/queries/:id" [] (query-result-handler queries))
+      (DELETE "/queries/:id" [] (delete-query-handler queries))
+      (GET    "/rules"       [] (list-registry-handler rules))
+      (POST   "/rules"       [] (register-rule-handler rules))
+      (GET    "/rules/:id"   [] (rule-result-handler rules))
+      (DELETE "/rules/:id"   [] (delete-rule-handler rules))
+      (route/not-found "404"))))
+
+  (defrecord Handler [config model queries rules routes]
+    comp/Lifecycle
+    (start [_]
+      (info "starting handler...")
+      (let [routes ((:route-provider config) config model queries rules)]
+        (assoc _ :routes routes)))
+    (stop [_]
+      (info "stopping handler..."))
+    IHandler
+    (route-map [_]
+      routes))
+
+  (defn make-handler
+    [config] (map->Handler {:config config}))
+#+END_SRC
+
+*** Aleph server
+
+#+BEGIN_SRC clojure :noweb-ref aleph
+  (defrecord AlephServer [config server handler]
+    comp/Lifecycle
+    (start [_]
+      (if-not server
+        (let [port   (:port config)
+              routes (route-map handler)]
+          (info "starting aleph server on port:" port)
+          (assoc _ :server (http/start-server routes {:port port})))
+        (do (warn "aleph server already running...")
+            _)))
+    (stop [_]
+      (if server
+        (do (info "stopping server...")
+            (.close ^java.io.Closeable server)
+            (assoc _ :server nil))
+        (do (warn "aleph server already stopped!")
+            _))))
+
+  (defn make-server
+    [config]
+    (map->AlephServer {:config config}))
+#+END_SRC
+
+*** Inference rules
+**** Property rules
+
+#+BEGIN_SRC clojure :noweb-ref inf-rules
+  (def inf-rules-props
+    '{:prp-dom   {:q    {:q [{:where [[?p "rdfs:domain" ?d]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?x "rdf:type" ?d]]]}
+
+      :prp-rng   {:q    {:q [{:where [[?p "rdfs:range" ?r]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?y "rdf:type" ?r]]]}
+
+      :prp-fp    {:q    {:q [{:where [[?p "rdf:type" "owl:FunctionalProperty"]
+                                      [?x ?p ?y1]
+                                      [?x ?p ?y2]]}]}
+                  :prod [[:add [?y1 "owl:sameAs" ?y2]]]}
+
+      :prp-ifp   {:q    {:q [{:where [[?p "rdf:type" "owl:InverseFunctionalProperty"]
+                                      [?x1 ?p ?y]
+                                      [?x2 ?p ?y]]}]}
+                  :prod [[:add [?x1 "owl:sameAs" ?x2]]]}
+
+      :prp-irp   {:q    {:q [{:where [[?p "rdf:type" "owl:IrreflexiveProperty"]
+                                      [?x ?p ?x]]}]}
+                  :prod [[:remove [?x ?p ?x]]]}
+
+      :prp-symp  {:q    {:q [{:where [[?p "rdf:type" "owl:SymmetricProperty"]
+                                      [?x ?p ?y]]}]}
+                  :prod [[:add [?y ?p ?x]]]}
+
+      ;; :prp-asyp  {:q {:q [{:where [[?p "rdf:type" "owl:AsymmetricProperty"]
+      ;;                               [?x ?p ?y]
+      ;;                               [?y ?p ?x]]}]}
+      ;;              :prod false}
+
+      :prp-trp   {:q    {:q [{:where [[?p "rdf:type" "owl:TransitiveProperty"]
+                                      [?x ?p ?y]
+                                      [?y ?p ?z]]
+                              :unique true}]}
+                  :prod [[:add [?x ?p ?z]]]}
+
+      :prp-spo1  {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?x ?p2 ?y]]]}
+
+      ;; :prp-spo2  nil ;; TODO requires property chains
+
+      :prp-eqp1  {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?x ?p2 ?y]]]}
+
+      :prp-eqp2  {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]
+                                      [?x ?p2 ?y]]}]}
+                  :prod [[:add [?x ?p1 ?y]]]}
+
+      ;; :prp-pdw   {:q {:q [{:where [[?p1 "owl:propertyDisjointWith" ?p2]
+      ;;                               [?x ?p1 ?y]
+      ;;                               [?x ?p2 ?y]]}]}
+      ;;              :prod false}
+
+      ;; :prp-adp   nil ;; TODO required property chains
+
+      :prp-inv1  {:q    {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                      [?x ?p1 ?y]]}]}
+                  :prod [[:add [?y ?p2 ?x]]]}
+
+      :prp-inv2  {:q    {:q [{:where [[?p1 "owl:inverseOf" ?p2]
+                                      [?x ?p2 ?y]]}]}
+                  :prod [[:add [?y ?p1 ?x]]]}})
+#+END_SRC
+
+**** Class semantics
+
+#+BEGIN_SRC clojure :noweb-ref inf-rules
+  (def inf-rules-class-semantics
+    '{:cax-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?x "rdf:type" ?c1]]}]}
+                 :prod [[:add [?x "rdf:type" ?c2]]]}
+
+      :cax-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
+                                     [?x "rdf:type" ?c1]]}]}
+                 :prod [[:add [?x "rdf:type" ?c2]]]}
+
+      :cax-eqc2 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]
+                                     [?x "rdf:type" ?c2]]}]}
+                 :prod [[:add [?x "rdf:type" ?c1]]]}
+
+      ;; :cax-dw   {:q {:q [{:where [[?c1 "owl:disjointWith" ?c2]
+      ;;                              [?x "rdf:type" ?c1]
+      ;;                              [?x "rdf:type" ?c2]]}]}
+      ;;             :prod false}
+
+      ;; :cax-adc  nil ;; TODO
+      })
+#+END_SRC
+
+**** RDF Schema rules
+
+#+BEGIN_SRC clojure :noweb-ref inf-rules
+  (def inf-rules-schema
+    '{:scm-cls  {:q    {:q [{:where [[?c "rdf:type" "owl:Class"]]}]}
+                 :prod [[:add [?c "rdfs:subClassOf" ?c]]
+                        [:add [?c "owl:equivalentClass" ?c]]
+                        [:add [?c "rdfs:subClassOf" "owl:Thing"]]
+                        [:add ["owl:Nothing" "rdfs:subClassOf" ?c]]]}
+
+      :scm-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?c2 "rdfs:subClassOf" ?c3]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c3]]]}
+
+      :scm-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]
+                        [:add [?c2 "rdfs:subClassOf" ?c1]]]}
+
+      :scm-eqc2 {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
+                                     [?c2 "rdfs:subClassOf" ?c1]]}]}
+                 :prod [[:add [?c1 "owl:equivalentClass" ?c2]]]}
+
+      :scm-op   {:q    {:q [{:where [[?p "rdf:type" "owl:ObjectProperty"]]}]}
+                 :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
+                        [:add [?p "owl:equivalentProperty" ?p]]]}
+
+      :scm-dp   {:q    {:q [{:where [[?p "rdf:type" "owl:DatatypeProperty"]]}]}
+                 :prod [[:add [?p "rdfs:subPropertyOf" ?p]]
+                        [:add [?p "owl:equivalentProperty" ?p]]]}
+
+      :scm-spo  {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                     [?p2 "rdfs:subPropertyOf" ?p3]]}]}
+                 :prod [[:add [?p1 "rdfs:subPropertyOf" ?p3]]]}
+
+      :scm-eqp1 {:q    {:q [{:where [[?p1 "owl:equivalentProperty" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:subPropertyOf" ?p2]]
+                        [:add [?p2 "rdfs:subPropertyOf" ?p1]]]}
+
+      :scm-eqp2 {:q    {:q [{:where [[?p1 "rdfs:subPropertyOf" ?p2]
+                                     [?p2 "rdfs:subPropertyOf" ?p1]]}]}
+                 :prod [[:add [?p1 "owl:equivalentProperty" ?p2]]]}
+
+      :scm-dom1 {:q    {:q [{:where [[?p "rdfs:domain" ?c1]
+                                     [?c1 "rdfs:subClassOf" ?c2]]}]}
+                 :prod [[:add [?p "rdfs:domain" ?c2]]]}
+
+      :scm-dom2 {:q    {:q [{:where [[?p2 "rdfs:domain" ?c]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:domain" ?c]]]}
+
+      :scm-rng1 {:q    {:q [{:where [[?p "rdfs:range" ?c1]
+                                     [?c1 "rdfs:subClassOf" ?c2]]}]}
+                 :prod [[:add [?p "rdfs:range" ?c2]]]}
+
+      :scm-rng2 {:q    {:q [{:where [[?p2 "rdfs:range" ?c]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?p1 "rdfs:range" ?c]]]}
+
+      :scm-hv   {:q    {:q [{:where [[?c1 "owl:hasValue" ?i]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:hasValue" ?i]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+
+      :scm-svf1 {:q    {:q [{:where [[?c1 "owl:someValuesFrom" ?y1]
+                                     [?c1 "owl:onProperty" ?p]
+                                     [?c2 "owl:someValuesFrom" ?y2]
+                                     [?c2 "owl:onProperty" ?p]
+                                     [?y1 "rdfs:subClassOf" ?y2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+
+      :scm-svf2 {:q    {:q [{:where [[?c1 "owl:someValuesFrom" ?y]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:someValuesFrom" ?y]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+
+      :scm-avf1 {:q    {:q [{:where [[?c1 "owl:allValuesFrom" ?y1]
+                                     [?c1 "owl:onProperty" ?p]
+                                     [?c2 "owl:allValuesFrom" ?y2]
+                                     [?c2 "owl:onProperty" ?p]
+                                     [?y1 "rdfs:subClassOf" ?y2]]}]}
+                 :prod [[:add [?c1 "rdfs:subClassOf" ?c2]]]}
+
+      :scm-avf2 {:q    {:q [{:where [[?c1 "owl:allValuesFrom" ?y]
+                                     [?c1 "owl:onProperty" ?p1]
+                                     [?c2 "owl:allValuesFrom" ?y]
+                                     [?c2 "owl:onProperty" ?p2]
+                                     [?p1 "rdfs:subPropertyOf" ?p2]]}]}
+                 :prod [[:add [?c2 "rdfs:subClassOf" ?c1]]]}
+
+      ;; :scm-int  nil ;; TODO
+
+      ;; :scm-uni  nil ;; TODO
+      })
+#+END_SRC
+
+** Component system creation
+
+*** Default configuration
+
+#+BEGIN_SRC clojure :noweb-ref config
+  (def default-config
+    {:prefixes {:prefixes  {"dcterms" "http://purl.org/dc/terms/"
+                            "doap"    "http://usefulinc.com/ns/doap#"
+                            "fabric"  "http://ns.thi.ng/fabric#"
+                            "foaf"    "http://xmlns.com/foaf/0.1/"
+                            "geo"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
+                            "owl"     "http://www.w3.org/2002/07/owl#"
+                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
+                            "schema"  "http://schema.org/"
+                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
+     :logger   {:fn        default-logger
+                :path      "session-%s.edn"}
+     :graph    {:edn-paths ["resources/fabric.edn"]
+                :index     (ff/alias-index-vertex #{"owl:sameAs"})}
+     :model    {}
+     :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
+     :rules    {:specs     (merge
+                            inf-rules-props
+                            inf-rules-class-semantics
+                            inf-rules-schema)}
+     :handler  {:route-provider app-routes
+                :dev true}
+     :server   {:port 8000}})
+#+END_SRC
+
+*** Default system definition
+
+#+BEGIN_SRC clojure :noweb-ref system
+  (defn make-system
+    [config]
+    (comp/system-map
+     :graph    (comp/using
+                (make-graph (:graph config))
+                {:prefixes :prefixes})
+     :logger   (comp/using
+                (make-logger (:logger config))
+                {:graph    :graph
+                 :prefixes :prefixes})
+     :model    (comp/using
+                (make-graph-model (:model config))
+                {:graph :graph})
+     :prefixes (make-prefix-registry (:prefixes config))
+     :queries  (comp/using
+                (make-query-registry (:queries config))
+                {:model :model})
+     :rules    (comp/using
+                (make-rule-registry (:rules config))
+                {:model :model})
+     :handler  (comp/using
+                (make-handler (:handler config))
+                {:model    :model
+                 :prefixes :prefixes
+                 :queries  :queries
+                 :rules    :rules})
+     :server   (comp/using
+                (make-server (:server config))
+                {:handler :handler})))
+#+END_SRC
+
+** REPL
+
+#+BEGIN_SRC clojure :noweb-ref user
+  (def system nil)
+
+  (defn init []
+    (alter-var-root
+     #'system
+     (constantly (make-system default-config))))
+
+  (defn start []
+    (alter-var-root #'system comp/start))
+
+  (defn stop []
+    (alter-var-root
+     #'system
+     (fn [s] (when s (comp/stop s)))))
+
+  (defn go* []
+    (init)
+    (start))
+
+  (defn reset []
+    (stop)
+    (refresh :after 'thi.ng.fabric.ld.core/go*))
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/ld/core.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.ld.core
+    (:require
+     [thi.ng.fabric.core :as f]
+     [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.fabric.facts.dsl :as dsl]
+     [thi.ng.fabric.facts.io.ntriples :as nt]
+     [thi.ng.strf.core :as strf]
+     [thi.ng.xerror.core :as err]
+     [com.stuartsierra.component :as comp]
+     [clojure.tools.namespace.repl :refer (refresh)]
+     [manifold.deferred :as d]
+     [aleph.http :as http]
+     [byte-streams :as bs]
+     [compojure.core :as compojure :refer [GET POST DELETE]]
+     [compojure.route :as route]
+     [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
+     [ring.middleware.stacktrace :refer [wrap-stacktrace]]
+     [ring.util.response :as resp]
+     [clojure.java.io :as io]
+     [clojure.edn :as edn]
+     [clojure.core.async :as async :refer [go go-loop <! >!]]
+     [taoensso.timbre :refer [debug info warn]])
+    (:import
+     java.io.PushbackReader))
+
+  <<protocols>>
+
+  <<registry-helpers>>
+
+  <<registry>>
+
+  <<graph>>
+
+  <<logger>>
+
+  <<model>>
+
+  <<aleph>>
+
+  <<handler>>
+
+  <<inf-rules>>
+
+  <<config>>
+
+  <<system>>
+
+  <<user>>
+#+END_SRC
