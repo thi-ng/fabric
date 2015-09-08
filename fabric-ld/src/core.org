@@ -69,7 +69,7 @@ digraph g {
     (result-event-bus [_])
     (add-facts! [_ facts])
     (remove-facts! [_ facts])
-    (add-query! [_ q notify?])
+    (add-query! [_ q])
     (remove-query! [_ q])
     (add-rule! [_ rule])
     (remove-rule! [_ rule]))
@@ -157,7 +157,7 @@ digraph g {
             (f)
             (if (<! res)
               (recur)
-              (info "contex finished")))
+              (info "context finished")))
           (info "work queue closed")))))
 
   (defn- model-result-log
@@ -217,7 +217,7 @@ digraph g {
                  (f/notify! ctx)))]))
       _)
     (add-query!
-      [_ q notify?]
+      [_ q]
       (let [out (promise)]
         (go
           (>! queue
@@ -341,7 +341,7 @@ a more efficient manner.
         (let [id (or id (str (java.util.UUID/randomUUID)))]
           (when-not (@registry id)
             (info "register! query:" id spec)
-            (let [q (add-query! model spec true)]
+            (let [q (add-query! model spec)]
               (swap! registry assoc id {:spec spec :query q})
               id)))))
     (deregister!
@@ -387,7 +387,7 @@ a more efficient manner.
           (when-not (@registry id)
             (info "register! rule:" id spec)
             (let [prod  (compile-rule-production id (:prod spec))
-                  query (add-query! model (:q spec) false)
+                  query (add-query! model (:q spec))
                   rule  (add-rule! model {:id id :query query :production prod})]
               (swap! registry assoc id {:spec spec :rule rule})
               id)))))
@@ -460,7 +460,7 @@ a more efficient manner.
       (try
         (let [spec    (edn/read-string (-> req :params :q))
               _       (info :one-off-query spec)
-              q       (add-query! model spec false)
+              q       (add-query! model spec)
               handler (delayed-response-handler
                        model
                        #(deref q)
@@ -973,7 +973,7 @@ a more efficient manner.
      #'system
      (fn [s] (when s (comp/stop s)))))
 
-  (defn go* []
+  (defn launch []
     (init)
     (start))
 
