@@ -909,11 +909,11 @@ a more efficient manner.
 #+END_SRC
 
 ** Component system creation
-
 *** Default configuration
 
 #+BEGIN_SRC clojure :noweb-ref config
-  (def default-config
+  (defn default-config
+    []
     {:prefixes {:prefixes  {"dcterms" "http://purl.org/dc/terms/"
                             "doap"    "http://usefulinc.com/ns/doap#"
                             "fabric"  "http://ns.thi.ng/fabric#"
@@ -926,7 +926,7 @@ a more efficient manner.
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :logger   {:fn        default-logger
                 :path      "session-%s.edn"}
-     :graph    {:edn-paths ["resources/fabric.edn"]
+     :graph    {:edn-paths [(io/resource "fabric.edn")]
                 :index     (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {}
      :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
@@ -981,7 +981,7 @@ a more efficient manner.
   (defn init []
     (alter-var-root
      #'system
-     (constantly (make-system default-config))))
+     (constantly (make-system (default-config)))))
 
   (defn start []
     (alter-var-root #'system comp/start))

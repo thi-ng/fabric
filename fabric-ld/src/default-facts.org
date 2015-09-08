@@ -1,0 +1,41 @@
+#+SETUPFILE: ../../common/setup.org
+
+* thi.ng/fabric vocabulary development
+
+(Too) early days, please ignore for now...
+
+#+BEGIN_SRC clojure :tangle ../babel/resources/fabric.edn :mkdirp yes :padline no
+  ;; fabric "http://ns.thi.ng/fabric#"
+
+  {"fabric:TypeTemplate"
+   {"rdf:type" "owl:Class"}
+
+   "fabric:Schema"
+   {"rdf:type" "owl:Class"}
+
+   "fabric:Query"
+   {"rdf:type" "owl:Class"}
+
+   "fabric:InstanceView"
+   {"rdf:type" "owl:Class"}
+
+   "fabric:query"
+   {"rdf:type" "rdfs:Property"
+    "rdfs:domain" "fabric:Query"}
+
+   "fabric:schema"
+   {"rdf:type" "rdfs:Property"
+    "rdfs:domain" "fabric:Schema"
+    "rdfs:range" "fabric:TypeTemplate"}
+
+   "fabric:template"
+   {"rdf:type" "rdfs:Property"
+    "rdfs:domain" "fabric:TypeTemplate"}
+
+   "fabric:instanceView"
+   {"rdf:type" "rdfs:Property"
+    "rdfs:domain" "fabric:InstanceView"
+    "rdfs:range" "fabric:TypeTemplate"}
+
+   }
+#+END_SRC
