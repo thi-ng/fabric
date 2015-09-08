@@ -2,8 +2,9 @@
 
 * Contents                                                         :toc_4_gh:
  - [[#namespace-thingfabricldcore][Namespace: thi.ng.fabric.ld.core]]
-     - [[#protocols][Protocols]]
+     - [[#module-overview][Module overview]]
      - [[#components][Components]]
+         - [[#protocols][Protocols]]
          - [[#factgraph-component-wrapper][FactGraph component wrapper]]
          - [[#fact-log][Fact log]]
          - [[#graph-model][Graph model]]
@@ -19,12 +20,45 @@
              - [[#class-semantics][Class semantics]]
              - [[#rdf-schema-rules][RDF Schema rules]]
      - [[#component-system-creation][Component system creation]]
+         - [[#default-configuration][Default configuration]]
+         - [[#default-system-definition][Default system definition]]
      - [[#repl][REPL]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.ld.core
 
-** Protocols
+** Module overview
+
+This diagram illustrates the default setup of the component system
+defined by this module. Users are not required to use this verbatim
+and each component has its own configuration options. All components
+are defined using Stuart Sierra's component library/lifecycle
+protocols.
+
+[[../../assets/ld-overview.png]]
+
+#+BEGIN_SRC dot :tangle ../../assets/overview.dot
+digraph g {
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
+  edge[fontname="Inconsolata",fontsize=9];
+  rankdir=LR;
+
+  FactGraph -> LDGraph -> LDGraphModel;
+  FactGraph -> FactLogger;
+
+  PrefixRegistry -> LDGraph;
+  LDGraphModel -> QueryRegistry -> Handler;
+  LDGraphModel -> RuleRegistry -> Handler;
+  LDGraphModel -> Handler;
+
+  RouteProvider -> Handler;
+
+  Handler -> AlephServer;
+}
+#+END_SRC
+
+** Components
+*** Protocols
 
 #+BEGIN_SRC clojure :noweb-ref protocols
   (defprotocol IGraphAccess
@@ -49,8 +83,6 @@
   (defprotocol IHandler
     (route-map [_]))
 #+END_SRC
-
-** Components
 
 *** FactGraph component wrapper
 
@@ -860,6 +892,8 @@ a more efficient manner.
 
 ** Component system creation
 
+*** Default configuration
+
 #+BEGIN_SRC clojure :noweb-ref config
   (def default-config
     {:prefixes {:prefixes  {"dcterms" "http://purl.org/dc/terms/"
@@ -886,6 +920,8 @@ a more efficient manner.
                 :dev true}
      :server   {:port 8000}})
 #+END_SRC
+
+*** Default system definition
 
 #+BEGIN_SRC clojure :noweb-ref system
   (defn make-system
