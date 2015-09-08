@@ -31,18 +31,18 @@
     (get-graph [_]))
 
   (defprotocol IGraphModel
-    (trigger-update [_])
-    (event-bus [_])
-    (add-facts [_ facts])
-    (remove-facts [_ facts])
-    (add-query [_ q notify?])
-    (remove-query [_ q])
-    (add-rule [_ rule])
-    (remove-rule [_ rule]))
+    (trigger-update! [_])
+    (result-event-bus [_])
+    (add-facts! [_ facts])
+    (remove-facts! [_ facts])
+    (add-query! [_ q notify?])
+    (remove-query! [_ q])
+    (add-rule! [_ rule])
+    (remove-rule! [_ rule]))
 
   (defprotocol IEntityRegistry
-    (register [_ id val])
-    (deregister [_ id])
+    (register! [_ id val])
+    (deregister! [_ id])
     (lookup [_ id])
     (list-registry [_]))
 
@@ -59,11 +59,11 @@
     comp/Lifecycle
     (start
       [_]
-      (info "initializing graph")
+      (info "initializing graph...")
       (let [g (ff/fact-graph
                (merge {:transform (ff/combine-transforms prefixes 3)}
                       config))]
-        (when-let [path (:edn-path config)]
+        (doseq [path (:edn-paths config)]
           (with-open [r (-> path io/reader PushbackReader.)]
             (let [facts (ff/map->facts (edn/read r))]
               (info "adding" (count facts) "facts from" path)
@@ -115,63 +115,114 @@
 *** Graph model
 
 #+BEGIN_SRC clojure :noweb-ref model
-  (defrecord LDGraphModel [graph ctx bus bus-in]
+  (defn- model-work-queue-processor
+    [queue rbus]
+    (let [res (async/tap rbus (async/chan))]
+      (go-loop []
+        (if-let [work (<! queue)]
+          (let [[type f] work]
+            (info "executing queue item:" type)
+            (f)
+            (if (<! res)
+              (recur)
+              (info "contex finished")))
+          (info "work queue closed")))))
+
+  (defn- model-result-log
+    [rbus]
+    (let [logtap  (async/tap rbus (async/chan))]
+      (go-loop []
+        (when-let [res (<! logtap)]
+          (info "context stats:" res)
+          (recur)))))
+
+  (defrecord LDGraphModel [graph ctx queue rbus rbus-in]
     comp/Lifecycle
     (start
       [_]
       (info "starting graph model")
-      (let [bus-in (async/chan)
-            bus    (async/mult bus-in)
-            ctx    (f/async-execution-context {:graph (get-graph graph) :result bus-in})
-            logtap (async/tap bus (async/chan))]
-        (go-loop [] (let [res (<! logtap)] (when res (info :ctx-result res) (recur))))
+      (let [queue   (async/chan)
+            rbus-in (async/chan)
+            rbus    (async/mult rbus-in)
+            ctx     (f/async-execution-context {:graph (get-graph graph) :result rbus-in})]
+        (model-work-queue-processor queue rbus)
+        (model-result-log rbus)
         (f/execute! ctx)
-        (assoc _ :ctx ctx :bus bus :bus-in bus-in)))
+        (assoc _ :ctx ctx :queue queue :rbus rbus :rbus-in rbus-in)))
     (stop
       [_]
       (info "stop graph model")
       (f/stop! ctx)
-      (async/close! bus-in)
-      (assoc _ :graph nil :ctx nil :bus nil :bus-in nil))
+      (async/close! rbus-in)
+      (async/close! queue)
+      (assoc _ :graph nil :ctx nil :queue nil :rbus nil :rbus-in nil))
     IGraphAccess
     (get-graph
       [_] (get-graph graph))
     IGraphModel
-    (trigger-update
+    (trigger-update!
       [_] (f/notify! ctx))
-    (event-bus
-      [_] bus)
-    (add-facts
+    (result-event-bus
+      [_] rbus)
+    (add-facts!
       [_ facts]
-      (let [g (get-graph graph)]
-        (run! #(ff/add-fact! g %) facts))
-      (f/notify! ctx)
+      (go
+        (>! queue
+            [:add-facts
+             (fn []
+               (let [g (get-graph graph)]
+                 (run! #(ff/add-fact! g %) facts)
+                 (f/notify! ctx)))]))
       _)
-    (remove-facts
+    (remove-facts!
       [_ facts]
-      (let [g (get-graph graph)]
-        (run! #(ff/remove-fact! g %) facts))
-      (f/notify! ctx)
+      (go
+        (>! queue
+            [:remove-facts
+             (fn []
+               (let [g (get-graph graph)]
+                 (run! #(ff/remove-fact! g %) facts)
+                 (f/notify! ctx)))]))
       _)
-    (add-query
+    (add-query!
       [_ q notify?]
-      (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
-        (when notify? (f/notify! ctx))
-        q))
-    (remove-query
+      (let [out (promise)]
+        (go
+          (>! queue
+              [:add-query
+               (fn []
+                 (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
+                   (f/notify! ctx)
+                   (deliver out q)))]))
+        @out))
+    (remove-query!
       [_ q]
-      (f/remove-from-graph! q (get-graph graph))
-      (f/notify! ctx)
+      (go
+        (>! queue
+            [:remove-query
+             (fn []
+               (f/remove-from-graph! q (get-graph graph))
+               (f/notify! ctx))]))
       _)
-    (add-rule
+    (add-rule!
       [_ rule]
-      (let [r (ff/add-rule! (get-graph graph) rule)]
-        (f/notify! ctx)
-        r))
-    (remove-rule
+      (let [out (promise)]
+        (go
+          (>! queue
+              [:add-rule
+               (fn []
+                 (let [r (ff/add-rule! (get-graph graph) rule)]
+                   (f/notify! ctx)
+                   (deliver out r)))]))
+        @out))
+    (remove-rule!
       [_ rule]
-      (f/remove-from-graph! rule (get-graph graph))
-      (f/notify! ctx)
+      (go
+        (>! queue
+            [:remove-rule
+             (fn []
+               (f/remove-from-graph! rule (get-graph graph))
+               (f/notify! ctx))]))
       _))
 
   (defn make-graph-model
@@ -194,24 +245,24 @@ a more efficient manner.
       [_]
       (info "starting prefix registry")
       (let [this (assoc _ :registry (atom {:prefixes {}}))]
-        (run! (fn [[pre uri]] (register this pre uri)) (:prefixes config))
+        (run! (fn [[pre uri]] (register! this pre uri)) (:prefixes config))
         this))
     (stop
       [_]
       (info "stopping prefix registry")
       (assoc _ :registry nil))
     IEntityRegistry
-    (register
+    (register!
       [_ prefix uri]
-      (info "register prefix:" prefix uri)
+      (info "register! prefix:" prefix uri)
       (swap! registry
              (fn [reg]
                (let [reg (assoc-in reg [:prefixes prefix] uri)]
                  (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
       _)
-    (deregister
+    (deregister!
       [_ prefix]
-      (info "deregister prefix:" prefix)
+      (info "deregister! prefix:" prefix)
       (swap! registry
              (fn [reg]
                (let [reg (update reg :prefixes dissoc prefix)]
@@ -244,28 +295,28 @@ a more efficient manner.
       [_]
       (info "starting query registry")
       (let [this (assoc _ :registry (atom {}))]
-        (run! (fn [[id spec]] (register this (name id) spec)) (:specs config))
+        (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
         this))
     (stop
       [_]
       (info "stopping query registry")
       (assoc _ :registry nil :model nil))
     IEntityRegistry
-    (register
+    (register!
       [_ id spec]
       (if-let [id' (find-cached @registry spec)]
         id'
         (let [id (or id (str (java.util.UUID/randomUUID)))]
           (when-not (@registry id)
-            (info "register query:" id spec)
-            (let [q (add-query model spec true)]
+            (info "register! query:" id spec)
+            (let [q (add-query! model spec true)]
               (swap! registry assoc id {:spec spec :query q})
               id)))))
-    (deregister
+    (deregister!
       [_ id]
       (when-let [q (:query (@registry id))]
-        (info "deregister query:" id)
-        (remove-query model q)
+        (info "deregister! query:" id)
+        (remove-query! model q)
         (swap! registry dissoc id)
         q))
     (lookup
@@ -289,30 +340,30 @@ a more efficient manner.
       [_]
       (info "starting rule registry")
       (let [this (assoc _ :registry (atom {}))]
-        (run! (fn [[id spec]] (register this (name id) spec)) (:specs config))
+        (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
         this))
     (stop
       [_]
       (info "stopping rule registry")
       (assoc _ :registry nil :model nil))
     IEntityRegistry
-    (register
+    (register!
       [_ id spec]
       (if-let [id' (find-cached @registry spec)]
         id'
         (let [id (or id (str (java.util.UUID/randomUUID)))]
           (when-not (@registry id)
-            (info "register rule:" id spec)
+            (info "register! rule:" id spec)
             (let [prod  (compile-rule-production id (:prod spec))
-                  query (add-query model (:q spec) false)
-                  rule  (add-rule model {:id id :query query :production prod})]
+                  query (add-query! model (:q spec) false)
+                  rule  (add-rule! model {:id id :query query :production prod})]
               (swap! registry assoc id {:spec spec :rule rule})
               id)))))
-    (deregister
+    (deregister!
       [_ id]
       (when-let [r (:rule (@registry id))]
-        (info "deregister rule:" id)
-        (remove-rule model r)
+        (info "deregister! rule:" id)
+        (remove-rule! model r)
         (swap! registry dissoc id)
         r))
     (lookup
@@ -360,12 +411,12 @@ a more efficient manner.
     [model ready? handler]
     (d/->deferred
      (go
-       (let [ch  (async/tap (event-bus model) (async/chan))]
+       (let [ch  (async/tap (result-event-bus model) (async/chan))]
          (loop []
            (let [res (<! ch)]
              (if (ready?)
                (do
-                 (async/untap (event-bus model) ch)
+                 (async/untap (result-event-bus model) ch)
                  (async/close! ch)
                  (debug :result res)
                  (handler))
@@ -377,7 +428,7 @@ a more efficient manner.
       (try
         (let [spec    (edn/read-string (-> req :params :q))
               _       (info :one-off-query spec)
-              q       (add-query model spec false)
+              q       (add-query! model spec false)
               handler (delayed-response-handler
                        model
                        #(deref q)
@@ -385,14 +436,14 @@ a more efficient manner.
                               limit  (strf/parse-int limit 10 100)
                               offset (strf/parse-int offset 10 0)
                               body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
-                          (remove-query model q)
+                          (remove-query! model q)
                           (edn-response
                            {:count  (count body)
                             :total  (count @q)
                             :offset offset
                             :body   body}
                            200)))]
-          (trigger-update model)
+          (trigger-update! model)
           handler)
         (catch Exception e
           (warn e)
@@ -404,7 +455,7 @@ a more efficient manner.
       (try
         (let [{:keys [id q]} (:params req)
               q   (edn/read-string q)
-              id' (register queries id q)]
+              id' (register! queries id q)]
           (if id'
             (if (= id id')
               (edn-response {:id id' :body "New query registered"} 202)
@@ -452,7 +503,7 @@ a more efficient manner.
     (fn [req]
       (try
         (let [id (-> req :params :id)]
-          (if (deregister queries id)
+          (if (deregister! queries id)
             (edn-response {:id id :body "Query scheduled for deletion"} 202)
             (edn-response {:id id} 404)))
         (catch Exception e
@@ -479,7 +530,7 @@ a more efficient manner.
               q    (edn/read-string q)
               prod (edn/read-string prod)
               spec {:q q :prod (set prod)}
-              id   (or  (register rules id spec))]
+              id   (or  (register! rules id spec))]
           (if id
             (edn-response {:id id :body "Rule registered"} 202)
             (edn-response {:id id :body "Rule ID conflict"} 409)))
@@ -515,7 +566,7 @@ a more efficient manner.
     (fn [req]
       (try
         (let [id (-> req :params :id)]
-          (if (deregister rules id)
+          (if (deregister! rules id)
             (edn-response {:id id :body "Rule scheduled for deletion"} 202)
             (edn-response {:id id} 404)))
         (catch Exception e
@@ -529,13 +580,13 @@ a more efficient manner.
         (let [{:keys [facts uri]} (:params req)]
           (cond
             facts (let [facts (edn/read-string facts)]
-                    (go (add-facts model facts))
+                    (add-facts! model facts)
                     (edn-response {:body (str "adding " (count facts) " facts")} 202))
             uri   (let [facts @(d/chain (http/get uri)
                                         :body
                                         bs/to-string
                                         nt/parse-ntriples)]
-                    (go (add-facts model facts))
+                    (add-facts! model facts)
                     (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
             :else (edn-response {:body "No facts or uri param given"} 400)))
         (catch Exception e
@@ -823,7 +874,7 @@ a more efficient manner.
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :logger   {:fn        default-logger
                 :path      "session-%s.edn"}
-     :graph    {:edn-path  "../../../ea3/facts.edn"
+     :graph    {:edn-paths ["resources/fabric.edn"]
                 :index     (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {}
      :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
