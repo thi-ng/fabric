@@ -611,7 +611,8 @@ a more efficient manner.
       (try
         (let [{:keys [facts uri]} (:params req)]
           (cond
-            facts (let [facts (edn/read-string facts)]
+            facts (let [facts (edn/read-string facts)
+                        facts (if (map? facts) (ff/map->facts map) facts)]
                     (add-facts! model facts)
                     (edn-response {:body (str "adding " (count facts) " facts")} 202))
             uri   (let [facts @(d/chain (http/get uri)
