@@ -21,6 +21,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
+         - [[#fabric-ld-server-example][fabric-ld server example]]
          - [[#fabric-facts-module-example][fabric-facts module example]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
  - [[#modules][Modules]]
@@ -39,7 +40,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.262"]
+  [thi.ng/fabric "0.0.310"]
 #+END_SRC
 
 ** Overview
@@ -106,6 +107,9 @@ into different modules (all described & linked below).
 - Edges are functions and all signal/collect actions are purely functional too
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
+
+Extra features provided by sub-modules:
+
 - Knowledge graphs (triples & quads)
 - Fully featured, efficient query engine (pattern based, variables,
   sub-queries, joins, optional joins, unions, negation, filters,
@@ -113,11 +117,14 @@ into different modules (all described & linked below).
 - Optional map based query & expression DSL (EDN serializable)
 - Bounded length (variable) path queries (with min/max limits)
 - Query & rule based fact inferencing (additions & retractions)
+- Linked Data server components
+- HTTP API to manipulate & query fact graphs
+- Fact conversion/transformation/indexing
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
-- Literate programming format
+- Literate programming format w/ diagrams & examples
 
-See the [[./fabric-facts/README.org][README]] of the *fabric-facts* module for full feature set.
+See the README of the *[[./fabric-facts/README.org][fabric-facts]]* & *[[./fabric-ld/README.org][fabric-ld]]* modules for full feature sets.
 
 *** Motivation & use cases
 **** Alternative programming model
@@ -267,6 +274,38 @@ each vertex:
 #+END_SRC
 
 [[./fabric-core/test/transclosure.org][source]]
+
+*** fabric-ld server example
+
+Excerpt of an example interaction with a /fabric-ld/ server from the
+command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
+
+#+BEGIN_SRC bash
+  # add facts in EDN format about this project
+  # EDN maps are a concise way to declare multiple relationships for
+  # for a common subject and are automatically resolved to triples
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+  # {:body "adding 3 facts"}
+
+  # register query: find all projects and all their facts, group by project
+  http -f POST :8000/queries \
+       id=projects \
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+  # {:id "projects", :body "New query registered"}
+
+  # get query results
+  http :8000/queries/projects
+  # {:id "projects2", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :order ?p,
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric"
+  #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
+  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
+#+END_SRC
 
 *** fabric-facts module example
 
@@ -506,7 +545,7 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
 
 - *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
 
-- *fabric-ld* - Linked Data server setup (WIP, not yet included)
+- *[[./fabric-ld/README.org][fabric-ld]]* - Component based Linked Data HTTP server & query endpoint setup (WIP)
 
 - *fabric-redis* - Redis backend (WIP, not yet included)
 
@@ -595,6 +634,7 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                                    |
 |-----------+------------+----------------------------------------------------------------------------------|
+|   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                  |
 |   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL        |
 |   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
 |   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling           |
