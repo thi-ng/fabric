@@ -5,9 +5,8 @@
  - [[#about-the-project][About the project]]
      - [[#overview][Overview]]
      - [[#status][Status]]
-     - [[#todo-example-usage][TODO Example usage]]
+     - [[#example-usage][Example usage]]
  - [[#namespaces][Namespaces]]
- - [[#tests][Tests]]
  - [[#module-definition][Module definition]]
      - [[#building--testing-this-project][Building & testing this project]]
      - [[#injected-properties][Injected properties]]
@@ -27,22 +26,41 @@
 
 ** Overview
 
-This is the =fabric-ld= module providing Linked Data server
-functionality in a component-wise manner.
+[[../assets/ld-overview.png]]
+
+This is the /fabric-ld/ module, providing a component based Linked
+Data HTTP server setup around a =FactGraph= (and underlying generic
+compute graph).
+
+- Facts, queries and inference rules can be added/removed via a RESTstyle API
+- One-off queries or registered queries (automatically updated on fact set change)
+- Registered queries return results immediately (without incurring work each time)
+- Registered queries can be modified to filter transform existing results
+- Graph modifications are processed via core.async work queue & execution context
+- All graph changes (facts) are written to disk (customizable)
+- By default uses Zach Tellman's Aleph server and deferred handlers around Netty
 
 ** Status
 
-VERY ALPHA quality, in active development.
+ALPHA quality, in active development.
 
-** TODO Example usage
+** Example usage
+
+#+BEGIN_SRC clojure
+  (require '[thi.ng.fabric.ld.core :as ld])
+
+  (ld/launch)
+
+  ;; restart system (autoreloads ns)
+  (ld/reset)
+
+  ;; stop entire system
+  (ld/stop)
+#+END_SRC
 
 * Namespaces
 
 - [[./src/core.org][thi.ng.fabric.ld.core]]
-
-* Tests
-
-- [[./test/core.org][thi.ng.fabric.ld.test.core]]
 
 * Module definition
 
