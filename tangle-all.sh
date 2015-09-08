@@ -1,6 +1,6 @@
 #!/bin/sh
 
-readonly MODULES="core facts"
+readonly MODULES="core facts ld"
 FILES="README.org"
 
 for m in $MODULES; do

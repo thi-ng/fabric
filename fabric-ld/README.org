@@ -1,0 +1,257 @@
+#+SETUPFILE: ../common/setup.org
+#+TITLE: thi.ng/fabric-ld
+
+* Contents                                                         :toc_3_gh:
+ - [[#about-the-project][About the project]]
+     - [[#overview][Overview]]
+     - [[#status][Status]]
+     - [[#example-usage][Example usage]]
+ - [[#namespaces][Namespaces]]
+ - [[#module-definition][Module definition]]
+     - [[#building--testing-this-project][Building & testing this project]]
+     - [[#injected-properties][Injected properties]]
+         - [[#component][component]]
+         - [[#toolsnamespace][tools.namespace]]
+         - [[#dependency-graph][dependency graph]]
+         - [[#ring][ring]]
+         - [[#compojure][compojure]]
+         - [[#aleph][aleph]]
+         - [[#manifold][manifold]]
+     - [[#leiningen-project-file][Leiningen project file]]
+     - [[#accessing-library-version-during-runtime][Accessing library version during runtime]]
+         - [[#version-namespace][Version namespace]]
+     - [[#license][License]]
+
+* About the project
+
+** Overview
+
+[[../assets/ld-overview.png]]
+
+This is the /fabric-ld/ module, providing an extensible, component
+based [[http://linkeddatabook.com/][Linked Data]] HTTP server & query endpoint setup around a
+=FactGraph= (and underlying generic compute graph, both defined in
+other modules of this project).
+
+- Facts, queries and inference rules can be added/removed via a RESTstyle API
+- One-off queries or registered queries (automatically updated on fact set change)
+- Registered queries return results immediately (without incurring work each time)
+- Registered queries can be modified to filter transform existing results
+- Graph modifications are processed via core.async work queue & execution context
+- All graph changes (facts) are written to disk (customizable, by default as EDN)
+- Default config uses Zach Tellman's [[https://github.com/ztellman/aleph][Aleph]] server and deferred handlers
+
+** Status
+
+ALPHA quality, in active development.
+
+** Example usage
+
+#+BEGIN_SRC clojure
+      (require '[thi.ng.fabric.ld.core :as ld])
+
+      ;; launch server with default config (port 8000)
+      (ld/launch)
+
+      ;; restart system (autoreloads ns)
+      (ld/reset)
+
+      ;; stop entire system
+      (ld/stop)
+#+END_SRC
+
+Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
+
+#+BEGIN_SRC bash
+  # add facts in EDN format about this project
+  # EDN maps are a concise way to declare multiple relationships for
+  # for a common subject and are automatically resolved to triples
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+  # {:body "adding 3 facts"}
+
+  # EDN vectors in object position produce multiple triples
+  # with same subject & predicate
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"schema:hasPart" ["fabric-core" "fabric-facts" "fabric-ld"]}}'
+  # {:body "adding 3 facts"}
+
+  # retrieve all facts
+  # (also includes facts from default graph added on startup)
+  # known vocabulary prefixes are expanded to full URIs
+  http :8000/facts
+  # {:body (["http://ns.thi.ng/fabric#template" "http://www.w3.org/2000/01/rdf-schema#domain" "http://ns.thi.ng/fabric#TypeTemplate"]
+  #         ["http://ns.thi.ng/fabric#TypeTemplate" "http://www.w3.org/2000/01/rdf-schema#subClassOf" "http://www.w3.org/2002/07/owl#Thing"]
+  #         ...
+  #         ["projects:fabric" "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" "http://xmlns.com/foaf/0.1/Project"]
+  #         ["projects:fabric" "http://schema.org/isPartOf" "projects:thing"]
+  #         ["projects:fabric" "http://purl.org/dc/terms/creator" "people:toxi"]
+  #         ...)}
+
+  # register query: find all projects and all their facts, group by project
+  http -f POST :8000/queries \
+       id=projects \
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+  # {:id "projects", :body "New query registered"}
+
+  # list registered queries
+  http :8000/queries
+  # {:body {"types" {:q [{:where [[?s "rdf:type" ?type]]}]},
+  #         "projects" {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}], :group-by ?prj, :select [?p ?o]}}}
+
+  # get query results
+  http :8000/queries/projects
+  # {:id "projects2", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :order ?p,
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric"
+  #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-facts"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-core"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-ld"}
+  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+  #           ?o "http://xmlns.com/foaf/0.1/Project"}]}}
+
+  # get modified query results (using supplied query opts)
+  http :8000/queries/projects \
+       spec=='{:filter (= ?p "http://schema.org/hasPart") :order ?o :select ?o}'
+  # {:id "projects", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric" [{?o "fabric-core"}
+  #                            {?o "fabric-facts"}
+  #                            {?o "fabric-ld"}]}}}
+#+END_SRC
+
+* Namespaces
+
+- [[./src/core.org][thi.ng.fabric.ld.core]]
+
+* Module definition
+
+** Building & testing this project
+
+Please see the [[../README.org][parent project]] for further information.
+
+** Injected properties                                             :noexport:
+
+#+BEGIN_SRC clojure :noweb-ref project-name
+thi.ng/fabric-ld
+#+END_SRC
+
+*** component
+#+NAME: dep-component
+#+BEGIN_SRC clojure
+[com.stuartsierra/component "0.2.3"]
+#+END_SRC
+
+*** tools.namespace
+#+NAME: dep-tools-ns
+#+BEGIN_SRC clojure
+[org.clojure/tools.namespace "0.2.10"]
+#+END_SRC
+
+*** dependency graph
+#+NAME: dep-depgraph
+#+BEGIN_SRC clojure
+[com.stuartsierra/dependency "0.1.1"]
+#+END_SRC
+
+*** ring
+#+NAME: dep-ring
+#+BEGIN_SRC clojure
+[ring/ring-defaults "0.1.5"]
+[ring/ring-devel "1.4.0"]
+#+END_SRC
+
+#+NAME: dep-ring-dev
+#+BEGIN_SRC clojure
+[javax.servlet/servlet-api "2.5"]
+[ring/ring-mock "0.2.0"]
+#+END_SRC
+
+*** compojure
+#+NAME: dep-compojure
+#+BEGIN_SRC clojure
+[compojure "1.4.0"]
+#+END_SRC
+
+*** aleph
+#+NAME: dep-aleph
+#+BEGIN_SRC clojure
+[aleph "0.4.0"]
+#+END_SRC
+
+*** manifold
+#+NAME: dep-manifold
+#+BEGIN_SRC clojure
+[manifold "0.1.0"]
+#+END_SRC
+
+** Leiningen project file                                          :noexport:
+
+#+BEGIN_SRC clojure :tangle babel/project.clj :noweb yes :mkdirp yes :padline no
+  (defproject <<project-name>> "<<conf-version()>>"
+    :description  "Signal/Collect inspired compute graph infrastructure - fact graph module"
+    :url          "<<conf-project-url>>"
+    :license      {:name "Apache Software License 2.0"
+                   :url "http://www.apache.org/licenses/LICENSE-2.0"
+                   :distribution :repo}
+    :scm          {:name "git"
+                   :url "<<conf-project-url>>"}
+
+    :min-lein-vesion "2.4.0"
+
+    :dependencies [<<dep-clj>>
+                   [thi.ng/fabric-core "<<conf-version()>>"]
+                   [thi.ng/fabric-facts "<<conf-version()>>"]
+                   <<dep-strf>>
+                   <<dep-component>>
+                   <<dep-tools-ns>>
+                   <<dep-depgraph>>
+                   <<dep-ring>>
+                   <<dep-compojure>>
+                   <<dep-aleph>>
+                   <<dep-manifold>>]
+
+    :profiles     {:dev {:dependencies [<<dep-criterium>>
+                                        <<dep-ring-dev>>]
+                         :global-vars  {*warn-on-reflection* true}
+                         :jvm-opts ^:replace []
+                         :aliases {"cleantest" ["do" "clean," "test"]}}}
+
+    :pom-addition [:developers [:developer
+                                [:name "Karsten Schmidt"]
+                                [:url "http://postspectacular.com"]
+                                [:timezone "0"]]])
+#+END_SRC
+
+** Accessing library version during runtime
+
+The autogenerated namespace =thi.ng.fabric.ld.version= contains a single
+symbol =version= holding the version string defined above:
+
+#+BEGIN_SRC clojure :noweb yes
+  (use '[thi.ng.fabric.ld.version])
+  
+  (prn version)
+  ; "<<conf-version()>>"
+#+END_SRC
+
+*** Version namespace                                              :noexport:
+
+#+BEGIN_SRC clojure :tangle babel/src/thi/ng/fabric/ld/version.cljc :noweb yes :mkdirp yes :padline no :exports none
+  (ns thi.ng.fabric.ld.version)
+
+  (def version "<<conf-version()>>")
+#+END_SRC
+
+** License
+
+Copyright © 2015 Karsten Schmidt
+
+This project is open source and licensed under the [[http://www.apache.org/licenses/LICENSE-2.0][Apache Software License 2.0]].

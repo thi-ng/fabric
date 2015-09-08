@@ -14,8 +14,13 @@
              - [[#graph-implementation][Graph implementation]]
              - [[#constructor][Constructor]]
          - [[#index-vertices][Index vertices]]
+             - [[#indexvertex-type][IndexVertex type]]
+             - [[#default-index-vertex][Default index vertex]]
+             - [[#alias-index-vertex-fact-triples-only][Alias index vertex (fact triples only)]]
      - [[#queries][Queries]]
-         - [[#overview--example][Overview & example]]
+         - [[#overview][Overview]]
+         - [[#highlevel-query-declaration][Highlevel query declaration]]
+         - [[#example][Example]]
          - [[#index-selection][Index selection]]
          - [[#basic-pattern-query][Basic pattern query]]
          - [[#parametric-query][Parametric query]]
@@ -45,6 +50,7 @@ and their roles are described in more detail throughout this document.
 
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
+    (facts [_])
     (fact-indices [_])
     (fact-transform [_])
     (add-fact! [_ t])
@@ -54,6 +60,9 @@ and their roles are described in more detail throughout this document.
     (cached [_ type k])
     (cache! [_ type k v])
     (expire! [_ type k]))
+
+  (defprotocol IFactIndex
+    (index-signal-handler [_]))
 
   (defprotocol IFactQuery
     (raw-pattern [_]))
@@ -88,7 +97,7 @@ Example facts:
 ;; toxi is author of fabric
 '[toxi author fabric]
 
-;; in transaction UUID we state "XYZ" has a a template function f
+;; in transaction UUID we state "XYZ" has a template function f
 [#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" "XYZ" :template-fn (fn [title] [:div [:h1 title]])]
 #+END_SRC
 
@@ -187,12 +196,19 @@ instance (used as backend) and provides an extended API via the
 
 The =FactGraph= indexes all facts by their individual items (e.g.
 subject, predicate and object values). These indices are special
-vertices, automatically added during graph construction and all fact
-vertices are automatically connected to (and only to!) these indices.
-When queries are added to the graph, they indirectly attach themselves
-to these indices (via intermediate index selection vertices, see
-Queries section below) and are notified each time their index
-selection is changing.
+vertices, are customizable, and automatically added during graph
+construction. All fact vertices are automatically connected to (and
+only to!) these indices. When queries are added to the graph, they
+indirectly attach themselves to these indices (via intermediate index
+selection vertices, see [[#queries][Queries]] section below) and are notified each
+time their index selection is changing.
+
+The module currently implements two types of indices:
+
+- plain fact components
+- indexing with dynamic entity aliasing (equivalence/synonym)
+
+Both are described (incl. examples) [[#index-vertices][further below]].
 
 **** Fact transformation
 
@@ -450,6 +466,8 @@ keys:
     (notify-watches
       [_ evt] (f/notify-watches g evt))
     IFactGraph
+    (facts
+      [_] (keys @facts))
     (fact-indices
       [_] indices)
     (fact-transform
@@ -461,7 +479,7 @@ keys:
             (let [v (f/add-vertex! g f' nil fact-vertex)]
               (f/notify-watches g [:add-fact f])
               (debug :add-fact f f')
-              (run! #(f/add-edge! g v % signal-fact :add) indices)
+              (run! #(f/add-edge! g v % signal-fact :add) @indices)
               (swap! facts assoc f' v)
               v))))
     (remove-fact!
@@ -470,7 +488,7 @@ keys:
         (if-let [v (@facts f')]
           (do
             (debug :remove-fact f f')
-            (run! #(f/add-edge! g v % signal-fact :remove) indices)
+            (run! #(f/add-edge! g v % signal-fact :remove) @indices)
             (swap! facts dissoc f')
             (f/notify-watches g [:remove-fact f])
             (f/remove-vertex! g v)
@@ -492,21 +510,24 @@ keys:
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :len       - fact length (default 3)
-    :index     - index vertex ctor (default index-vertex)
+    :index     - index vertex ctor (default default-index-vertex)
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
     ([{:keys [graph len index transform]
        :or   {graph     (f/compute-graph)
               len       3
-              index     index-vertex
+              index     default-index-vertex
               transform identity-transform}}]
-     (map->FactGraph
-      {:indices (mapv #(index graph %) (range len))
-       :facts   (atom {})
-       :cache   (atom {})
-       :ftx     transform
-       :g       graph})))
+     (let [indices (atom nil)
+           g       (map->FactGraph
+                    {:indices indices
+                     :facts   (atom {})
+                     :cache   (atom {})
+                     :ftx     transform
+                     :g       graph})]
+       (reset! indices (mapv #(add-index-vertex! graph (index g %)) (range len)))
+       g)))
 #+END_SRC
 
 *** Index vertices
@@ -517,23 +538,351 @@ create a single fact component index vertex. The diagram in the
 following section shows how these vertices are used (users don't need
 to deal with them directly, though).
 
+**** IndexVertex type
+
 #+BEGIN_SRC clojure :noweb-ref index-v
-(defn- index-vertex
-  [g idx]
-  (f/add-vertex!
-   g {} {::f/collect-fn      (collect-index idx)
-         ::f/score-signal-fn f/score-signal-with-new-edges}))
+  (deftype IndexVertex
+      [id index prev-index uncollected signal-map new-edges outs
+       signal-fn collect-fn]
+    #?@(:clj
+         [clojure.lang.IDeref
+          (deref
+           [_] @index)]
+         :cljs
+         [IDeref
+          (-deref
+           [_] @index)])
+    f/IVertex
+    (vertex-id
+      [_] id)
+    (set-value!
+      [_ val] (reset! index val) _)
+    (update-value!
+      [_ f] (swap! index f) _)
+    (previous-value
+      [_] @prev-index)
+    (collect!
+      [_]
+      (collect-fn _)
+      (reset! uncollected [])
+      _)
+    (collect-final!
+      [_] _)
+    (score-collect
+      [_] (count @uncollected))
+    (connect-to!
+      [_ v sig-fn opts]
+      (swap! outs assoc v [sig-fn opts])
+      (swap! new-edges inc)
+      (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
+      _)
+    (neighbors
+      [_] (keys @outs))
+    (disconnect-neighbor!
+      [_ v]
+      (when v
+        (debug id "disconnect from" (f/vertex-id v))
+        (swap! outs dissoc v))
+      _)
+    (disconnect-all!
+      [_]
+      (run! #(f/disconnect-neighbor! _ %) (keys @outs))
+      _)
+    (new-edge-count
+      [_] @new-edges)
+    (score-signal
+      [_] (+ @new-edges (if (= @index @prev-index) 0 1)))
+    (signal!
+      [_ handler]
+      (reset! prev-index @index)
+      (reset! new-edges 0)
+      (handler _ @outs))
+    (receive-signal
+      [_ src sig]
+      (if-not (= sig (@signal-map src))
+        (do (swap! uncollected conj sig)
+            (swap! signal-map assoc src sig)
+            true)
+        (debug id " ignoring unchanged signal: " (pr-str sig))))
+    (signal-map
+      [_] @signal-map)
+    (uncollected-signals
+      [_] @uncollected)
+    IFactIndex
+    (index-signal-handler
+      [_] signal-fn))
+#+END_SRC
+
+**** Default index vertex
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+  (defn add-index-vertex!
+    [g ctor]
+    (f/add-vertex! g nil nil ctor))
+
+  (defn- collect-index
+    [idx]
+    (let [tx (map (fn [[op vid t]] [op vid (nth t idx)]))
+          rf (completing
+              (fn [acc [op vid x]]
+                (case op
+                  :add    (assoc acc x (conj (or (acc x) #{}) vid))
+                  :remove (if-let [idx (acc x)]
+                            (if (= #{vid} idx)
+                              (dissoc acc x)
+                              (assoc acc x (disj idx vid)))
+                            acc)
+                  (do (warn "ignoring unknown index signal op:" op)
+                      acc))))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug :old-index val)
+         (let [val (transduce tx rf val incoming)]
+           ;;(debug :new-index val)
+           val)))))
+
+  (defn- signal-index-select
+    [[idx sel]]
+    (if sel
+      (if-let [choices (and (map? sel) (::choices sel))]
+        (fn [vertex _]
+          (let [res (into #{} (mapcat identity) (vals (select-keys* @vertex choices)))]
+            [idx (if (seq res) res ::none)]))
+        (fn [vertex _]
+          [idx (@vertex sel ::none)]))
+      (fn [vertex _]
+        [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
+
+  (defn default-index-vertex
+    [g idx]
+    (fn
+      [id _ _]
+      (IndexVertex.
+       id
+       (atom {})              ;; index
+       (atom nil)             ;; prev
+       (atom [])              ;; uncollected
+       (atom {})              ;; sig-map
+       (atom 0)               ;; new-edges
+       (atom {})              ;; outs
+       signal-index-select
+       (collect-index idx))))
+#+END_SRC
+
+**** Alias index vertex (fact triples only)
+
+An alias index vertex allows the declaration of equivalent fact items and
+their interchanged use in queries. For example we might configure such
+an index with an initial =same-as= property like this:
+
+#+BEGIN_SRC clojure
+  (def graph (ff/fact-graph {:index (ff/alias-index-vertex '#{same-as})}))
+#+END_SRC
+
+With the graph configured that way, any fact added which has =same-as=
+in predicate (middle) position, will have its subject and object
+values declared as synonyms/aliases. Example:
+
+#+BEGIN_SRC clojure
+  ;; facts: bob is a person and his homepage
+  (ff/add-fact! graph '[bob type person])
+  (ff/add-fact! graph '[bob url "http://bob.com"])
+
+  ;; declare further that...
+  (ff/add-fact! graph '[bobby same-as bob])
+
+  ;; at this point bob & bobby are semantically merged to refer to the
+  ;; same entity and one could query the graph for all facts about
+  ;; bobby, but retrieve the facts about both bob AND bobby
+  (ff/add-query! graph '[bobby nil nil])
+
+  ;; => [bob type person] [bob url "http://bob.com"]
+#+END_SRC
+
+***** Behaviors
+
+The alias merging is implemented on top of a Disjoint set (or
+Unionfind) datastructure and has the following features and behaviors:
+
+- *Order independence* - declaring an equivalence before adding facts
+  produces the same result as declaring it after facts have been
+  added.
+
+- *Indempodent* - declaring the same equivalence more than once has no
+  further effect (apart from if the fact expressing the equivalence
+  has been removed meanwhile).
+
+- *Recursive merging* - equivalences can be merged into bigger sets,
+  e.g. the 2 facts =[a same-as b] [b same-as c]= will alias A,B and C.
+  This too works with declaring new properties defining aliases
+  themselves:
+
+#+BEGIN_SRC clojure
+  ;; again, configure graph to use 'same-as' property to indicate aliases
+  (def graph (ff/fact-graph {:index (ff/alias-index-vertex '#{same-as})}))
+
+  ;; add fact declaring new alias property
+  (ff/add-fact! graph '[equiv same-as same-as])
+
+  ;; now aliases can be expressed using either 'same-as' or 'equiv'
+  (ff/add-fact! graph '[bob same-as bobby])
+  (ff/add-fact! graph '[bb equiv bob])
+#+END_SRC
+
+In query patterns, aliases are *not* resolved for qvars. I.e. using
+the above graph/facts as example, the query pattern =[bobby ?pred
+?obj]= *will match* the facts about subject =bob= and =bobby=, but the
+pattern =[?subj url "http://bob.com"]= will always only bind qvar
+=?subj= to =bob=, but not relate any of =bob='s aliases (only the
+original facts are matched). That also means the following query (with
+filter) will only produce an empty result set:
+
+#+BEGIN_SRC clojure
+  {:where [[?subj url "http://bob.com"]] :filter (= ?subj "bobby")}
+#+END_SRC
+
+/(Queries are described in more detail in the next section of this
+document.)/
+
+***** Implementation
+
+#+BEGIN_SRC clojure :noweb-ref index-v
+  (defn collect-alias-index
+    [g props idx]
+    (let [props (atom (set props))
+          rf    (fn [[index aliases :as acc] [op vid t]]
+                  (let [[s p o] t
+                        x (nth t idx)
+
+                        [index aliases]
+                        (case op
+                          :add    [(assoc index x (conj (or (index x) #{}) vid))
+                                   (uf/register aliases x)]
+                          :remove (if-let [idx (index x)]
+                                    (if (= #{vid} idx)
+                                      (let [index (dissoc index x)
+                                            comp  (disj (uf/component aliases x) x)]
+                                        [index
+                                         (if (some index comp)
+                                           aliases
+                                           (uf/unregister aliases x))])
+                                      [(assoc index x (disj idx vid))
+                                       aliases])
+                                    acc)
+                          (do (warn "ignoring unknown index signal op:" op)
+                              acc))
+
+                        aliases
+                        (if (@props p)
+                          (case op
+                            :add    (let [_ (debug idx :unify s o :pred p)
+                                          aliases (uf/union aliases s o)
+                                          facts'  (cond
+                                                    (@props o)
+                                                    (do
+                                                      (swap! props conj s)
+                                                      (into #{} (filter #(= s (nth % 1))) (facts g)))
+
+                                                    (@props s)
+                                                    (do
+                                                      (swap! props conj o)
+                                                      (into #{} (filter #(= o (nth % 1))) (facts g)))
+
+                                                    :else nil)]
+                                      (debug idx :unify-facts facts')
+                                      (reduce
+                                       (fn [acc [s _ o]]
+                                         (debug idx :unify s o)
+                                         (uf/union acc s o))
+                                       aliases facts'))
+                            :remove (-> aliases
+                                        (uf/unregister s)
+                                        (uf/unregister o)
+                                        (uf/register s)
+                                        (uf/register o))
+                            aliases)
+                          aliases)]
+                    [index aliases]))]
+      (f/collect-pure
+       (fn [val incoming]
+         ;;(debug idx :old-index val)
+         (let [val (reduce rf val incoming)]
+           ;;(debug idx :new-index val)
+           val)))))
+
+  (defn signal-alias-index-select
+    [[idx sel]]
+    (if sel
+      (if-let [choices (and (map? sel) (::choices sel))]
+        (fn [vertex _]
+          (let [[index aliases] @vertex
+                choices (into #{} (mapcat #(uf/component aliases %)) choices)
+                _ (info :index-sel idx :sel sel :choices choices)
+                res (into #{} (mapcat identity) (vals (select-keys* index choices)))]
+            [idx (if (seq res) res ::none)]))
+        (fn [vertex _]
+          (let [[index aliases] @vertex
+                choices (uf/component aliases sel)
+                _ (info :index-sel idx :sel sel :choices choices)
+                res (into #{} (mapcat identity) (vals (select-keys* index choices)))]
+            [idx (if (seq res) res ::none)])))
+      (fn [vertex _]
+        [idx (if-let [v (vals (first @vertex))] (into #{} (mapcat identity) v) ::none)])))
+
+  (defn alias-index-vertex
+    [alias-props]
+    (fn [g idx]
+      (fn [id _ _]
+        (IndexVertex.
+         id
+         (atom [{} (uf/disjoint-set)])
+         (atom nil)               ;; prev
+         (atom [])                ;; uncollected
+         (atom {})                ;; sig-map
+         (atom 0)                 ;; new-edges
+         (atom {})                ;; outs
+         signal-alias-index-select
+         (collect-alias-index g alias-props idx)))))
 #+END_SRC
 
 ** Queries
-*** Overview & example
+*** Overview
+
+Fact queries are by far the major key operation and functional aspect
+provided by this module. In fact, the =FactGraph= and vertices setup
+discussed above are really just means to an end - queries.
+
+Queries allow us to treat (parts of) a =FactGraph= like a database to
+answer questions using the facts stored, or even manipulate the sets
+of facts by inferring new facts (or contradictions) and add/remove
+them to/fron the graph. Automatically.
+
+Queries are defined declaratively and attached to the graph as
+(potentially nested trees, or at the very least, as vertex chains).
+That approach allows for the caching of intermediate results and their
+reuse by other queries, thus minimizing work effort.
+
+Queries remain part of the graph until removed again and take part in
+every execution cycle of an attached [[../../fabric-core/src/core.org#execution-contexts][execution context]].
+
+*** Highlevel query declaration
+
+The query operations provided in this namespace are considered the
+low-level raw building blocks for constructing query trees and are
+therefore meant for advanced users. The [[./dsl.org][DSL namespace]] provides a much
+more userfriendly and concise approach to define complex queries using
+a fully-featured, extensible, hashmap based DSL and expressions. These
+query specs are then compiled into query trees using the lowlevel
+forms provided here (but also offer many more additional features).
+
+*** Example
 
 This diagram illustrates how queries are generally implemented via
 multiple vertices in the graph, though we here use a graph with
 triples only (SPO facts). There're two queries here:
 
-Q1: All "friend" facts
-Q2: All facts about subject "alice"
+- *Q1* : All "friend" facts
+- *Q2* : All facts about subject "alice"
 
 - Row 1 : 4 facts stored in the graph
 - Row 2 : S, P, O index vertices
@@ -629,7 +978,7 @@ In code form this same graph could be constructed like this:
     [g sel]
     (if-let [sel' (cached g ::index-sel sel)]
       (do (debug :reuse-index-sel sel) sel')
-      (let [index  ((fact-indices g) (first sel))
+      (let [index  (@(fact-indices g) (first sel))
             vertex (f/add-vertex!
                     g nil
                     {::f/score-signal-fn f/score-signal-with-new-edges
@@ -657,7 +1006,7 @@ In code form this same graph could be constructed like this:
                              true)
                          (do (f/disconnect-neighbor! vertex parent)
                              false))))]
-        (f/add-edge! g index vertex (signal-index-select sel) nil)
+        (f/add-edge! g index vertex ((index-signal-handler index) sel) nil)
         (cache! g ::index-sel sel isel))))
 
   (defn index-sel-choice
@@ -1512,39 +1861,6 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
   (defn- signal-fact
     [vertex op] [op (f/vertex-id vertex) @vertex])
 
-  (defn- collect-index
-    [spo]
-    (let [tx (map (fn [[op id t]] [op id (nth t spo)]))
-          rf (completing
-              (fn [acc [op id x]]
-                (case op
-                  :add    (assoc acc x (conj (or (acc x) #{}) id))
-                  :remove (if-let [idx (acc x)]
-                            (if (= #{id} idx)
-                              (dissoc acc x)
-                              (assoc acc x (disj idx id)))
-                            acc)
-                  (do (warn "ignoring unknown index signal op:" op)
-                      acc))))]
-      (f/collect-pure
-       (fn [val incoming]
-         ;;(debug :old-index val)
-         (let [val (transduce tx rf val incoming)]
-           ;;(debug :new-index val)
-           val)))))
-
-  (defn- signal-index-select
-    [[idx sel]]
-    (if sel
-      (if-let [choices (and (map? sel) (::choices sel))]
-        (fn [vertex _]
-          (let [res (into #{} (mapcat identity) (vals (select-keys* @vertex choices)))]
-            [idx (if (seq res) res ::none)]))
-        (fn [vertex _]
-          [idx (@vertex sel ::none)]))
-      (fn [vertex _]
-        [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
-
   (def ^:private collect-select
     (f/collect-pure
      (fn [val incoming]
@@ -1732,6 +2048,7 @@ The following example demonstrates all these rules:
           [thi.ng.fabric.core :as f]
           [thi.ng.xerror.core :as err]
           [thi.ng.strf.core :as strf]
+          [thi.ng.dstruct.unionfind :as uf]
           [clojure.set :as set]
           [clojure.data.int-map :as imap]
           [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]

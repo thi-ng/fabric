@@ -6,7 +6,7 @@ readonly ARGS="$@"
 readonly PREFIX="fabric-"
 
 main() {
-    local modules="core facts"
+    local modules="core facts ld"
 
     for m in $modules
     do

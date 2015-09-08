@@ -61,7 +61,7 @@ https://github.com/thi-ng/fabric
 **** [[https://github.com/thi-ng/dstruct][thi.ng/dstruct]]
 #+NAME: dep-dstruct
 #+BEGIN_SRC clojure
-[thi.ng/dstruct "0.1.0"]
+[thi.ng/dstruct "0.1.1"]
 #+END_SRC
 
 **** [[https://github.com/thi-ng/strf][thi.ng/strf]]
