@@ -62,7 +62,8 @@ digraph g {
 
 #+BEGIN_SRC clojure :noweb-ref protocols
   (defprotocol IGraphAccess
-    (get-graph [_]))
+    (get-graph [_])
+    (get-facts [_]))
 
   (defprotocol IGraphModel
     (trigger-update! [_])
@@ -92,9 +93,8 @@ digraph g {
     (start
       [_]
       (info "initializing graph...")
-      (let [g (ff/fact-graph
-               (merge {:transform (ff/combine-transforms prefixes 3)}
-                      config))]
+      (let [opts (merge {:transform (ff/combine-transforms prefixes 3)} config)
+            g    (ff/fact-graph opts)]
         (doseq [path (:edn-paths config)]
           (with-open [r (-> path io/reader PushbackReader.)]
             (let [facts (ff/map->facts (edn/read r))]
@@ -106,7 +106,12 @@ digraph g {
       (info "stop graph component")
       (assoc _ :graph nil))
     IGraphAccess
-    (get-graph [_] graph))
+    (get-graph
+      [_] graph)
+    (get-facts
+      [_]
+      (let [ftx (ff/fact-transform graph)]
+        (map #(ff/untransform ftx %) (ff/facts graph)))))
 
   (defn make-graph
     [config]
@@ -189,6 +194,8 @@ digraph g {
       (async/close! queue)
       (assoc _ :graph nil :ctx nil :queue nil :rbus nil :rbus-in nil))
     IGraphAccess
+    (get-facts
+      [_] (get-facts graph))
     (get-graph
       [_] (get-graph graph))
     IGraphModel
@@ -434,7 +441,7 @@ a more efficient manner.
 #+BEGIN_SRC clojure :noweb-ref handler
   (defn edn-response
     [body status]
-    (-> (pr-str {:body body})
+    (-> (pr-str body)
         (resp/response)
         (resp/status status)
         (resp/content-type "application/edn")))
@@ -612,7 +619,7 @@ a more efficient manner.
         (let [{:keys [facts uri]} (:params req)]
           (cond
             facts (let [facts (edn/read-string facts)
-                        facts (if (map? facts) (ff/map->facts map) facts)]
+                        facts (if (map? facts) (ff/map->facts facts) facts)]
                     (add-facts! model facts)
                     (edn-response {:body (str "adding " (count facts) " facts")} 202))
             uri   (let [facts @(d/chain (http/get uri)
@@ -622,6 +629,15 @@ a more efficient manner.
                     (add-facts! model facts)
                     (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
             :else (edn-response {:body "No facts or uri param given"} 400)))
+        (catch Exception e
+          (warn e)
+          (edn-response {:body (.getMessage e)} 400)))))
+
+  (defn list-facts-handler
+    [model]
+    (fn [req]
+      (try
+        (edn-response {:body (get-facts model)} 200)
         (catch Exception e
           (warn e)
           (edn-response {:body (.getMessage e)} 400)))))
@@ -641,6 +657,7 @@ a more efficient manner.
     (wrap-middleware
      config
      (compojure/routes
+      (GET    "/facts"       [] (list-facts-handler model))
       (POST   "/facts"       [] (add-facts-handler model))
       (POST   "/query"       [] (one-off-query-handler model))
       (POST   "/queries"     [] (register-query-handler queries))
@@ -980,7 +997,7 @@ a more efficient manner.
 
   (defn reset []
     (stop)
-    (refresh :after 'thi.ng.fabric.ld.core/go*))
+    (refresh :after 'thi.ng.fabric.ld.core/launch))
 #+END_SRC
 
 ** Complete namespace definition
