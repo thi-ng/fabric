@@ -28,17 +28,18 @@
 
 [[../assets/ld-overview.png]]
 
-This is the /fabric-ld/ module, providing a component based Linked
-Data HTTP server setup around a =FactGraph= (and underlying generic
-compute graph).
+This is the /fabric-ld/ module, providing an extensible, component
+based [[http://linkeddatabook.com/][Linked Data]] HTTP server & query endpoint setup around a
+=FactGraph= (and underlying generic compute graph, both defined in
+other modules of this project).
 
 - Facts, queries and inference rules can be added/removed via a RESTstyle API
 - One-off queries or registered queries (automatically updated on fact set change)
 - Registered queries return results immediately (without incurring work each time)
 - Registered queries can be modified to filter transform existing results
 - Graph modifications are processed via core.async work queue & execution context
-- All graph changes (facts) are written to disk (customizable)
-- By default uses Zach Tellman's Aleph server and deferred handlers around Netty
+- All graph changes (facts) are written to disk (customizable, by default as EDN)
+- Default config uses Zach Tellman's [[https://github.com/ztellman/aleph][Aleph]] server and deferred handlers
 
 ** Status
 
@@ -47,15 +48,83 @@ ALPHA quality, in active development.
 ** Example usage
 
 #+BEGIN_SRC clojure
-  (require '[thi.ng.fabric.ld.core :as ld])
+      (require '[thi.ng.fabric.ld.core :as ld])
 
-  (ld/launch)
+      ;; launch server with default config (port 8000)
+      (ld/launch)
 
-  ;; restart system (autoreloads ns)
-  (ld/reset)
+      ;; restart system (autoreloads ns)
+      (ld/reset)
 
-  ;; stop entire system
-  (ld/stop)
+      ;; stop entire system
+      (ld/stop)
+#+END_SRC
+
+Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
+
+#+BEGIN_SRC bash
+  # add facts in EDN format about this project
+  # EDN maps are a concise way to declare multiple relationships for
+  # for a common subject and are automatically resolved to triples
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+  # {:body "adding 3 facts"}
+
+  # EDN vectors in object position produce multiple triples
+  # with same subject & predicate
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"schema:hasPart" ["fabric-core" "fabric-facts" "fabric-ld"]}}'
+  # {:body "adding 3 facts"}
+
+  # retrieve all facts
+  # (also includes facts from default graph added on startup)
+  # known vocabulary prefixes are expanded to full URIs
+  http :8000/facts
+  # {:body (["http://ns.thi.ng/fabric#template" "http://www.w3.org/2000/01/rdf-schema#domain" "http://ns.thi.ng/fabric#TypeTemplate"]
+  #         ["http://ns.thi.ng/fabric#TypeTemplate" "http://www.w3.org/2000/01/rdf-schema#subClassOf" "http://www.w3.org/2002/07/owl#Thing"]
+  #         ...
+  #         ["projects:fabric" "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" "http://xmlns.com/foaf/0.1/Project"]
+  #         ["projects:fabric" "http://schema.org/isPartOf" "projects:thing"]
+  #         ["projects:fabric" "http://purl.org/dc/terms/creator" "people:toxi"]
+  #         ...)}
+
+  # register query: find all projects and all their facts, group by project
+  http -f POST :8000/queries \
+       id=projects \
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+  # {:id "projects", :body "New query registered"}
+
+  # list registered queries
+  http :8000/queries
+  # {:body {"types" {:q [{:where [[?s "rdf:type" ?type]]}]},
+  #         "projects" {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}], :group-by ?prj, :select [?p ?o]}}}
+
+  # get query results
+  http :8000/queries/projects
+  # {:id "projects2", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :order ?p,
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric"
+  #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-facts"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-core"}
+  #          {?p "http://schema.org/hasPart", ?o "fabric-ld"}
+  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+  #           ?o "http://xmlns.com/foaf/0.1/Project"}]}}
+
+  # get modified query results (using supplied query opts)
+  http :8000/queries/projects \
+       spec=='{:filter (= ?p "http://schema.org/hasPart") :order ?o :select ?o}'
+  # {:id "projects", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric" [{?o "fabric-core"}
+  #                            {?o "fabric-facts"}
+  #                            {?o "fabric-ld"}]}}}
 #+END_SRC
 
 * Namespaces
