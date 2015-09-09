@@ -439,6 +439,17 @@ a more efficient manner.
 *** Handlers
 
 #+BEGIN_SRC clojure :noweb-ref handler
+  (defn untransform-pnames-in-spec
+    [prefixes spec]
+    (reduce
+     (fn [acc k]
+       (let [v (acc k)]
+         (cond
+           (coll? v)   (assoc acc k (walk/postwalk (fn [x] (ff/untransform prefixes x)) v))
+           (string? v) (assoc acc k (ff/untransform prefixes v))
+           :else       acc)))
+     spec [:bind :filter :aggregate :order :group-by]))
+
   (defn edn-response
     [body status]
     (-> (pr-str body)
@@ -462,10 +473,11 @@ a more efficient manner.
                (recur))))))))
 
   (defn one-off-query-handler
-    [model]
+    [prefixes model]
     (fn [req]
       (try
         (let [spec    (edn/read-string (-> req :params :q))
+              spec    (untransform-pnames-in-spec prefixes spec)
               _       (info :one-off-query spec)
               q       (add-query! model spec)
               handler (delayed-response-handler
@@ -489,12 +501,13 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-query-handler
-    [queries]
+    [prefixes queries]
     (fn [req]
       (try
         (let [{:keys [id q]} (:params req)
-              q   (edn/read-string q)
-              id' (register! queries id q)]
+              spec (edn/read-string q)
+              spec (untransform-pnames-in-spec prefixes spec)
+              id'  (register! queries id spec)]
           (if id'
             (if (= id id')
               (edn-response {:id id' :body "New query registered"} 202)
@@ -505,7 +518,7 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn query-result-handler
-    [queries]
+    [prefixes queries]
     (fn [req]
       (try
         (let [{:keys [id limit offset spec]} (:params req)
@@ -516,6 +529,7 @@ a more efficient manner.
                   res    (if spec
                            (let [spec (-> (edn/read-string spec)
                                           (select-keys [:filter :aggregate :order :group-by :select :bind]))
+                                 spec (untransform-pnames-in-spec prefixes spec)
                                  spec (merge (dissoc (:spec q) :q) spec)
                                  cfn  (-> spec
                                           (dsl/compile-query-result-spec)
@@ -562,11 +576,11 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-rule-handler
-    [rules]
+    [prefixes rules]
     (fn [req]
       (try
         (let [{:keys [id q prod]} (:params req)
-              q    (edn/read-string q)
+              q    (untransform-pnames-in-spec prefixes (edn/read-string q))
               prod (edn/read-string prod)
               spec {:q q :prod (set prod)}
               id   (or  (register! rules id spec))]
@@ -653,28 +667,28 @@ a more efficient manner.
       routes))
 
   (defn app-routes
-    [config model queries rules]
+    [config prefixes model queries rules]
     (wrap-middleware
      config
      (compojure/routes
       (GET    "/facts"       [] (list-facts-handler model))
       (POST   "/facts"       [] (add-facts-handler model))
-      (POST   "/query"       [] (one-off-query-handler model))
-      (POST   "/queries"     [] (register-query-handler queries))
+      (POST   "/query"       [] (one-off-query-handler prefixes model))
+      (POST   "/queries"     [] (register-query-handler prefixes queries))
       (GET    "/queries"     [] (list-registry-handler queries))
-      (GET    "/queries/:id" [] (query-result-handler queries))
+      (GET    "/queries/:id" [] (query-result-handler prefixes queries))
       (DELETE "/queries/:id" [] (delete-query-handler queries))
       (GET    "/rules"       [] (list-registry-handler rules))
-      (POST   "/rules"       [] (register-rule-handler rules))
+      (POST   "/rules"       [] (register-rule-handler prefixes rules))
       (GET    "/rules/:id"   [] (rule-result-handler rules))
       (DELETE "/rules/:id"   [] (delete-rule-handler rules))
       (route/not-found "404"))))
 
-  (defrecord Handler [config model queries rules routes]
+  (defrecord Handler [config prefixes model queries rules routes]
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:route-provider config) config model queries rules)]
+      (let [routes ((:route-provider config) config prefixes model queries rules)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -1023,6 +1037,7 @@ a more efficient manner.
      [ring.util.response :as resp]
      [clojure.java.io :as io]
      [clojure.edn :as edn]
+     [clojure.walk :as walk]
      [clojure.core.async :as async :refer [go go-loop <! >!]]
      [taoensso.timbre :refer [debug info warn]])
     (:import
