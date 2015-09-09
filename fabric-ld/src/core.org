@@ -454,12 +454,77 @@ a more efficient manner.
 *** Handlers
 
 #+BEGIN_SRC clojure :noweb-ref handler
-  (defn edn-response
-    [body status]
-    (-> (pr-str body)
-        (resp/response)
-        (resp/status status)
-        (resp/content-type "application/edn")))
+  (defmulti api-response (fn [type body] type))
+
+  (defmethod api-response :default
+    [_ body] nil)
+
+  (defmethod api-response "*/*"
+    [_ body] (api-response "application/edn" body))
+
+  (defmethod api-response "application/edn"
+    [_ body]
+    [(pr-str body) "application/edn"])
+
+  #_(defmethod api-response "application/json"
+      [_ body]
+      [(json/write-str body :escape-slash false) "application/json"])
+
+  (defn parse-accept-header
+    [accept]
+    (->> accept
+         (re-seq #"((([\w\*\-]+/[\w\*\-\+]+,?)+)(;q=(\d+(\.\d+)?))?)")
+         (mapcat
+          (fn [[_ _ a _ _ q]]
+            (let [q (if q (strf/parse-float q 0) 1)]
+              (map vector (str/split a #",") (repeat q)))))
+         (sort-by peek)
+         reverse))
+
+  (defn api-response*
+    [req body status]
+    (let [accept             (get-in req [:headers "accept"])
+          [resp type]        (->> accept
+                                  (parse-accept-header)
+                                  (some #(api-response (first %) body)))
+          [resp type status] (if resp
+                               [resp type status]
+                               [(str "Not acceptable: " accept) "text/plain" 406])]
+      (-> (resp/response resp)
+          (resp/status status)
+          (resp/content-type type))))
+
+  (def coercions
+    {:edn (fn [x] (try (edn/read-string x) (catch Exception e x)))
+     :int (fn [x] (strf/parse-int x 10 x))})
+
+  (defn coerce-params
+    [coercs params]
+    (reduce-kv
+     (fn [acc k v]
+       (let [cfn (if (fn? v) v (coercions v))]
+         (update acc k cfn)))
+     params coercs))
+
+  (defn validating-handler
+    [req params coerce vspec handler]
+    (info "-------------------")
+    (info :uri (:uri req))
+    (info :cookies (:cookies req) :session (:session req))
+    (let [params (if coerce
+                   (coerce-params coerce params)
+                   params)
+          [params err] (if vspec
+                         (v/validate params vspec)
+                         [params])]
+      (info :validated params err)
+      (if (nil? err)
+        (try
+          (handler req params)
+          (catch Exception e
+            (.printStackTrace e)
+            (api-response* req {:error "Error handling route"} 500)))
+        (api-response* req {:error err} 400))))
 
   (defn delayed-response-handler
     [model ready? handler]
@@ -479,30 +544,36 @@ a more efficient manner.
   (defn one-off-query-handler
     [model]
     (fn [req]
-      (try
-        (let [spec    (edn/read-string (-> req :params :q))
-              spec    (transform-query model spec)
-              _       (info :one-off-query spec)
-              q       (add-query! model spec)
-              handler (delayed-response-handler
-                       model
-                       #(deref q)
-                       #(let [{:keys [id limit offset]} (:params req)
-                              limit  (strf/parse-int limit 10 100)
-                              offset (strf/parse-int offset 10 0)
-                              body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
-                          (remove-query! model q)
-                          (edn-response
-                           {:count  (count body)
-                            :total  (count @q)
-                            :offset offset
-                            :body   body}
-                           200)))]
-          (trigger-update! model)
-          handler)
-        (catch Exception e
-          (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+      (validating-handler
+       req (:params req)
+       {:spec :edn :limit :int :offset :int}
+       {:spec   {:q [(v/sequential "must be a vector of sub-query maps") (v/min-length 1)]}
+        :limit  (v/optional (v/pos))
+        :offset (v/optional (v/pos))}
+       (fn [_ {:keys [spec limit offset] :as params}]
+         (try
+           (let [spec    (transform-query model spec)
+                 _       (info :one-off-query spec)
+                 q       (add-query! model spec)
+                 handler (delayed-response-handler
+                          model
+                          #(deref q)
+                          #(let [limit  (or limit 100)
+                                 offset (or offset 0)
+                                 body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                             (remove-query! model q)
+                             (api-response*
+                              req
+                              {:count  (count body)
+                               :total  (count @q)
+                               :offset offset
+                               :body   body}
+                              200)))]
+             (trigger-update! model)
+             handler)
+           (catch Exception e
+             (warn e)
+             (api-response* req {:body (.getMessage e)} 400)))))))
 
   (defn register-query-handler
     [model queries]
@@ -514,12 +585,12 @@ a more efficient manner.
               id'  (register! queries id spec)]
           (if id'
             (if (= id id')
-              (edn-response {:id id' :body "New query registered"} 202)
-              (edn-response {:id id' :body "Query already registered using another ID"} 303))
-            (edn-response {:id id :body "Query ID conflict"} 409)))
+              (api-response* req {:id id' :body "New query registered"} 202)
+              (api-response* req {:id id' :body "Query already registered using another ID"} 303))
+            (api-response* req {:id id :body "Query ID conflict"} 409)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn query-result-handler
     [model queries]
@@ -542,7 +613,8 @@ a more efficient manner.
                              (cfn @(ff/pre-result-vertex qq)))
                            @qq)
                   body   (into (empty res) (comp (drop offset) (take limit)) res)]
-              (edn-response
+              (api-response*
+               req
                {:id id
                 :count  (count body)
                 :total  (count res)
@@ -550,10 +622,10 @@ a more efficient manner.
                 :spec   (:spec q)
                 :body   body}
                200))
-            (edn-response {:id id} 404)))
+            (api-response* req {:id id} 404)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn delete-query-handler
     [queries]
@@ -561,11 +633,11 @@ a more efficient manner.
       (try
         (let [id (-> req :params :id)]
           (if (deregister! queries id)
-            (edn-response {:id id :body "Query scheduled for deletion"} 202)
-            (edn-response {:id id} 404)))
+            (api-response* req {:id id :body "Query scheduled for deletion"} 202)
+            (api-response* req {:id id} 404)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn list-registry-handler
     [registry]
@@ -574,10 +646,10 @@ a more efficient manner.
         (let [items (reduce-kv
                      (fn [acc k v] (assoc acc k (:spec v)))
                      {} (list-registry registry))]
-          (edn-response {:body items} 200))
+          (api-response* req {:body items} 200))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn register-rule-handler
     [model rules]
@@ -589,11 +661,11 @@ a more efficient manner.
               spec {:q q :prod (set prod)}
               id   (or  (register! rules id spec))]
           (if id
-            (edn-response {:id id :body "Rule registered"} 202)
-            (edn-response {:id id :body "Rule ID conflict"} 409)))
+            (api-response* req {:id id :body "Rule registered"} 202)
+            (api-response* req {:id id :body "Rule ID conflict"} 409)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn rule-result-handler
     [rules]
@@ -605,7 +677,8 @@ a more efficient manner.
             (let [limit  (strf/parse-int limit 10 100)
                   offset (strf/parse-int offset 10 0)
                   body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
-              (edn-response
+              (api-response*
+               req
                {:id id
                 :count  (count body)
                 :total  (count @rr)
@@ -613,10 +686,10 @@ a more efficient manner.
                 :spec   (:spec r)
                 :body   body}
                200))
-            (edn-response {:id id} 404)))
+            (api-response* req {:id id} 404)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn delete-rule-handler
     [rules]
@@ -624,11 +697,11 @@ a more efficient manner.
       (try
         (let [id (-> req :params :id)]
           (if (deregister! rules id)
-            (edn-response {:id id :body "Rule scheduled for deletion"} 202)
-            (edn-response {:id id} 404)))
+            (api-response* req {:id id :body "Rule scheduled for deletion"} 202)
+            (api-response* req {:id id} 404)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn add-facts-handler
     [model]
@@ -639,26 +712,26 @@ a more efficient manner.
             facts (let [facts (edn/read-string facts)
                         facts (if (map? facts) (ff/map->facts facts) facts)]
                     (add-facts! model facts)
-                    (edn-response {:body (str "adding " (count facts) " facts")} 202))
+                    (api-response* req {:body (str "adding " (count facts) " facts")} 202))
             uri   (let [facts @(d/chain (http/get uri)
                                         :body
                                         bs/to-string
                                         nt/parse-ntriples)]
                     (add-facts! model facts)
-                    (edn-response {:body (str "adding " (count facts) " facts from " uri)} 202))
-            :else (edn-response {:body "No facts or uri param given"} 400)))
+                    (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
+            :else (api-response* req {:body "No facts or uri param given"} 400)))
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn list-facts-handler
     [model]
     (fn [req]
       (try
-        (edn-response {:body (get-facts model)} 200)
+        (api-response* req {:body (get-facts model)} 200)
         (catch Exception e
           (warn e)
-          (edn-response {:body (.getMessage e)} 400)))))
+          (api-response* req {:body (.getMessage e)} 400)))))
 
   (defn wrap-middleware
     [config routes]
@@ -1029,6 +1102,7 @@ a more efficient manner.
      [thi.ng.fabric.facts.io.ntriples :as nt]
      [thi.ng.strf.core :as strf]
      [thi.ng.xerror.core :as err]
+     [thi.ng.validate.core :as v]
      [com.stuartsierra.component :as comp]
      [clojure.tools.namespace.repl :refer (refresh)]
      [manifold.deferred :as d]
@@ -1041,6 +1115,7 @@ a more efficient manner.
      [ring.util.response :as resp]
      [clojure.java.io :as io]
      [clojure.edn :as edn]
+     [clojure.string :as str]
      [clojure.walk :as walk]
      [clojure.core.async :as async :refer [go go-loop <! >!]]
      [taoensso.timbre :refer [debug info warn]])
