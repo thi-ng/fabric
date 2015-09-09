@@ -47,11 +47,12 @@ digraph g {
   FactGraph -> FactLogger;
 
   PrefixRegistry -> LDGraph;
+  PrefixRegistry -> LDGraphModel;
   LDGraphModel -> QueryRegistry -> Handler;
   LDGraphModel -> RuleRegistry -> Handler;
   LDGraphModel -> Handler;
 
-  RouteProvider -> Handler;
+  RoutesProvider -> Handler;
 
   Handler -> AlephServer;
 }
@@ -72,6 +73,7 @@ digraph g {
     (remove-facts! [_ facts])
     (add-query! [_ q])
     (remove-query! [_ q])
+    (transform-query [_ q])
     (add-rule! [_ rule])
     (remove-rule! [_ rule]))
 
@@ -173,7 +175,18 @@ digraph g {
           (info "context stats:" res)
           (recur)))))
 
-  (defrecord LDGraphModel [graph ctx queue rbus rbus-in]
+  (defn untransform-pnames-in-query
+    [tx spec]
+    (reduce
+     (fn [acc k]
+       (let [v (acc k)]
+         (cond
+           (coll? v)   (assoc acc k (walk/postwalk #(ff/untransform tx %) v))
+           (string? v) (assoc acc k (ff/untransform tx v))
+           :else       acc)))
+     spec [:q :bind :filter :aggregate :order :group-by]))
+
+  (defrecord LDGraphModel [graph prefixes ctx queue rbus rbus-in]
     comp/Lifecycle
     (start
       [_]
@@ -223,6 +236,8 @@ digraph g {
                  (run! #(ff/remove-fact! g %) facts)
                  (f/notify! ctx)))]))
       _)
+    (transform-query
+      [_ q] (untransform-pnames-in-query prefixes q))
     (add-query!
       [_ q]
       (let [out (promise)]
@@ -439,17 +454,6 @@ a more efficient manner.
 *** Handlers
 
 #+BEGIN_SRC clojure :noweb-ref handler
-  (defn untransform-pnames-in-spec
-    [prefixes spec]
-    (reduce
-     (fn [acc k]
-       (let [v (acc k)]
-         (cond
-           (coll? v)   (assoc acc k (walk/postwalk (fn [x] (ff/untransform prefixes x)) v))
-           (string? v) (assoc acc k (ff/untransform prefixes v))
-           :else       acc)))
-     spec [:bind :filter :aggregate :order :group-by]))
-
   (defn edn-response
     [body status]
     (-> (pr-str body)
@@ -473,11 +477,11 @@ a more efficient manner.
                (recur))))))))
 
   (defn one-off-query-handler
-    [prefixes model]
+    [model]
     (fn [req]
       (try
         (let [spec    (edn/read-string (-> req :params :q))
-              spec    (untransform-pnames-in-spec prefixes spec)
+              spec    (transform-query model spec)
               _       (info :one-off-query spec)
               q       (add-query! model spec)
               handler (delayed-response-handler
@@ -501,12 +505,12 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-query-handler
-    [prefixes queries]
+    [model queries]
     (fn [req]
       (try
         (let [{:keys [id q]} (:params req)
               spec (edn/read-string q)
-              spec (untransform-pnames-in-spec prefixes spec)
+              spec (transform-query model spec)
               id'  (register! queries id spec)]
           (if id'
             (if (= id id')
@@ -518,7 +522,7 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn query-result-handler
-    [prefixes queries]
+    [model queries]
     (fn [req]
       (try
         (let [{:keys [id limit offset spec]} (:params req)
@@ -529,7 +533,7 @@ a more efficient manner.
                   res    (if spec
                            (let [spec (-> (edn/read-string spec)
                                           (select-keys [:filter :aggregate :order :group-by :select :bind]))
-                                 spec (untransform-pnames-in-spec prefixes spec)
+                                 spec (transform-query model spec)
                                  spec (merge (dissoc (:spec q) :q) spec)
                                  cfn  (-> spec
                                           (dsl/compile-query-result-spec)
@@ -576,11 +580,11 @@ a more efficient manner.
           (edn-response {:body (.getMessage e)} 400)))))
 
   (defn register-rule-handler
-    [prefixes rules]
+    [model rules]
     (fn [req]
       (try
         (let [{:keys [id q prod]} (:params req)
-              q    (untransform-pnames-in-spec prefixes (edn/read-string q))
+              q    (transform-query model (edn/read-string q))
               prod (edn/read-string prod)
               spec {:q q :prod (set prod)}
               id   (or  (register! rules id spec))]
@@ -667,28 +671,28 @@ a more efficient manner.
       routes))
 
   (defn app-routes
-    [config prefixes model queries rules]
+    [config model queries rules]
     (wrap-middleware
      config
      (compojure/routes
       (GET    "/facts"       [] (list-facts-handler model))
       (POST   "/facts"       [] (add-facts-handler model))
-      (POST   "/query"       [] (one-off-query-handler prefixes model))
-      (POST   "/queries"     [] (register-query-handler prefixes queries))
+      (POST   "/query"       [] (one-off-query-handler model))
+      (POST   "/queries"     [] (register-query-handler model queries))
       (GET    "/queries"     [] (list-registry-handler queries))
-      (GET    "/queries/:id" [] (query-result-handler prefixes queries))
+      (GET    "/queries/:id" [] (query-result-handler model queries))
       (DELETE "/queries/:id" [] (delete-query-handler queries))
       (GET    "/rules"       [] (list-registry-handler rules))
-      (POST   "/rules"       [] (register-rule-handler prefixes rules))
+      (POST   "/rules"       [] (register-rule-handler model rules))
       (GET    "/rules/:id"   [] (rule-result-handler rules))
       (DELETE "/rules/:id"   [] (delete-rule-handler rules))
       (route/not-found "404"))))
 
-  (defrecord Handler [config prefixes model queries rules routes]
+  (defrecord Handler [config model queries rules routes]
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:route-provider config) config prefixes model queries rules)]
+      (let [routes ((:route-provider config) config model queries rules)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -968,7 +972,8 @@ a more efficient manner.
                  :prefixes :prefixes})
      :model    (comp/using
                 (make-graph-model (:model config))
-                {:graph :graph})
+                {:graph    :graph
+                 :prefixes :prefixes})
      :prefixes (make-prefix-registry (:prefixes config))
      :queries  (comp/using
                 (make-query-registry (:queries config))
@@ -978,10 +983,9 @@ a more efficient manner.
                 {:model :model})
      :handler  (comp/using
                 (make-handler (:handler config))
-                {:model    :model
-                 :prefixes :prefixes
-                 :queries  :queries
-                 :rules    :rules})
+                {:model   :model
+                 :queries :queries
+                 :rules   :rules})
      :server   (comp/using
                 (make-server (:server config))
                 {:handler :handler})))
