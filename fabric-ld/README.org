@@ -10,6 +10,8 @@
  - [[#module-definition][Module definition]]
      - [[#building--testing-this-project][Building & testing this project]]
      - [[#injected-properties][Injected properties]]
+     - [[#extra-module-dependencies][Extra module dependencies]]
+         - [[#thingvalidate][thi.ng/validate]]
          - [[#component][component]]
          - [[#toolsnamespace][tools.namespace]]
          - [[#dependency-graph][dependency graph]]
@@ -142,6 +144,12 @@ Please see the [[../README.org][parent project]] for further information.
 #+BEGIN_SRC clojure :noweb-ref project-name
 thi.ng/fabric-ld
 #+END_SRC
+** Extra module dependencies
+*** thi.ng/validate
+#+NAME: dep-validate
+#+BEGIN_SRC clojure
+[thi.ng/validate "0.1.3"]
+#+END_SRC
 
 *** component
 #+NAME: dep-component
@@ -210,6 +218,7 @@ thi.ng/fabric-ld
                    [thi.ng/fabric-core "<<conf-version()>>"]
                    [thi.ng/fabric-facts "<<conf-version()>>"]
                    <<dep-strf>>
+                   <<dep-validate>>
                    <<dep-component>>
                    <<dep-tools-ns>>
                    <<dep-depgraph>>
