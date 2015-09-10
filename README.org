@@ -12,18 +12,28 @@ Clojure & Clojurescript. Written in a Literate Programming format.
      - [[#overview][Overview]]
          - [[#general-compute-graph-concepts][General Compute Graph concepts]]
          - [[#features][Features]]
-         - [[#motivation--use-cases][Motivation & use cases]]
-         - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
-         - [[#resources--related-work][Resources / related work]]
-         - [[#benchmarks][Benchmarks]]
+     - [[#modules][Modules]]
      - [[#status][Status]]
+     - [[#motivation--use-cases][Motivation & use cases]]
+         - [[#alternative-programming-model][Alternative programming model]]
+         - [[#pervasive-caching-easy-introspection-algorithm-visualization][Pervasive caching, easy introspection, algorithm visualization]]
+         - [[#reactive-programming-wip][Reactive programming (WIP)]]
+         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
+         - [[#self-organizing-workflows][Self-organizing workflows]]
+         - [[#semantic-knowledge-graphs-queries--reasoning][(Semantic) knowledge graphs, queries & reasoning]]
+         - [[#toolkit-w-clojurescript-support][Toolkit w/ Clojurescript support]]
+     - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
+     - [[#resources--related-work][Resources / related work]]
+     - [[#benchmarks][Benchmarks]]
+         - [[#single-source-shortest-path][Single-source shortest path]]
+         - [[#vertex-coloring][Vertex coloring]]
      - [[#example-usage][Example usage]]
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
+         - [[#fabric-ld-server-example][fabric-ld server example]]
          - [[#fabric-facts-module-example][fabric-facts module example]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
- - [[#modules][Modules]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
      - [[#building-this-project][Building this project]]
@@ -39,7 +49,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.247"]
+  [thi.ng/fabric "0.0.312"]
 #+END_SRC
 
 ** Overview
@@ -106,6 +116,9 @@ into different modules (all described & linked below).
 - Edges are functions and all signal/collect actions are purely functional too
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
+
+Extra features provided by sub-modules:
+
 - Knowledge graphs (triples & quads)
 - Fully featured, efficient query engine (pattern based, variables,
   sub-queries, joins, optional joins, unions, negation, filters,
@@ -113,41 +126,58 @@ into different modules (all described & linked below).
 - Optional map based query & expression DSL (EDN serializable)
 - Bounded length (variable) path queries (with min/max limits)
 - Query & rule based fact inferencing (additions & retractions)
+- Linked Data server components
+- HTTP API to manipulate & query fact graphs
+- Fact conversion/transformation/indexing
 - N-Triples parser w/ extensible object literal conversions
 - Easy-to-use API
-- Literate programming format
+- Literate programming format w/ diagrams & examples
 
-See the [[./fabric-facts/README.org][README]] of the *fabric-facts* module for full feature set.
+See the README of modules below for full feature sets...
 
-*** Motivation & use cases
-**** Alternative programming model
+** Modules
+
+- *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
+
+- *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
+
+- *[[./fabric-ld/README.org][fabric-ld]]* - Component based Linked Data HTTP server & query endpoint setup (WIP)
+
+- *fabric-redis* - Redis backend (WIP, not yet included)
+
+** Status
+
+ALPHA quality, in active development.
+
+** Motivation & use cases
+*** Alternative programming model
 
 Some algorithms can be expressed more simply using the Signal/Collect
 model and allow for parallel execution.
 
-**** Pervasive caching, easy introspection, algorithm visualization
+*** Pervasive caching, easy introspection, algorithm visualization
 
 Intermediate results can be easily reused by multiple consumbers and
 retrieved through vertex inspection. Compute graphs can also be
 visualized, allowing for the development of visual programming tools.
 
-**** Reactive programming (WIP)
+*** Reactive programming (WIP)
 
 Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
 mandatory integration or reliance on React.js or DOM rendering cycle
 
-**** Single machine or distributed processing
+*** Single machine or distributed processing
 
 Distributed, multi-environment graphs not yet implemented (WIP)
 
-**** Self-organizing workflows
+*** Self-organizing workflows
 
 Think self-updating visualizations when inputs are changing. Using
 custom collection thresholds, this model can also be extended to only
 operate when a minimum number of new signals has been received
 (throttling) or after a period of time since the last computation.
 
-**** (Semantic) knowledge graphs, queries & reasoning
+*** (Semantic) knowledge graphs, queries & reasoning
 
 - Use compute graphs as auto-updating database using attached queries
   & inference rules to automatically add or retract facts when certain
@@ -163,11 +193,11 @@ operate when a minimum number of new signals has been received
   functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
   module)
 
-**** Toolkit w/ Clojurescript support
+*** Toolkit w/ Clojurescript support
 
 - Provide same functionality for both Clojure & Clojurescript
 
-*** Differences to Map-Reduce and dataflow DAGs
+** Differences to Map-Reduce and dataflow DAGs
 
 - Ordered OR unordered processing
 - Scored / thresholded processing
@@ -181,15 +211,14 @@ operate when a minimum number of new signals has been received
   has converged (i.e. no more active signals or outstanding
   collections)
 
-*** Resources / related work
+** Resources / related work
 
 - http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
 - http://www.semantic-web-journal.net/system/files/swj971.pdf
 - http://signalcollect.com
 
-*** Benchmarks
-
-**** Single-source shortest path
+** Benchmarks
+*** Single-source shortest path
 
 10,000 vertices, 30,000 paths, max. length 3 hops
 
@@ -200,7 +229,7 @@ Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
 | Total   | 221ms               | 182ms         | 229ms                 | 309ms       | 130ms    |
 | Per op  | 6.1µs               | 3.1µs         | 4.0µs                 | 2.5µs       | 4.0µs    |
 
-**** Vertex coloring
+*** Vertex coloring
 
 1000 vertices, max. 180 colors, 5% edge probability
 
@@ -214,10 +243,6 @@ Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
 | Colls   | 42960               | 12839         | 4001                  | 4772        | 6251     |
 
 TODO add charts
-
-** Status
-
-ALPHA quality, in active development.
 
 ** Example usage
 
@@ -267,6 +292,38 @@ each vertex:
 #+END_SRC
 
 [[./fabric-core/test/transclosure.org][source]]
+
+*** fabric-ld server example
+
+Excerpt of an example interaction with a /fabric-ld/ server from the
+command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
+
+#+BEGIN_SRC bash
+  # add facts in EDN format about this project
+  # EDN maps are a concise way to declare multiple relationships for
+  # for a common subject and are automatically resolved to triples
+  http -f POST :8000/facts \
+       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+  # {:body "adding 3 facts"}
+
+  # register query: find all projects and all their facts, group by project
+  http -f POST :8000/queries \
+       id=projects \
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+  # {:id "projects", :body "New query registered"}
+
+  # get query results
+  http :8000/queries/projects
+  # {:id "projects2", :count 1, :total 1, :offset 0,
+  #  :spec {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}],
+  #         :order ?p,
+  #         :group-by ?prj,
+  #         :select [?p ?o]},
+  #  :body {"projects:fabric"
+  #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
+  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
+#+END_SRC
 
 *** fabric-facts module example
 
@@ -500,15 +557,6 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   ;; :total 2280.0
 #+END_SRC
 
-* Modules
-
-- *[[./fabric-core/README.org][fabric-core]]* - Core compute graph functionality
-
-- *[[./fabric-facts/README.org][fabric-facts]]* - Semantic knowledge graph, query DSL, cached query trees, inferencing, I/O, parsing
-
-- *fabric-ld* - Linked Data server setup (WIP, not yet included)
-
-- *fabric-redis* - Redis backend (WIP, not yet included)
 
 * Project definition
 
@@ -583,7 +631,8 @@ dependencies to all currently existing modules.
     :min-lein-vesion "2.4.0"
 
     :dependencies [[thi.ng/fabric-core "<<conf-version()>>"]
-                   [thi.ng/fabric-facts "<<conf-version()>>"]]
+                   [thi.ng/fabric-facts "<<conf-version()>>"]
+                   [thi.ng/fabric-ld "<<conf-version()>>"]]
 
     :pom-addition [:developers [:developer
                                 [:name "Karsten Schmidt"]
@@ -595,6 +644,9 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                                    |
 |-----------+------------+----------------------------------------------------------------------------------|
+|   0.0.312 | 2015-09-08 | no code changes, only include ld module as dependency to main fabric artefact        |
+|   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                  |
+|   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL        |
 |   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
 |   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling           |
 |   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests      |
