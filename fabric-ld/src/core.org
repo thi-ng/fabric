@@ -456,6 +456,9 @@ a more efficient manner.
 #+BEGIN_SRC clojure :noweb-ref handler
   (def fmt-iso8601 (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ssX"))
 
+  (defn uri?
+    [x] (and (string? x) (re-find #"^(https?|ftp|mailto|urn|isbn)://" x)))
+
   (defmulti transform-body (fn [x] (type x)))
 
   (defmethod transform-body :default
@@ -473,12 +476,9 @@ a more efficient manner.
     [_ body _] nil)
 
   (defn- edn-response
-    [body] [(pr-str body) "application/edn"])
+    [body] [(pr-str (dissoc body :columns)) "application/edn"])
 
   (defmethod api-response ["*/*" :default]
-    [_ body _] (edn-response body))
-
-  (defmethod api-response ["*/*" :list]
     [_ body _] (edn-response body))
 
   (defmethod api-response ["*/*" :query]
@@ -488,9 +488,6 @@ a more efficient manner.
     [_ body _] (edn-response body))
 
   (defmethod api-response ["application/edn" :default]
-    [_ body _] (edn-response body))
-
-  (defmethod api-response ["application/edn" :list]
     [_ body _] (edn-response body))
 
   (defmethod api-response ["application/edn" :query]
@@ -503,12 +500,10 @@ a more efficient manner.
     ([body]
      (json-response body "application/json"))
     ([body mime]
-     [(json/write-str (transform-body* body) :escape-slash false) mime]))
+     [(json/write-str (transform-body* (dissoc body :columns)) :escape-slash false)
+      mime]))
 
   (defmethod api-response ["application/json" :default]
-    [_ body _] (json-response body))
-
-  (defmethod api-response ["application/json" :list]
     [_ body _] (json-response body))
 
   (defmethod api-response ["application/json" :query]
@@ -517,19 +512,39 @@ a more efficient manner.
   (defmethod api-response ["application/json" :query-group]
     [_ body _] (json-response body))
 
+  (defn- ld-json-group
+    [[s vals]]
+    (reduce
+     (fn [acc [_ p o]]
+       (let [p (if (= "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" p) "@type" (str p))
+             o (if (= "@type" p) o (if (uri? o) {"@id" o} {"@value" o}))]
+         (if-let [v (acc p)]
+           (if (v "@set")
+             (update-in acc [p "@set"] conj o)
+             (assoc acc p {"@set" [v o]}))
+           (assoc acc p o))))
+     {"@id" s}
+     vals))
+
+  ;; http://www.w3.org/TR/json-ld/
+  (defmethod api-response ["application/ld+json" :default]
+    [_ body _]
+    (let [body' (map ld-json-group (group-by first (:body body)))
+          body' {"@graph" body'}]
+      (json-response (assoc body :body body'))))
+
   ;; http://www.w3.org/TR/sparql11-results-json/
   (defmethod api-response ["application/sparql-results+json" :query]
     [_ body _]
     (let [qvars (if-let [sel (get-in body [:spec :select])]
                   (if (sequential? sel) sel [sel])
                   (into #{} (mapcat keys) (:body body)))
+          qvars (mapv ff/qvar-name qvars)
           body  (map
                  (fn [res]
                    (reduce-kv
-                    (fn [acc k v]
-                      (let [type (if (and (string? v) (.startsWith ^String v "http")) :uri :literal)]
-                        (assoc acc k {:type type :value v})))
-                    res res))
+                    #(assoc % (ff/qvar-name %2) {:type (if (uri? %3) :uri :literal) :value %3}) ;; TODO BNodes
+                    {} res))
                  (:body body))]
       (json-response
        {:head {:vars qvars}
@@ -546,7 +561,8 @@ a more efficient manner.
   (defmethod api-response ["text/csv" :default]
     [_ body _]
     (if-let [body' (:body body)]
-      (csv-response (cons ["subject" "predicate" "object"] body'))
+      (let [body' (if-let [cols (:columns body)] (cons cols body') body)]
+        (csv-response body'))
       [(pr-str (:error body)) "text/csv"]))
 
   (defmethod api-response ["text/csv" :query]
@@ -555,11 +571,8 @@ a more efficient manner.
                   (if (sequential? sel) sel [sel])
                   (into #{} (mapcat keys) (:body body)))
           qvars (vec (sort qvars))
-          body  (into [qvars] (map (fn [res] (mapv res qvars))) (:body body))]
+          body  (into [(mapv ff/qvar-name qvars)] (map (fn [res] (mapv res qvars))) (:body body))]
       (csv-response body)))
-
-  (defmethod api-response ["text/csv" :list]
-    [_ body _] (csv-response (into [(:columns body)] (:body body))))
 
   (defn parse-accept-header
     [accept]
@@ -660,31 +673,27 @@ a more efficient manner.
         :limit  :opt-int
         :offset :opt-int}
        (fn [_ {:keys [spec limit offset] :as params}]
-         (try
-           (let [spec    (transform-query model spec)
-                 _       (info :one-off-query spec)
-                 q       (add-query! model spec)
-                 handler (delayed-response-handler
-                          model
-                          #(deref q)
-                          #(let [limit  (or limit 100)
-                                 offset (or offset 0)
-                                 body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
-                             (remove-query! model q)
-                             (api-response*
-                              req
-                              {:count  (count body)
-                               :total  (count @q)
-                               :offset offset
-                               :spec   spec
-                               :body   body}
-                              (if (:group-by spec) :query-group :query)
-                              200)))]
-             (trigger-update! model)
-             handler)
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [spec    (transform-query model spec)
+               _       (info :one-off-query spec)
+               q       (add-query! model spec)
+               handler (delayed-response-handler
+                        model
+                        #(deref q)
+                        #(let [limit  (or limit 100)
+                               offset (or offset 0)
+                               body   (into (empty @q) (comp (drop offset) (take limit)) @q)]
+                           (remove-query! model q)
+                           (api-response*
+                            req
+                            {:count  (count body)
+                             :total  (count @q)
+                             :offset offset
+                             :spec   spec
+                             :body   body}
+                            (if (:group-by spec) :query-group :query)
+                            200)))]
+           (trigger-update! model)
+           handler)))))
 
   (defn register-query-handler
     [model queries]
@@ -695,17 +704,13 @@ a more efficient manner.
        {:id   (v/required)
         :spec :query}
        (fn [_ {:keys [id spec] :as params}]
-         (try
-           (let [spec (transform-query model spec)
-                 id'  (register! queries id spec)]
-             (if id'
-               (if (= id id')
-                 (api-response* req {:id id' :body "New query registered"} 202)
-                 (api-response* req {:id id' :body "Query already registered using another ID"} 303))
-               (api-response* req {:id id :body "Query ID conflict"} 409)))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [spec (transform-query model spec)
+               id'  (register! queries id spec)]
+           (if id'
+             (if (= id id')
+               (api-response* req {:id id' :body "New query registered"} 202)
+               (api-response* req {:id id' :body "Query already registered using another ID"} 303))
+             (api-response* req {:id id :error "Query ID conflict"} 409)))))))
 
   (defn query-result-handler
     [model queries]
@@ -720,60 +725,48 @@ a more efficient manner.
         :limit  :opt-int
         :offset :opt-int}
        (fn [_ {:keys [id spec limit offset] :as params}]
-         (try
-           (let [q (lookup queries id)]
-             (if-let [qq (:query q)]
-               (let [limit  (or limit 100)
-                     offset (or offset 0)
-                     res    (if spec
-                              (let [spec (select-keys spec [:filter :aggregate :order :group-by :select :bind])
-                                    spec (transform-query model spec)
-                                    spec (merge (dissoc (:spec q) :q) spec)
-                                    cfn  (-> spec
-                                             (dsl/compile-query-result-spec)
-                                             (ff/make-query-result))]
-                                (info "merged result using:" spec)
-                                (cfn @(ff/pre-result-vertex qq)))
-                              @qq)
-                     body   (into (empty res) (comp (drop offset) (take limit)) res)]
-                 (api-response*
-                  req
-                  {:id id
-                   :count  (count body)
-                   :total  (count res)
-                   :offset offset
-                   :spec   (:spec q)
-                   :body   body}
-                  (if (:group-by spec) :query-group :query)
-                  200))
-               (api-response* req {:id id} 404)))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [q (lookup queries id)]
+           (if-let [qq (:query q)]
+             (let [limit  (or limit 100)
+                   offset (or offset 0)
+                   res    (if spec
+                            (let [spec (select-keys spec [:filter :aggregate :order :group-by :select :bind])
+                                  spec (transform-query model spec)
+                                  spec (merge (dissoc (:spec q) :q) spec)
+                                  cfn  (-> spec
+                                           (dsl/compile-query-result-spec)
+                                           (ff/make-query-result))]
+                              (info "merged result using:" spec)
+                              (cfn @(ff/pre-result-vertex qq)))
+                            @qq)
+                   body   (into (empty res) (comp (drop offset) (take limit)) res)]
+               (api-response*
+                req
+                {:id id
+                 :count  (count body)
+                 :total  (count res)
+                 :offset offset
+                 :spec   (:spec q)
+                 :body   body}
+                (if (:group-by spec) :query-group :query)
+                200))
+             (api-response* req {:id id} 404)))))))
 
   (defn delete-query-handler
     [queries]
     (fn [req]
-      (try
-        (let [id (-> req :params :id)]
-          (if (deregister! queries id)
-            (api-response* req {:id id :body "Query scheduled for deletion"} 202)
-            (api-response* req {:id id} 404)))
-        (catch Exception e
-          (warn e)
-          (api-response* req {:body (.getMessage e)} 400)))))
+      (let [id (-> req :params :id)]
+        (if (deregister! queries id)
+          (api-response* req {:id id :body "Query scheduled for deletion"} 202)
+          (api-response* req {:id id :error "Query not found"} 404)))))
 
   (defn list-registry-handler
     [registry]
     (fn [req]
-      (try
-        (let [items (reduce-kv
-                     (fn [acc k v] (assoc acc k (:spec v)))
-                     {} (list-registry registry))]
-          (api-response* req {:columns ["id" "spec"] :body items} :list 200))
-        (catch Exception e
-          (warn e)
-          (api-response* req {:body (.getMessage e)} 400)))))
+      (let [items (reduce-kv
+                   (fn [acc k v] (assoc acc k (:spec v)))
+                   {} (list-registry registry))]
+        (api-response* req {:columns ["id" "spec"] :body items} 200))))
 
   (defn register-rule-handler
     [model rules]
@@ -786,17 +779,13 @@ a more efficient manner.
         :q    :query
         :prod [(v/sequential) (v/min-length 1)]}
        (fn [_ {:keys [id q prod] :as params}]
-         (try
-           (let [spec {:q (transform-query model q) :prod (set prod)}
-                 id'   (register! rules id spec)]
-             (if id'
-               (if (= id id')
-                 (api-response* req {:id id' :body "New rule registered"} 202)
-                 (api-response* req {:id id' :body "Rule already registered using another ID"} 303))
-               (api-response* req {:id id :body "Rule ID conflict"} 409)))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [spec {:q (transform-query model q) :prod (set prod)}
+               id'   (register! rules id spec)]
+           (if id'
+             (if (= id id')
+               (api-response* req {:id id' :body "New rule registered"} 202)
+               (api-response* req {:id id' :body "Rule already registered using another ID"} 303))
+             (api-response* req {:id id :error "Rule ID conflict"} 409)))))))
 
   (defn rule-result-handler
     [rules]
@@ -809,38 +798,30 @@ a more efficient manner.
         :limit  :opt-int
         :offset :opt-int}
        (fn [_ {:keys [id limit offset] :as params}]
-         (try
-           (let [r (lookup rules id)]
-             (if-let [rr (:rule r)]
-               (let [limit  (or limit 100)
-                     offset (or offset 0)
-                     body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
-                 (api-response*
-                  req
-                  {:id id
-                   :count  (count body)
-                   :total  (count @rr)
-                   :offset offset
-                   :spec   (:spec r)
-                   :body   body}
-                  :query
-                  200))
-               (api-response* req {:id id} 404)))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [r (lookup rules id)]
+           (if-let [rr (:rule r)]
+             (let [limit  (or limit 100)
+                   offset (or offset 0)
+                   body   (into (empty @rr) (comp (drop offset) (take limit)) @rr)]
+               (api-response*
+                req
+                {:id id
+                 :count  (count body)
+                 :total  (count @rr)
+                 :offset offset
+                 :spec   (:spec r)
+                 :body   body}
+                :query
+                200))
+             (api-response* req {:id id :error "Rule not found"} 404)))))))
 
   (defn delete-rule-handler
     [rules]
     (fn [req]
-      (try
-        (let [id (-> req :params :id)]
-          (if (deregister! rules id)
-            (api-response* req {:id id :body "Rule scheduled for deletion"} 202)
-            (api-response* req {:id id} 404)))
-        (catch Exception e
-          (warn e)
-          (api-response* req {:body (.getMessage e)} 400)))))
+      (let [id (-> req :params :id)]
+        (if (deregister! rules id)
+          (api-response* req {:id id :body "Rule scheduled for deletion"} 202)
+          (api-response* req {:id id :error "Rule not found"} 404)))))
 
   (defn add-facts-handler
     [model]
@@ -851,21 +832,17 @@ a more efficient manner.
        {:facts (v/optional (v/alts [(v/map) (v/sequential)]))
         :uri   (v/optional (v/url))}
        (fn [_ {:keys [facts uri] :as params}]
-         (try
-           (cond
-             facts (let [facts (if (map? facts) (ff/map->facts facts) facts)]
-                     (add-facts! model facts)
-                     (api-response* req {:body (str "adding " (count facts) " facts")} 202))
-             uri   (let [facts @(d/chain (http/get uri)
-                                         :body
-                                         bs/to-string
-                                         nt/parse-ntriples)]
-                     (add-facts! model facts)
-                     (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
-             :else (api-response* req {:body "No facts or uri param given"} 400))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (cond
+           facts (let [facts (if (map? facts) (ff/map->facts facts) facts)]
+                   (add-facts! model facts)
+                   (api-response* req {:body (str "adding " (count facts) " facts")} 202))
+           uri   (let [facts @(d/chain (http/get uri)
+                                       :body
+                                       bs/to-string
+                                       nt/parse-ntriples)]
+                   (add-facts! model facts)
+                   (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
+           :else (api-response* req {:error "No facts or uri param given"} 400))))))
 
   (defn list-facts-handler
     [model]
@@ -877,21 +854,18 @@ a more efficient manner.
        {:limit  :opt-int
         :offset :opt-int}
        (fn [_ {:keys [limit offset]}]
-         (try
-           (let [limit  (or limit 100)
-                 offset (or offset 0)
-                 facts  (get-facts model)
-                 facts' (into [] (comp (drop offset) (take limit)) facts)]
-             (api-response*
-              req
-              {:count (count facts')
-               :total (count facts)
-               :offset offset
-               :body facts'}
-              200))
-           (catch Exception e
-             (warn e)
-             (api-response* req {:body (.getMessage e)} 400)))))))
+         (let [limit  (or limit 100)
+               offset (or offset 0)
+               facts  (get-facts model)
+               facts' (into [] (comp (drop offset) (take limit)) facts)]
+           (api-response*
+            req
+            {:count (count facts')
+             :total (count facts)
+             :offset offset
+             :columns ["subject" "predicate" "object"]
+             :body facts'}
+            200))))))
 
   (defn wrap-middleware
     [config routes]
