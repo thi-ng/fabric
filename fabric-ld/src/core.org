@@ -466,16 +466,17 @@ a more efficient manner.
     [_ body]
     [(pr-str body) "application/edn"])
 
-  #_(defmethod api-response "application/json"
-      [_ body]
-      [(json/write-str body :escape-slash false) "application/json"])
+  (defmethod api-response "application/json"
+    [_ body]
+    [(json/write-str body :escape-slash false) "application/json"])
 
   (defmethod api-response "text/csv"
     [_ body]
-    [(->> (:body body)
-         (map (fn [fact] (str/join "," (map pr-str fact))))
-         (cons "s,p,o")
-         (str/join "\n"))
+    [(with-open [out (java.io.StringWriter.)]
+       (->> (:body body)
+            (cons ["s" "p" "o"])
+            (csv/write-csv out))
+       (.toString out))
      "text/csv"])
 
   (defn parse-accept-header
@@ -759,7 +760,7 @@ a more efficient manner.
       (validating-handler
        req
        {:facts :edn}
-       {:facts (v/optional (v/alts (v/map) (v/sequential)))
+       {:facts (v/optional (v/alts [(v/map) (v/sequential)]))
         :uri   (v/optional (v/url))}
        (fn [_ {:keys [facts uri] :as params}]
          (try
@@ -1186,6 +1187,8 @@ a more efficient manner.
      [ring.util.response :as resp]
      [clojure.java.io :as io]
      [clojure.edn :as edn]
+     [clojure.data.csv :as csv]
+     [clojure.data.json :as json]
      [clojure.string :as str]
      [clojure.walk :as walk]
      [clojure.core.async :as async :refer [go go-loop <! >!]]
