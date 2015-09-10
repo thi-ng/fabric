@@ -467,32 +467,77 @@ a more efficient manner.
   (defn transform-body*
     [body] (walk/postwalk transform-body body))
 
-  (defmulti api-response (fn [type body] type))
+  (defmulti api-response (fn [type body rtype] (doto [type rtype] prn)))
 
   (defmethod api-response :default
-    [_ body] nil)
+    [_ body _] nil)
 
-  (defmethod api-response "*/*"
-    [_ body] (api-response "application/edn" body))
+  (defmethod api-response ["*/*" :default]
+    [_ body rtype] (api-response "application/edn" body rtype))
 
-  (defmethod api-response "application/edn"
-    [_ body]
-    [(pr-str body) "application/edn"])
+  (defmethod api-response ["*/*" :query]
+    [_ body rtype] (api-response "application/edn" body rtype))
 
-  (defmethod api-response "application/json"
-    [_ body]
+  (defmethod api-response ["*/*" :query-group]
+    [_ body rtype] (api-response "application/edn" body rtype))
+
+  (defmethod api-response ["application/edn" :default]
+    [_ body _] [(pr-str body) "application/edn"])
+
+  (defmethod api-response ["application/edn" :query]
+    [_ body _] [(pr-str body) "application/edn"])
+
+  (defmethod api-response ["application/edn" :query-group]
+    [_ body _] [(pr-str body) "application/edn"])
+
+  (defmethod api-response ["application/json" :default]
+    [_ body _]
     [(json/write-str (transform-body* body) :escape-slash false)
      "application/json"])
 
-  (defmethod api-response "text/csv"
-    [_ body]
-    [(with-open [out (java.io.StringWriter.)]
-       (->> (:body body)
-            (transform-body*)
-            (cons ["s" "p" "o"])
-            (csv/write-csv out))
-       (.toString out))
+  (defmethod api-response ["application/json" :default]
+    [_ body _]
+    [(json/write-str (transform-body* body) :escape-slash false)
+     "application/json"])
+
+  (defmethod api-response ["application/json" :query-group]
+    [_ body _]
+    [(json/write-str (transform-body* body) :escape-slash false)
+     "application/json"])
+
+  (defmethod api-response ["text/csv" :default]
+    [_ body _]
+    [(if-let [body' (:body body)]
+       (with-open [out (java.io.StringWriter.)]
+         (->> body'
+              (transform-body*)
+              (cons ["subject" "predicate" "object"])
+              (csv/write-csv out))
+         (.toString out))
+       (pr-str (:error body)))
      "text/csv"])
+
+  (defmethod api-response ["text/csv" :query]
+    [_ body _]
+    (let [qvars (if-let [sel (get-in body [:spec :select])]
+                  (if (sequential? sel) sel [sel])
+                  (into #{} (mapcat keys) (:body body)))
+          qvars (vec (sort qvars))
+          body  (into [qvars] (map (fn [res] (mapv res qvars))) (:body body))]
+      (info :csv-vars qvars (:spec body))
+      [(with-open [out (java.io.StringWriter.)]
+         (csv/write-csv out (transform-body* body))
+         (.toString out))
+       "text/csv"]))
+
+  (defmethod api-response ["text/csv" :list]
+    [_ body _]
+    (let [body (into [(:columns body)] (:body body))]
+      (info :csv-list body)
+      [(with-open [out (java.io.StringWriter.)]
+         (csv/write-csv out (transform-body* body))
+         (.toString out))
+       "text/csv"]))
 
   (defn parse-accept-header
     [accept]
@@ -506,17 +551,19 @@ a more efficient manner.
          reverse))
 
   (defn api-response*
-    [req body status]
-    (let [accept             (get-in req [:headers "accept"])
-          [resp type]        (->> accept
-                                  (parse-accept-header)
-                                  (some #(api-response (first %) body)))
-          [resp type status] (if resp
-                               [resp type status]
-                               [(str "Not acceptable: " accept) "text/plain" 406])]
-      (-> (resp/response resp)
-          (resp/status status)
-          (resp/content-type type))))
+    ([req body status]
+     (api-response* req body :default status))
+    ([req body rtype status]
+     (let [accept             (get-in req [:headers "accept"])
+           [resp type]        (->> accept
+                                   (parse-accept-header)
+                                   (some #(api-response (first %) body rtype)))
+           [resp type status] (if resp
+                                [resp type status]
+                                [(str "Not acceptable: " accept) "text/plain" 406])]
+       (-> (resp/response resp)
+           (resp/status status)
+           (resp/content-type type)))))
 
   (def coercions
     {:edn (fn [x] (try (edn/read-string x) (catch Exception e x)))
@@ -607,7 +654,9 @@ a more efficient manner.
                               {:count  (count body)
                                :total  (count @q)
                                :offset offset
+                               :spec   spec
                                :body   body}
+                              (if (:group-by spec) :query-group :query)
                               200)))]
              (trigger-update! model)
              handler)
@@ -673,6 +722,7 @@ a more efficient manner.
                    :offset offset
                    :spec   (:spec q)
                    :body   body}
+                  (if (:group-by spec) :query-group :query)
                   200))
                (api-response* req {:id id} 404)))
            (catch Exception e
@@ -698,7 +748,7 @@ a more efficient manner.
         (let [items (reduce-kv
                      (fn [acc k v] (assoc acc k (:spec v)))
                      {} (list-registry registry))]
-          (api-response* req {:body items} 200))
+          (api-response* req {:columns ["id" "spec"] :body items} :list 200))
         (catch Exception e
           (warn e)
           (api-response* req {:body (.getMessage e)} 400)))))
@@ -751,6 +801,7 @@ a more efficient manner.
                    :offset offset
                    :spec   (:spec r)
                    :body   body}
+                  :query
                   200))
                (api-response* req {:id id} 404)))
            (catch Exception e
