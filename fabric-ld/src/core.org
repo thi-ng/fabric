@@ -454,6 +454,19 @@ a more efficient manner.
 *** Handlers
 
 #+BEGIN_SRC clojure :noweb-ref handler
+  (def fmt-iso8601 (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ssX"))
+
+  (defmulti transform-body (fn [x] (type x)))
+
+  (defmethod transform-body :default
+    [x] x)
+
+  (defmethod transform-body java.util.Date
+    [x] (.format fmt-iso8601 ^java.util.Date x))
+
+  (defn transform-body*
+    [body] (walk/postwalk transform-body body))
+
   (defmulti api-response (fn [type body] type))
 
   (defmethod api-response :default
@@ -468,12 +481,14 @@ a more efficient manner.
 
   (defmethod api-response "application/json"
     [_ body]
-    [(json/write-str body :escape-slash false) "application/json"])
+    [(json/write-str (transform-body* body) :escape-slash false)
+     "application/json"])
 
   (defmethod api-response "text/csv"
     [_ body]
     [(with-open [out (java.io.StringWriter.)]
        (->> (:body body)
+            (transform-body*)
             (cons ["s" "p" "o"])
             (csv/write-csv out))
        (.toString out))
