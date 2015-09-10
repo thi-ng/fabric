@@ -5,7 +5,14 @@
  - [[#about-the-project][About the project]]
      - [[#overview][Overview]]
      - [[#status][Status]]
-     - [[#example-usage][Example usage]]
+     - [[#up--running][Up & running]]
+     - [[#interacting-with-the-server][Interacting with the server]]
+         - [[#adding-fact-triples][Adding fact triples]]
+         - [[#listing-facts-in-various-formats-w-paging][Listing facts in various formats (w/ paging)]]
+         - [[#adding-queries][Adding queries]]
+         - [[#listing-registered-queries][Listing registered queries]]
+         - [[#query-results-in-various-formats-w-paging][Query results in various formats (w/ paging)]]
+         - [[#transforming-registered-query-results][Transforming registered query results]]
  - [[#namespaces][Namespaces]]
  - [[#module-definition][Module definition]]
      - [[#building--testing-this-project][Building & testing this project]]
@@ -38,9 +45,11 @@ based [[http://linkeddatabook.com/][Linked Data]] HTTP server & query endpoint s
 other modules of this project).
 
 - Facts, queries and inference rules can be added/removed via a RESTstyle API
-- One-off queries or registered queries (automatically updated on fact set change)
+- Fact import from 3rd party URIs (as EDN or N-Triples)
+- Supported response types: EDN, JSON, JSON-LD, SPARQL JSON results, CSV
+- One-off queries or registered queries (latter automatically updated on fact set change)
 - Registered queries return results immediately (without incurring work each time)
-- Registered queries can be modified to filter transform existing results
+- Registered query results can be modified to filter/transform existing results
 - Graph modifications are processed via core.async work queue & execution context
 - All graph changes (facts) are written to disk (customizable, by default as EDN)
 - Default config uses Zach Tellman's [[https://github.com/ztellman/aleph][Aleph]] server and deferred handlers
@@ -49,22 +58,26 @@ other modules of this project).
 
 ALPHA quality, in active development.
 
-** Example usage
+** Up & running
 
 #+BEGIN_SRC clojure
-      (require '[thi.ng.fabric.ld.core :as ld])
+  (require '[thi.ng.fabric.ld.core :as ld])
 
-      ;; launch server with default config (port 8000)
-      (ld/launch)
+  ;; launch server with default config (port 8000)
+  (ld/launch)
 
-      ;; restart system (autoreloads ns)
-      (ld/reset)
+  ;; restart system (autoreloads ns)
+  (ld/reset)
 
-      ;; stop entire system
-      (ld/stop)
+  ;; stop entire system
+  (ld/stop)
 #+END_SRC
 
+** Interacting with the server
+
 Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
+
+*** Adding fact triples
 
 #+BEGIN_SRC bash
   # add facts in EDN format about this project
@@ -80,29 +93,70 @@ Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpi
        facts='{"projects:fabric" {"schema:hasPart" ["fabric-core" "fabric-facts" "fabric-ld"]}}'
   # {:body "adding 3 facts"}
 
-  # retrieve all facts
-  # (also includes facts from default graph added on startup)
-  # known vocabulary prefixes are expanded to full URIs
-  http :8000/facts
-  # {:body (["http://ns.thi.ng/fabric#template" "http://www.w3.org/2000/01/rdf-schema#domain" "http://ns.thi.ng/fabric#TypeTemplate"]
-  #         ["http://ns.thi.ng/fabric#TypeTemplate" "http://www.w3.org/2000/01/rdf-schema#subClassOf" "http://www.w3.org/2002/07/owl#Thing"]
-  #         ...
-  #         ["projects:fabric" "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" "http://xmlns.com/foaf/0.1/Project"]
-  #         ["projects:fabric" "http://schema.org/isPartOf" "projects:thing"]
-  #         ["projects:fabric" "http://purl.org/dc/terms/creator" "people:toxi"]
-  #         ...)}
+  # facts can also be imported from URIs (currently EDN or N-Triples only)
+  http -f POST :8000/facts uri=http://schema.org/version/2.0/schema.nt
+  # {:body "adding 9023 facts from http://schema.org/version/2.0/schema.nt"}
+#+END_SRC
 
+*** Listing facts in various formats (w/ paging)
+
+Supported response formats for triple dumps:
+
+- =application/edn= (default)
+- =application/json=
+- =application/ld+json=
+- =text/csv=
+
+(=limit= and =offset= params are optional and default to 100/0)
+
+#+BEGIN_SRC bash
+  # retrieve all facts as CSV
+  # (includes facts from default graph added on startup)
+  # known vocabulary prefixes are expanded to full URIs
+  http :8000/facts accept:text/csv limit==5 offset==5000
+  # subject,predicate,object
+  # http://schema.org/ItemListOrderAscending,http://www.w3.org/2000/01/rdf-schema#comment,An ItemList ordered with lower values listed first.
+  # http://schema.org/dateIssued,http://www.w3.org/2000/01/rdf-schema#comment,The date the ticket was issued.
+  # http://schema.org/eligibleCustomerType,http://www.w3.org/2000/01/rdf-schema#comment,The type(s) of customers for which the given offer is valid.
+  # http://schema.org/AssessAction,http://www.w3.org/2000/01/rdf-schema#comment,"The act of forming one's opinion, reaction or sentiment."
+  # http://schema.org/DigitalAudioTapeFormat,http://www.w3.org/1999/02/22-rdf-syntax-ns#type,http://schema.org/Intangible
+#+END_SRC
+
+*** Adding queries
+
+Query specs are defined via EDN using the [[../fabric-facts/src/dsl.org][DSL]] of the /fabric-facts/ module.
+
+#+BEGIN_SRC bash
   # register query: find all projects and all their facts, group by project
   http -f POST :8000/queries \
        id=projects \
        q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
   # {:id "projects", :body "New query registered"}
+#+END_SRC
 
+*** Listing registered queries
+
+Retrieves list of all registered queries. Their results are immediately available.
+
+#+BEGIN_SRC bash
   # list registered queries
   http :8000/queries
   # {:body {"types" {:q [{:where [[?s "rdf:type" ?type]]}]},
   #         "projects" {:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}], :group-by ?prj, :select [?p ?o]}}}
+#+END_SRC
 
+*** Query results in various formats (w/ paging)
+
+Supported response formats for query results:
+
+- =application/edn= (default)
+- =application/json=
+- =application/sparql-results+json=
+- =text/csv=
+
+(support for =limit= & =offset= params as above)
+
+#+BEGIN_SRC bash
   # get query results
   http :8000/queries/projects
   # {:id "projects2", :count 1, :total 1, :offset 0,
@@ -119,6 +173,58 @@ Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpi
   #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
   #           ?o "http://xmlns.com/foaf/0.1/Project"}]}}
 
+  http :8000/queries/types accept:application/sparql-results+json limit==3
+  # {
+  #     "head": {
+  #         "vars": [
+  #             "s", 
+  #             "type"
+  #         ]
+  #     }, 
+  #     "results": {
+  #         "bindings": [
+  #             {
+  #                 "s": {
+  #                     "type": "uri", 
+  #                     "value": "http://schema.org/mainContentOfPage"
+  #                 }, 
+  #                 "type": {
+  #                     "type": "uri", 
+  #                     "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+  #                 }
+  #             }, 
+  #             {
+  #                 "s": {
+  #                     "type": "uri", 
+  #                     "value": "http://schema.org/SteeringPositionValue"
+  #                 }, 
+  #                 "type": {
+  #                     "type": "uri", 
+  #                     "value": "http://www.w3.org/2000/01/rdf-schema#Class"
+  #                 }
+  #             }, 
+  #             {
+  #                 "s": {
+  #                     "type": "uri", 
+  #                     "value": "http://schema.org/Attorney"
+  #                 }, 
+  #                 "type": {
+  #                     "type": "uri", 
+  #                     "value": "http://www.w3.org/2000/01/rdf-schema#Class"
+  #                 }
+  #             }
+  #         ]
+  #     }
+  # }
+#+END_SRC
+
+*** Transforming registered query results
+
+Results of registered queries can be re-transformed via optional EDN
+spec (sub-set of standard query spec). Here we filter based on =?p=
+query var and order results by =?o=.
+
+#+BEGIN_SRC bash
   # get modified query results (using supplied query opts)
   http :8000/queries/projects \
        spec=='{:filter (= ?p "http://schema.org/hasPart") :order ?o :select ?o}'
