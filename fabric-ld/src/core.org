@@ -14,6 +14,13 @@
              - [[#inference-rule-registry][Inference rule registry]]
              - [[#registry-helpers][Registry helpers]]
          - [[#handlers][Handlers]]
+             - [[#content-negotiation][Content negotiation]]
+             - [[#request-validation][Request validation]]
+             - [[#async-handler-wrapper][Async handler wrapper]]
+             - [[#facts][Facts]]
+             - [[#queries][Queries]]
+             - [[#inference-rules][Inference rules]]
+             - [[#handler-setup][Handler setup]]
          - [[#aleph-server][Aleph server]]
          - [[#inference-rules][Inference rules]]
              - [[#property-rules][Property rules]]
@@ -32,12 +39,12 @@
 This diagram illustrates the default setup of the component system
 defined by this module. Users are not required to use this verbatim
 and each component has its own configuration options. All components
-are defined using Stuart Sierra's component library/lifecycle
+are defined using Stuart Sierra's [[https://github.com/stuartsierra/component][component]] library/lifecycle
 protocols.
 
 [[../../assets/ld-overview.png]]
 
-#+BEGIN_SRC dot :tangle ../../assets/overview.dot
+#+BEGIN_SRC dot :tangle ../../assets/overview.dot :exports none
 digraph g {
   node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
   edge[fontname="Inconsolata",fontsize=9];
@@ -452,8 +459,9 @@ a more efficient manner.
 #+END_SRC
 
 *** Handlers
+**** Content negotiation
 
-#+BEGIN_SRC clojure :noweb-ref handler
+#+BEGIN_SRC clojure :noweb-ref content-neg
   (def fmt-iso8601 (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ssX"))
 
   (defn uri?
@@ -584,7 +592,9 @@ a more efficient manner.
               (map vector (str/split a #",") (repeat q)))))
          (sort-by peek)
          reverse))
+#+END_SRC
 
+#+BEGIN_SRC clojure :noweb-ref content-neg
   (defn api-response*
     ([req body status]
      (api-response* req body :default status))
@@ -599,7 +609,11 @@ a more efficient manner.
        (-> (resp/response resp)
            (resp/status status)
            (resp/content-type type)))))
+#+END_SRC
 
+**** Request validation
+
+#+BEGIN_SRC clojure :noweb-ref req-validation
   (def coercions
     {:edn (fn [x] (try (edn/read-string x) (catch Exception e x)))
      :int (fn [x] (strf/parse-int x 10 x))})
@@ -645,7 +659,11 @@ a more efficient manner.
             (.printStackTrace e)
             (api-response* req {:error "Error handling route"} 500)))
         (api-response* req {:error err} 400))))
+#+END_SRC
 
+**** Async handler wrapper
+
+#+BEGIN_SRC clojure :noweb-ref handler
   (defn delayed-response-handler
     [model ready? handler]
     (d/->deferred
@@ -660,7 +678,83 @@ a more efficient manner.
                  (debug :result res)
                  (handler))
                (recur))))))))
+#+END_SRC
 
+**** Facts
+
+#+BEGIN_SRC clojure :noweb-ref handler
+  (defn load-facts-from-uri
+    [uri]
+    (try
+      (let [resp  @(http/get
+                    uri
+                    {:headers {"Accept"     "application/edn,application/n-triples"
+                               "User-Agent" (str "thi.ng-fabric/" version)}})
+            body  (bs/to-string (:body resp))
+            ctype (or (get-in resp [:headers "content-type"])
+                      (get-in resp [:headers "Content-Type"]))]
+        (condp = ctype
+          "application/edn"
+          (when-let [facts ((:edn coercions) body)]
+            (cond
+              (map? facts)        [(ff/map->facts facts)]
+              (coll? facts) [facts]
+              :else               [nil (str "Returned EDN value is not a collection")]))
+
+          "application/n-triples"
+          [(nt/parse-ntriples body)]
+
+          [nil (str "Remote server returned incompatible content type" ctype)]))
+      (catch Exception e
+        [nil "Error loading facts from remote server"])))
+
+  (defn add-facts-handler
+    [model]
+    (fn [req]
+      (validating-handler
+       req
+       {:facts :edn}
+       {:facts (v/optional (v/alts [(v/map) (v/sequential)]))
+        :uri   (v/optional (v/url))}
+       (fn [_ {:keys [facts uri] :as params}]
+         (cond
+           facts (let [facts (if (map? facts) (ff/map->facts facts) facts)]
+                   (add-facts! model facts)
+                   (api-response* req {:body (str "adding " (count facts) " facts")} 202))
+           uri   (let [[facts err] (load-facts-from-uri uri)]
+                   (if facts
+                     (do (add-facts! model facts)
+                         (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
+                     (api-response* req {:error err} 400)))
+           :else (api-response* req {:error "No facts or uri param given"} 400))))))
+
+  (defn list-facts-handler
+    [model]
+    (fn [req]
+      (validating-handler
+       req
+       {:limit  :int
+        :offset :int}
+       {:limit  :opt-int
+        :offset :opt-int}
+       (fn [_ {:keys [limit offset]}]
+         (let [limit  (or limit 100)
+               offset (or offset 0)
+               facts  (get-facts model)
+               facts' (into [] (comp (drop offset) (take limit)) facts)]
+           (api-response*
+            req
+            {:count (count facts')
+             :total (count facts)
+             :offset offset
+             :columns ["subject" "predicate" "object"]
+             :body facts'}
+            200))))))
+#+END_SRC
+
+**** Queries
+
+#+BEGIN_SRC clojure :noweb-ref handler
   (defn one-off-query-handler
     [model]
     (fn [req]
@@ -759,7 +853,11 @@ a more efficient manner.
         (if (deregister! queries id)
           (api-response* req {:id id :body "Query scheduled for deletion"} 202)
           (api-response* req {:id id :error "Query not found"} 404)))))
+#+END_SRC
 
+**** Inference rules
+
+#+BEGIN_SRC clojure :noweb-ref handler
   (defn list-registry-handler
     [registry]
     (fn [req]
@@ -822,75 +920,11 @@ a more efficient manner.
         (if (deregister! rules id)
           (api-response* req {:id id :body "Rule scheduled for deletion"} 202)
           (api-response* req {:id id :error "Rule not found"} 404)))))
+#+END_SRC
 
-  (defn load-facts-from-uri
-    [uri]
-    (try
-      (let [resp  @(http/get
-                    uri
-                    {:headers {"Accept"     "application/edn,application/n-triples"
-                               "User-Agent" (str "thi.ng-fabric/" version)}})
-            body  (bs/to-string (:body resp))
-            ctype (or (get-in resp [:headers "content-type"])
-                      (get-in resp [:headers "Content-Type"]))]
-        (condp = ctype
-          "application/edn"
-          (when-let [facts ((:edn coercions) body)]
-            (cond
-              (map? facts)        [(ff/map->facts facts)]
-              (coll? facts) [facts]
-              :else               [nil (str "Returned EDN value is not a collection")]))
+**** Handler setup
 
-          "application/n-triples"
-          [(nt/parse-ntriples body)]
-
-          [nil (str "Remote server returned incompatible content type" ctype)]))
-      (catch Exception e
-        [nil "Error loading facts from remote server"])))
-
-  (defn add-facts-handler
-    [model]
-    (fn [req]
-      (validating-handler
-       req
-       {:facts :edn}
-       {:facts (v/optional (v/alts [(v/map) (v/sequential)]))
-        :uri   (v/optional (v/url))}
-       (fn [_ {:keys [facts uri] :as params}]
-         (cond
-           facts (let [facts (if (map? facts) (ff/map->facts facts) facts)]
-                   (add-facts! model facts)
-                   (api-response* req {:body (str "adding " (count facts) " facts")} 202))
-           uri   (let [[facts err] (load-facts-from-uri uri)]
-                   (if facts
-                     (do (add-facts! model facts)
-                         (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
-                     (api-response* req {:error err} 400)))
-           :else (api-response* req {:error "No facts or uri param given"} 400))))))
-
-  (defn list-facts-handler
-    [model]
-    (fn [req]
-      (validating-handler
-       req
-       {:limit  :int
-        :offset :int}
-       {:limit  :opt-int
-        :offset :opt-int}
-       (fn [_ {:keys [limit offset]}]
-         (let [limit  (or limit 100)
-               offset (or offset 0)
-               facts  (get-facts model)
-               facts' (into [] (comp (drop offset) (take limit)) facts)]
-           (api-response*
-            req
-            {:count (count facts')
-             :total (count facts)
-             :offset offset
-             :columns ["subject" "predicate" "object"]
-             :body facts'}
-            200))))))
-
+#+BEGIN_SRC clojure :noweb-ref handler
   (defn wrap-middleware
     [config routes]
     (let [defaults (assoc-in site-defaults [:security :anti-forgery] false)
