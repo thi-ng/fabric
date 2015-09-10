@@ -500,8 +500,10 @@ a more efficient manner.
     [_ body _] (edn-response body))
 
   (defn- json-response
-    [body] [(json/write-str (transform-body* body) :escape-slash false)
-            "application/json"])
+    ([body]
+     (json-response body "application/json"))
+    ([body mime]
+     [(json/write-str (transform-body* body) :escape-slash false) mime]))
 
   (defmethod api-response ["application/json" :default]
     [_ body _] (json-response body))
@@ -514,6 +516,25 @@ a more efficient manner.
 
   (defmethod api-response ["application/json" :query-group]
     [_ body _] (json-response body))
+
+  ;; http://www.w3.org/TR/sparql11-results-json/
+  (defmethod api-response ["application/sparql-results+json" :query]
+    [_ body _]
+    (let [qvars (if-let [sel (get-in body [:spec :select])]
+                  (if (sequential? sel) sel [sel])
+                  (into #{} (mapcat keys) (:body body)))
+          body  (map
+                 (fn [res]
+                   (reduce-kv
+                    (fn [acc k v]
+                      (let [type (if (and (string? v) (.startsWith ^String v "http")) :uri :literal)]
+                        (assoc acc k {:type type :value v})))
+                    res res))
+                 (:body body))]
+      (json-response
+       {:head {:vars qvars}
+        :results {:bindings body}}
+       "application/sparql-results+json")))
 
   (defn- csv-response
     [body]
