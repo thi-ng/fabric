@@ -823,6 +823,31 @@ a more efficient manner.
           (api-response* req {:id id :body "Rule scheduled for deletion"} 202)
           (api-response* req {:id id :error "Rule not found"} 404)))))
 
+  (defn load-facts-from-uri
+    [uri]
+    (try
+      (let [resp  @(http/get
+                    uri
+                    {:headers {"Accept"     "application/edn,application/n-triples"
+                               "User-Agent" (str "thi.ng-fabric/" version)}})
+            body  (bs/to-string (:body resp))
+            ctype (or (get-in resp [:headers "content-type"])
+                      (get-in resp [:headers "Content-Type"]))]
+        (condp = ctype
+          "application/edn"
+          (when-let [facts ((:edn coercions) body)]
+            (cond
+              (map? facts)        [(ff/map->facts facts)]
+              (coll? facts) [facts]
+              :else               [nil (str "Returned EDN value is not a collection")]))
+
+          "application/n-triples"
+          [(nt/parse-ntriples body)]
+
+          [nil (str "Remote server returned incompatible content type" ctype)]))
+      (catch Exception e
+        [nil "Error loading facts from remote server"])))
+
   (defn add-facts-handler
     [model]
     (fn [req]
@@ -836,12 +861,11 @@ a more efficient manner.
            facts (let [facts (if (map? facts) (ff/map->facts facts) facts)]
                    (add-facts! model facts)
                    (api-response* req {:body (str "adding " (count facts) " facts")} 202))
-           uri   (let [facts @(d/chain (http/get uri)
-                                       :body
-                                       bs/to-string
-                                       nt/parse-ntriples)]
-                   (add-facts! model facts)
-                   (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
+           uri   (let [[facts err] (load-facts-from-uri uri)]
+                   (if facts
+                     (do (add-facts! model facts)
+                         (api-response* req {:body (str "adding " (count facts) " facts from " uri)} 202))
+                     (api-response* req {:error err} 400)))
            :else (api-response* req {:error "No facts or uri param given"} 400))))))
 
   (defn list-facts-handler
@@ -1234,6 +1258,7 @@ a more efficient manner.
      [thi.ng.fabric.facts.core :as ff]
      [thi.ng.fabric.facts.dsl :as dsl]
      [thi.ng.fabric.facts.io.ntriples :as nt]
+     [thi.ng.fabric.ld.version :refer [version]]
      [thi.ng.strf.core :as strf]
      [thi.ng.xerror.core :as err]
      [thi.ng.validate.core :as v]
