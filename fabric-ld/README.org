@@ -45,8 +45,8 @@ based [[http://linkeddatabook.com/][Linked Data]] HTTP server & query endpoint s
 other modules of this project).
 
 - Facts, queries and inference rules can be added/removed via a RESTstyle API
-- Fact import from 3rd party URIs (as EDN or N-Triples)
-- Supported response types: EDN, JSON, JSON-LD, SPARQL JSON results, CSV
+- Fact import from 3rd party URIs (as [[https://github.com/edn-format/edn][EDN]] or [[http://www.w3.org/TR/n-triples/][N-Triples]])
+- Supported response types: EDN, JSON, [[http://www.w3.org/TR/json-ld/][JSON-LD]], [[http://www.w3.org/TR/sparql11-results-json/][SPARQL JSON results]], CSV
 - One-off queries or registered queries (latter automatically updated on fact set change)
 - Registered queries return results immediately (without incurring work each time)
 - Registered query results can be modified to filter/transform existing results
