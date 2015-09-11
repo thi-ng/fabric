@@ -51,7 +51,7 @@ digraph g {
   rankdir=LR;
 
   FactGraph -> LDGraph -> LDGraphModel;
-  FactGraph -> FactLogger;
+  FactGraph -> FactLog;
 
   PrefixRegistry -> LDGraph;
   PrefixRegistry -> LDGraphModel;
@@ -97,6 +97,23 @@ digraph g {
 *** FactGraph component wrapper
 
 #+BEGIN_SRC clojure :noweb-ref graph
+  (defn- restore-graph-from-log
+    [g path]
+    (try
+      (let [facts (slurp path)
+            facts (edn/read-string (str "[" facts "]"))]
+        (loop [facts facts adds 0 dels 0]
+          (if facts
+            (let [[op f] (first facts)]
+              (if (= :add-fact op)
+                (do (ff/add-fact! g f)
+                    (recur (next facts) (inc adds) dels))
+                (do (ff/remove-fact! g f)
+                    (recur (next facts) adds (inc dels)))))
+            (info "added" adds "and removed" dels "facts from log:" path))))
+      (catch Exception e
+        (warn "failed to restore graph log:" path (.getMessage e)))))
+
   (defrecord LDGraph [graph prefixes config]
     comp/Lifecycle
     (start
@@ -109,6 +126,8 @@ digraph g {
             (let [facts (ff/map->facts (edn/read r))]
               (info "adding" (count facts) "facts from" path)
               (run! #(ff/add-fact! g %) facts))))
+        (when-let [restore (:restore config)]
+          (restore-graph-from-log g restore))
         (assoc _ :graph g)))
     (stop
       [_]
@@ -130,28 +149,28 @@ digraph g {
 *** Fact log
 
 #+BEGIN_SRC clojure :noweb-ref logger
-  (defrecord FactLogger [config graph logger prefixes]
+  (defrecord FactLog [config graph logger prefixes]
     comp/Lifecycle
     (start
       [_]
-      (info "starting fact logger")
+      (info "starting fact log")
       (let [log-fn ((:fn config) config prefixes)
             logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
         (assoc _ :logger logger)))
     (stop
       [_]
-      (info "stop fact logger")
+      (info "stop fact log")
       (ff/remove-fact-graph-logger logger)
       (assoc _ :graph nil :logger nil :prefixes nil)))
 
-  (defn make-logger
+  (defn make-fact-log
     [config]
-    (map->FactLogger {:config config}))
+    (map->FactLog {:config config}))
 
   (defn default-logger
     [config prefixes]
     (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
-          path    (format (:path config) session)]
+          path    (strf/format (:path config) session)]
       (info "fact logger writing to:" path)
       (fn [evt]
         (info :fact-log evt)
@@ -201,11 +220,12 @@ digraph g {
       (let [queue   (async/chan)
             rbus-in (async/chan)
             rbus    (async/mult rbus-in)
-            ctx     (f/async-execution-context {:graph (get-graph graph) :result rbus-in})]
+            ctx     (f/async-execution-context {:graph (get-graph graph) :result rbus-in})
+            this    (assoc _ :ctx ctx :queue queue :rbus rbus :rbus-in rbus-in)]
         (model-work-queue-processor queue rbus)
         (model-result-log rbus)
         (f/execute! ctx)
-        (assoc _ :ctx ctx :queue queue :rbus rbus :rbus-in rbus-in)))
+        this))
     (stop
       [_]
       (info "stop graph model")
@@ -478,7 +498,7 @@ a more efficient manner.
   (defn transform-body*
     [body] (walk/postwalk transform-body body))
 
-  (defmulti api-response (fn [type body rtype] (doto [type rtype] prn)))
+  (defmulti api-response (fn [type body rtype] [type rtype]))
 
   (defmethod api-response :default
     [_ body _] nil)
@@ -1207,9 +1227,10 @@ a more efficient manner.
                             "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                             "schema"  "http://schema.org/"
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
-     :logger   {:fn        default-logger
-                :path      "session-%s.edn"}
+     :log      {:fn        default-logger
+                :path      ["session" str ".edn"]}
      :graph    {:edn-paths [(io/resource "fabric.edn")]
+                ;;:restore   "session-20150910-222204.edn"
                 :index     (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {}
      :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
@@ -1231,8 +1252,8 @@ a more efficient manner.
      :graph    (comp/using
                 (make-graph (:graph config))
                 {:prefixes :prefixes})
-     :logger   (comp/using
-                (make-logger (:logger config))
+     :log      (comp/using
+                (make-fact-log (:log config))
                 {:graph    :graph
                  :prefixes :prefixes})
      :model    (comp/using
@@ -1285,7 +1306,7 @@ a more efficient manner.
 
 ** Complete namespace definition
 
-#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/ld/core.cljc :noweb yes :mkdirp yes :padline no
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/ld/core.clj :noweb yes :mkdirp yes :padline no
   (ns thi.ng.fabric.ld.core
     (:require
      [thi.ng.fabric.core :as f]
@@ -1317,6 +1338,8 @@ a more efficient manner.
     (:import
      java.io.PushbackReader))
 
+  (taoensso.timbre/set-level! :warn)
+
   <<protocols>>
 
   <<registry-helpers>>
@@ -1330,6 +1353,10 @@ a more efficient manner.
   <<model>>
 
   <<aleph>>
+
+  <<content-neg>>
+
+  <<req-validation>>
 
   <<handler>>
 
