@@ -418,14 +418,27 @@ the =result-event-bus= (using =core.async/tap=).
 
   (defn untransform-pnames-in-query
     [tx spec]
-    (reduce
-     (fn [acc k]
-       (let [v (acc k)]
-         (cond
-           (coll? v)   (assoc acc k (walk/postwalk #(ff/untransform tx %) v))
-           (string? v) (assoc acc k (ff/untransform tx v))
-           :else       acc)))
-     spec [:q :bind :filter :aggregate :order :group-by]))
+    (let [spec (reduce
+                (fn [acc k]
+                  (let [v (acc k)]
+                    (cond
+                      (coll? v)   (assoc acc k (walk/postwalk #(ff/untransform tx %) v))
+                      (string? v) (assoc acc k (ff/untransform tx v))
+                      :else       acc)))
+                spec [:q :bind :filter :aggregate :order :group-by])
+          spec (if-let [q (:q spec)]
+                 (assoc spec :q
+                        (reduce
+                         (fn [acc sub]
+                           (if-let [vals (:values sub)]
+                             (conj acc (assoc sub :values (walk/postwalk #(ff/transform tx %) vals)))
+                             (conj acc sub)))
+                         [] q))
+                 spec)
+          spec (if-let [vals (:values spec)]
+                 (assoc spec :values (walk/postwalk #(ff/transform tx %) vals))
+                 spec)]
+      spec))
 #+END_SRC
 
 *** Entity registries
