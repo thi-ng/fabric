@@ -1926,10 +1926,12 @@ same values (first =?a= binds to "fact", second =?a= to "fiction")...
 
 ** Graph logging
 
-A =FactGraph= emits the events =:add-fact= or =:remove-fact= whenever
-a fact is added or removed. The =add-fact-graph-logger= function below
-can be used to subscribe to these events and react to them, for
-example to write a log of graph changes to disk. The fn takes a log
+In addition to the standard events emitted by the default
+=ComputeGraph= of the /fabric-core/ module, a =FactGraph= also emits
+the events =:add-fact= or =:remove-fact= whenever a fact is added or
+removed. The =add-fact-graph-logger= function below can be used to
+subscribe to these (and only these) events and react to them, for
+example to write a log of fact changes to disk. The fn takes a logging
 function which is called with a single arg, a 2-element vector of
 =[event fact]=. The user function is called from a /core.async/
 =go-loop= setup by =add-fact-graph-logger=.
