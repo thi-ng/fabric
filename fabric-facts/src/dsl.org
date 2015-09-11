@@ -291,6 +291,26 @@ concatenate strings etc.). The value of this option must be a map of
         :select [?p ?name]}]}
 #+END_SRC
 
+**** :values
+
+Pre-constrains qvars to a set of possible values. Unlike the =:filter=
+option, which applies to results and allows a lot of flexibility
+through the use of expression syntax, specifying =:values= acts as
+/pre-filter/ and is applied to index selection vertices, preceeding
+the query vertex in terms of data flow. Only literal values are
+supported for this option. Also, queries specifying this option are
+not re-usable, but in most circumstances are faster than
+/post-filtered/ queries, since the initial set of matching facts is
+potentially much smaller.
+
+#+BEGIN_SRC clojure
+  ;; query based on :filter example above
+  ;; qvar ?a is pre-bound to values in given set
+  {:q [{:where [[?p type procedure] [?p date-created ?date]]}
+       {:optional [[?p author ?a]]}]
+   :values {?a #{alice bob charlie}}}
+#+END_SRC
+
 **** :aggregate
 
 TODO (see tests for various examples)
