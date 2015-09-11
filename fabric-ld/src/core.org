@@ -9,6 +9,7 @@
              - [[#helper-functions][Helper functions]]
          - [[#fact-log][Fact log]]
          - [[#graph-model][Graph model]]
+             - [[#model-helper-functions][Model helper functions]]
          - [[#entity-registries][Entity registries]]
              - [[#uri-prefix-registry][URI prefix registry]]
              - [[#query-registry][Query registry]]
@@ -18,6 +19,7 @@
              - [[#content-negotiation][Content negotiation]]
              - [[#request-validation][Request validation]]
              - [[#async-handler-wrapper][Async handler wrapper]]
+             - [[#registry-listing][Registry listing]]
              - [[#facts][Facts]]
              - [[#queries][Queries]]
              - [[#inference-rules][Inference rules]]
@@ -30,7 +32,7 @@
      - [[#component-system-creation][Component system creation]]
          - [[#default-configuration][Default configuration]]
          - [[#default-system-definition][Default system definition]]
-     - [[#repl][REPL]]
+     - [[#repl-helpers-reloaded-pattern][REPL helpers (reloaded pattern)]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.ld.core
@@ -55,10 +57,11 @@ digraph g {
   FactGraph -> FactLog;
 
   PrefixRegistry -> LDGraph;
-  PrefixRegistry -> LDGraphModel;
+  PrefixRegistry -> LDGraphModel -> Handler;
+  PrefixRegistry -> Handler;
+
   LDGraphModel -> QueryRegistry -> Handler;
   LDGraphModel -> RuleRegistry -> Handler;
-  LDGraphModel -> Handler;
 
   RoutesProvider -> Handler;
 
@@ -293,47 +296,12 @@ as facade to the =LDGraph= component above and provides a managed
 async execution context, as well as all operations to add/remove
 facts, queries & rules to/from the graph model.
 
-All modifications requests are pushed into a work queue (core.async
-channel) and then processed serially by the execution context. Users
-can subscribe to execution results by tapping the =result-event-bus=
-(using =core.async/tap=).
+All modifications requests (made by route handlers) are pushed into a
+work queue (core.async channel) and then processed serially by the
+execution context. Users can subscribe to execution results by tapping
+the =result-event-bus= (using =core.async/tap=).
 
 #+BEGIN_SRC clojure :noweb-ref model
-  (defn- model-work-queue-processor
-    [queue rbus]
-    (let [res (async/tap rbus (async/chan))]
-      (go-loop []
-        (if-let [work (<! queue)]
-          (let [[type f] work]
-            (info "executing queue item:" type)
-            (f)
-            (if (<! res)
-              (recur)
-              (info "context finished")))
-          (info "work queue closed")))))
-
-  (defn- queue-task
-    [queue id f] (go (>! queue [id f])))
-
-  (defn- model-result-log
-    [rbus]
-    (let [logtap  (async/tap rbus (async/chan))]
-      (go-loop []
-        (when-let [res (<! logtap)]
-          (info "context stats:" res)
-          (recur)))))
-
-  (defn untransform-pnames-in-query
-    [tx spec]
-    (reduce
-     (fn [acc k]
-       (let [v (acc k)]
-         (cond
-           (coll? v)   (assoc acc k (walk/postwalk #(ff/untransform tx %) v))
-           (string? v) (assoc acc k (ff/untransform tx v))
-           :else       acc)))
-     spec [:q :bind :filter :aggregate :order :group-by]))
-
   (defrecord LDGraphModel [graph prefixes ctx queue rbus rbus-in]
     comp/Lifecycle
     (start
@@ -421,6 +389,45 @@ can subscribe to execution results by tapping the =result-event-bus=
     (map->LDGraphModel {}))
 #+END_SRC
 
+**** Model helper functions
+
+#+BEGIN_SRC clojure :noweb-ref model-helpers
+  (defn- model-work-queue-processor
+    [queue rbus]
+    (let [res (async/tap rbus (async/chan))]
+      (go-loop []
+        (if-let [work (<! queue)]
+          (let [[type f] work]
+            (info "executing queue item:" type)
+            (f)
+            (if (<! res)
+              (recur)
+              (info "context finished")))
+          (info "work queue closed")))))
+
+  (defn- queue-task
+    [queue id f] (go (>! queue [id f])))
+
+  (defn- model-result-log
+    [rbus]
+    (let [logtap  (async/tap rbus (async/chan))]
+      (go-loop []
+        (when-let [res (<! logtap)]
+          (info "context stats:" res)
+          (recur)))))
+
+  (defn untransform-pnames-in-query
+    [tx spec]
+    (reduce
+     (fn [acc k]
+       (let [v (acc k)]
+         (cond
+           (coll? v)   (assoc acc k (walk/postwalk #(ff/untransform tx %) v))
+           (string? v) (assoc acc k (ff/untransform tx v))
+           :else       acc)))
+     spec [:q :bind :filter :aggregate :order :group-by]))
+#+END_SRC
+
 *** Entity registries
 **** URI prefix registry
 
@@ -435,7 +442,7 @@ a more efficient manner.
     (start
       [_]
       (info "starting prefix registry")
-      (let [this (assoc _ :registry (atom {:prefixes {}}))]
+      (let [this (assoc _ :registry (atom {:prefixes (sorted-map)}))]
         (run! (fn [[pre uri]] (register! this pre uri)) (:prefixes config))
         this))
     (stop
@@ -484,7 +491,7 @@ a more efficient manner.
     (start
       [_]
       (info "starting query registry")
-      (let [this (assoc _ :registry (atom {}))]
+      (let [this (assoc _ :registry (atom (sorted-map)))]
         (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
         this))
     (stop
@@ -529,7 +536,7 @@ a more efficient manner.
     (start
       [_]
       (info "starting rule registry")
-      (let [this (assoc _ :registry (atom {}))]
+      (let [this (assoc _ :registry (atom (sorted-map)))]
         (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
         this))
     (stop
@@ -809,6 +816,20 @@ a more efficient manner.
                (recur))))))))
 #+END_SRC
 
+**** Registry listing
+
+#+BEGIN_SRC clojure :noweb-ref handler
+  (defn list-registry-handler
+    ([registry]
+     (list-registry-handler registry ["id" "spec"] :spec))
+    ([registry cols key-fn]
+     (fn [req]
+       (let [items (reduce-kv
+                    (fn [acc k v] (assoc acc k (key-fn v)))
+                    (sorted-map) (list-registry registry))]
+         (api-response* req {:columns cols :body items} 200)))))
+#+END_SRC
+
 **** Facts
 
 #+BEGIN_SRC clojure :noweb-ref handler
@@ -962,14 +983,6 @@ a more efficient manner.
 **** Inference rules
 
 #+BEGIN_SRC clojure :noweb-ref handler
-  (defn list-registry-handler
-    [registry]
-    (fn [req]
-      (let [items (reduce-kv
-                   (fn [acc k v] (assoc acc k (:spec v)))
-                   {} (list-registry registry))]
-        (api-response* req {:columns ["id" "spec"] :body items} 200))))
-
   (defn register-rule-handler
     [model rules]
     (fn [req]
@@ -1040,7 +1053,7 @@ a more efficient manner.
       routes))
 
   (defn app-routes
-    [config model queries rules]
+    [config model prefixes queries rules]
     (wrap-middleware
      config
      (compojure/routes
@@ -1055,13 +1068,14 @@ a more efficient manner.
       (POST   "/rules"       [] (register-rule-handler model rules))
       (GET    "/rules/:id"   [] (rule-result-handler rules))
       (DELETE "/rules/:id"   [] (delete-rule-handler rules))
+      (GET    "/prefixes"    [] (list-registry-handler prefixes ["prefix" "uri"] identity))
       (route/not-found "404"))))
 
-  (defrecord Handler [config model queries rules routes]
+  (defrecord Handler [config model prefixes queries rules routes]
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:routes config) config model queries rules)]
+      (let [routes ((:routes config) config model prefixes queries rules)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -1353,15 +1367,16 @@ a more efficient manner.
                 {:model :model})
      :handler  (comp/using
                 (make-handler (:handler config))
-                {:model   :model
-                 :queries :queries
-                 :rules   :rules})
+                {:model    :model
+                 :prefixes :prefixes
+                 :queries  :queries
+                 :rules    :rules})
      :server   (comp/using
                 (make-server (:server config))
                 {:handler :handler})))
 #+END_SRC
 
-** REPL
+** REPL helpers (reloaded pattern)
 
 #+BEGIN_SRC clojure :noweb-ref user
   (def system nil)
@@ -1435,6 +1450,8 @@ a more efficient manner.
   <<graph>>
 
   <<logger>>
+
+  <<model-helpers>>
 
   <<model>>
 
