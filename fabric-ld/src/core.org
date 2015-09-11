@@ -6,6 +6,7 @@
      - [[#components][Components]]
          - [[#protocols][Protocols]]
          - [[#factgraph-component-wrapper][FactGraph component wrapper]]
+             - [[#helper-functions][Helper functions]]
          - [[#fact-log][Fact log]]
          - [[#graph-model][Graph model]]
          - [[#entity-registries][Entity registries]]
@@ -103,8 +104,8 @@ underlying compute graph can be optained via the =get-graph= protocol
 fn and be used to add any other vertices.
 
 On startup, the component (optionally) loads facts from a number of
-EDN files/URis and/or restores a previous state from a given graph log
-file.
+EDN or N-Triples files/URIs and/or restores a previous state from a
+given graph log file.
 
 *Note*: Since the component is one of the first to start, none of
 these loaded facts will be logged by the =FactLog= component at this
@@ -113,30 +114,19 @@ existing facts in the graph when it starts...
 
 Supported config options:
 
-| *Key*        | *Value* | *Required* | *Description*                                          |
-|--------------+---------+------------+--------------------------------------------------------|
-| =:edn-paths= | vector  | N          | Vector of EDN files/URIs to load facts from on startup |
-| =:restore=   | path    | N          | Path to graph log file to restore on startup           |
+| *Key*      | *Value* | *Required* | *Description*                                                    |
+|------------+---------+------------+------------------------------------------------------------------|
+| =:import=  | vector  | N          | Vector of EDN/N-Triples files/URIs to load facts from on startup |
+| =:restore= | string  | N          | Path to graph log file to restore on startup                     |
+| =:index=   | fn      | Y          | Index vertex constructor fn                                      |
+
+- local file names listed in =:facts= must end with =.edn= or =.nt= (for N-Triples)
+- remote URIs must also produce EDN or N-Triples, but type is detected
+  automatically (based on =Content-Type= response header)
+- remote URIs returning HTTP 303 redirects are followed (up to 2x)
+- Default config uses =alias-index-vertex= with =owl:sameAs= as index vertex constructor
 
 #+BEGIN_SRC clojure :noweb-ref graph
-  (defn- restore-graph-from-log
-    "Reads graph log file and applies all fact additions/removals to graph."
-    [g path]
-    (try
-      (let [facts (slurp path)
-            facts (edn/read-string (str "[" facts "]"))]
-        (loop [facts facts adds 0 dels 0]
-          (if facts
-            (let [[op f] (first facts)]
-              (if (= :add-fact op)
-                (do (ff/add-fact! g f)
-                    (recur (next facts) (inc adds) dels))
-                (do (ff/remove-fact! g f)
-                    (recur (next facts) adds (inc dels)))))
-            (info "added" adds "and removed" dels "facts from log:" path))))
-      (catch Exception e
-        (warn "failed to restore graph log:" path (.getMessage e)))))
-
   (defrecord LDGraph [graph prefixes config]
     comp/Lifecycle
     (start
@@ -144,11 +134,19 @@ Supported config options:
       (info "initializing graph...")
       (let [opts (merge {:transform (ff/combine-transforms prefixes 3)} config)
             g    (ff/fact-graph opts)]
-        (doseq [path (:edn-paths config)]
-          (with-open [r (-> path io/reader PushbackReader.)]
-            (let [facts (ff/map->facts (edn/read r))]
-              (info "adding" (count facts) "facts from" path)
-              (run! #(ff/add-fact! g %) facts))))
+        (doseq [uri (:import config)]
+          (try
+            (let [^String uri' (.toString uri)
+                  [facts err]  (cond
+                                 (.startsWith uri' "http") (load-facts-from-uri uri)
+                                 (.endsWith uri' ".edn")   (parse-edn-facts (slurp uri))
+                                 (.endsWith uri' ".nt")    [(nt/parse-ntriples (slurp uri))]
+                                 :else                     [nil "Unsupported content type"])]
+              (if facts
+                (do (info "adding" (count facts) "facts from" uri)
+                    (run! #(ff/add-fact! g %) facts))
+                (warn uri err)))
+            (catch Exception e)))
         (when-let [restore (:restore config)]
           (restore-graph-from-log g restore))
         (assoc _ :graph g)))
@@ -167,6 +165,63 @@ Supported config options:
   (defn make-graph
     [config]
     (map->LDGraph {:config config}))
+#+END_SRC
+
+**** Helper functions
+
+#+BEGIN_SRC clojure :noweb-ref graph-helpers
+  (defn- parse-edn-facts
+    [body]
+    (when-let [facts (try (edn/read-string body) (catch Exception e))]
+      (cond
+        (map? facts)  [(ff/map->facts facts)]
+        (coll? facts) [facts]
+        :else         [nil (str "EDN value is not a collection")])))
+
+  (defn load-facts-from-uri
+    ([uri]
+     (load-facts-from-uri uri 0 2))
+    ([uri depth max-redirects]
+     (try
+       (info "loading facts from:" uri)
+       (let [resp  @(http/get
+                     uri
+                     {:headers {"Accept"     "application/edn,application/n-triples"
+                                "User-Agent" (str "thi.ng-fabric-ld/" version)}})
+             body  (bs/to-string (:body resp))
+             ctype (or (get-in resp [:headers "content-type"])
+                       (get-in resp [:headers "Content-Type"]))]
+         (if (== 303 (:status resp))
+           (if (< depth max-redirects)
+             (load-facts-from-uri
+              (or (get-in resp [:headers "location"])
+                  (get-in resp [:headers "Location"]))
+              (inc depth) max-redirects)
+             [nil "Reached max number of redirects, giving up"])
+           (condp = ctype
+             "application/edn"       (parse-edn-facts body)
+             "application/n-triples" [(nt/parse-ntriples body)]
+             [nil (str "Remote server returned unsupported content type" ctype)])))
+       (catch Exception e
+         [nil (str "Error loading/parsing facts from remote server: " (.getMessage e))]))))
+
+  (defn- restore-graph-from-log
+    "Reads graph log file and applies all fact additions/removals to graph."
+    [g path]
+    (try
+      (let [facts (slurp path)
+            facts (edn/read-string (str "[" facts "]"))]
+        (loop [facts facts adds 0 dels 0]
+          (if facts
+            (let [[op f] (first facts)]
+              (if (= :add-fact op)
+                (do (ff/add-fact! g f)
+                    (recur (next facts) (inc adds) dels))
+                (do (ff/remove-fact! g f)
+                    (recur (next facts) adds (inc dels)))))
+            (info "added" adds "and removed" dels "facts from log:" path))))
+      (catch Exception e
+        (warn "failed to restore graph log:" path (.getMessage e)))))
 #+END_SRC
 
 *** Fact log
@@ -539,7 +594,7 @@ a more efficient manner.
   (def fmt-iso8601 (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ssX"))
 
   (defn uri?
-    [x] (and (string? x) (re-find #"^(https?|ftp|mailto|urn|isbn)://" x)))
+    [x] (and (string? x) (re-find #"^(https?|ftp|mailto|urn|uuid|isbn)://" x)))
 
   (defmulti transform-body (fn [x] (type x)))
 
@@ -547,7 +602,7 @@ a more efficient manner.
     [x] x)
 
   (defmethod transform-body java.util.Date
-    [x] (.format fmt-iso8601 ^java.util.Date x))
+    [x] (.format ^java.text.SimpleDateFormat fmt-iso8601 ^java.util.Date x))
 
   (defn transform-body*
     [body] (walk/postwalk transform-body body))
@@ -757,31 +812,6 @@ a more efficient manner.
 **** Facts
 
 #+BEGIN_SRC clojure :noweb-ref handler
-  (defn load-facts-from-uri
-    [uri]
-    (try
-      (let [resp  @(http/get
-                    uri
-                    {:headers {"Accept"     "application/edn,application/n-triples"
-                               "User-Agent" (str "thi.ng-fabric/" version)}})
-            body  (bs/to-string (:body resp))
-            ctype (or (get-in resp [:headers "content-type"])
-                      (get-in resp [:headers "Content-Type"]))]
-        (condp = ctype
-          "application/edn"
-          (when-let [facts ((:edn coercions) body)]
-            (cond
-              (map? facts)        [(ff/map->facts facts)]
-              (coll? facts) [facts]
-              :else               [nil (str "Returned EDN value is not a collection")]))
-
-          "application/n-triples"
-          [(nt/parse-ntriples body)]
-
-          [nil (str "Remote server returned incompatible content type" ctype)]))
-      (catch Exception e
-        [nil "Error loading facts from remote server"])))
-
   (defn add-facts-handler
     [model]
     (fn [req]
@@ -1031,7 +1061,7 @@ a more efficient manner.
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:route-provider config) config model queries rules)]
+      (let [routes ((:routes config) config model queries rules)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -1271,30 +1301,30 @@ a more efficient manner.
 #+BEGIN_SRC clojure :noweb-ref config
   (defn default-config
     []
-    {:prefixes {:prefixes  {"dcterms" "http://purl.org/dc/terms/"
-                            "doap"    "http://usefulinc.com/ns/doap#"
-                            "fabric"  "http://ns.thi.ng/fabric#"
-                            "foaf"    "http://xmlns.com/foaf/0.1/"
-                            "geo"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
-                            "owl"     "http://www.w3.org/2002/07/owl#"
-                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
-                            "schema"  "http://schema.org/"
-                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
-     :log      {:fn        default-logger
-                :path      ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
-     :graph    {:edn-paths [(io/resource "fabric.edn")]
-                ;;:restore   "session-20150910-222204.edn"
-                :index     (ff/alias-index-vertex #{"owl:sameAs"})}
+    {:prefixes {:prefixes {"dcterms" "http://purl.org/dc/terms/"
+                           "doap"    "http://usefulinc.com/ns/doap#"
+                           "fabric"  "http://ns.thi.ng/fabric#"
+                           "foaf"    "http://xmlns.com/foaf/0.1/"
+                           "geo"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
+                           "owl"     "http://www.w3.org/2002/07/owl#"
+                           "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                           "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
+                           "schema"  "http://schema.org/"
+                           "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
+     :log      {:fn       default-logger
+                :path     ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
+     :graph    {:import   [(io/resource "fabric.edn")]
+                ;;:restore  "session-20150910-222204.edn"
+                :index    (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {}
-     :queries  {:specs     {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
-     :rules    {:specs     (merge
-                            inf-rules-props
-                            inf-rules-class-semantics
-                            inf-rules-schema)}
-     :handler  {:route-provider app-routes
-                :dev true}
-     :server   {:port 8000}})
+     :queries  {:specs    {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
+     :rules    {:specs    (merge
+                           inf-rules-props
+                           inf-rules-class-semantics
+                           inf-rules-schema)}
+     :handler  {:routes   app-routes
+                :dev      true}
+     :server   {:port     8000}})
 #+END_SRC
 
 *** Default system definition
@@ -1392,13 +1422,15 @@ a more efficient manner.
     (:import
      java.io.PushbackReader))
 
-  (taoensso.timbre/set-level! :warn)
+  (taoensso.timbre/set-level! :info)
 
   <<protocols>>
 
   <<registry-helpers>>
 
   <<registry>>
+
+  <<graph-helpers>>
 
   <<graph>>
 
