@@ -696,11 +696,16 @@ a more efficient manner.
        "application/sparql-results+json")))
 
   (defn- csv-response
-    [body]
+    [body & opts]
     [(with-open [out (java.io.StringWriter.)]
-       (csv/write-csv out (transform-body* body))
+       (apply csv/write-csv out (transform-body* body) opts)
        (.toString out))
      "text/csv"])
+
+  (defn- sparql-csv-item
+    [res qvar]
+    (let [x (res qvar)]
+      (if (uri? x) (str \< x \>) x)))
 
   (defmethod api-response ["text/csv" :default]
     [_ body _]
@@ -709,14 +714,20 @@ a more efficient manner.
         (csv-response body'))
       [(pr-str (:error body)) "text/csv"]))
 
+  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :query]
     [_ body _]
     (let [qvars (if-let [sel (get-in body [:spec :select])]
-                  (if (sequential? sel) sel [sel])
-                  (into #{} (mapcat keys) (:body body)))
-          qvars (vec (sort qvars))
-          body  (into [(mapv ff/qvar-name qvars)] (map (fn [res] (mapv res qvars))) (:body body))]
-      (csv-response body)))
+                    (if (sequential? sel) sel [sel])
+                    (into #{} (mapcat keys) (:body body)))
+            qvars (vec (sort qvars))
+            body  (into [(mapv ff/qvar-name qvars)]
+                        (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
+                        (:body body))]
+        (csv-response body)))
+
+  (defmethod api-response ["application/sparql-results+csv" :query]
+    [_ body _] (api-response "text/csv" body :query))
 
   (defn parse-accept-header
     [accept]
@@ -911,7 +922,7 @@ a more efficient manner.
                              :body   body}
                             (if (:group-by spec) :query-group :query)
                             200)))]
-           (trigger-update! model)
+           ;;(trigger-update! model)
            handler)))))
 
   (defn register-query-handler
