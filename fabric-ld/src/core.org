@@ -96,8 +96,31 @@ digraph g {
 
 *** FactGraph component wrapper
 
+The =LDGraph= component provides a wrapped =FactGraph= (defined in the
+[[../../fabric-facts/src/core.org][fabric-facts]] module). The graph is configured to store triples and
+uses the =PrefixRegistry= defined further below as fact transform. The
+underlying compute graph can be optained via the =get-graph= protocol
+fn and be used to add any other vertices.
+
+On startup, the component (optionally) loads facts from a number of
+EDN files/URis and/or restores a previous state from a given graph log
+file.
+
+*Note*: Since the component is one of the first to start, none of
+these loaded facts will be logged by the =FactLog= component at this
+point. However, the =FactLog= component itself will retrieve & log all
+existing facts in the graph when it starts...
+
+Supported config options:
+
+| *Key*        | *Value* | *Required* | *Description*                                          |
+|--------------+---------+------------+--------------------------------------------------------|
+| =:edn-paths= | vector  | N          | Vector of EDN files/URIs to load facts from on startup |
+| =:restore=   | path    | N          | Path to graph log file to restore on startup           |
+
 #+BEGIN_SRC clojure :noweb-ref graph
   (defn- restore-graph-from-log
+    "Reads graph log file and applies all fact additions/removals to graph."
     [g path]
     (try
       (let [facts (slurp path)
@@ -148,6 +171,37 @@ digraph g {
 
 *** Fact log
 
+The =FactLog= component is reponsible for serializing any graph
+changes (facts only). The component only acts as wrapper around a user
+supplied logging function. The =default-logger= function below, writes
+fact additions/removals in an append-only manner to disk, using this
+format:
+
+#+BEGIN_SRC clojure
+[:add-fact ["http://schema.org/dateIssued" "http://www.w3.org/2000/01/rdf-schema#comment" "The date the ticket was issued."]]
+[:remove-fact ["http://schema.org/ReactAction" "http://www.w3.org/2000/01/rdf-schema#subClassOf" "http://schema.org/Action"]]
+#+END_SRC
+
+As noted earlier, all pre-existing facts in the graph are passed to
+the logging function when this component starts, so that the log
+always captures the full sets of facts.
+
+*Note:* Unless always the same log destination/path is used for all
+runtime sessions, any details of fact removals from earlier sessions
+will be lost.
+
+| *Key*   | *Value*       | *Required* | *Description*                              |
+|---------+---------------+------------+--------------------------------------------|
+| =:fn=   | function      | Y          | Log fn to log fact additions/removals      |
+| =:path= | format vector | Y          | Formatting vector for log destination path |
+
+- The default config uses =default-logger= as =:fn= option.
+- The path format vector /can/ have one date format element, which
+  will be given the current timestamp, see [[#default-configuration][default config]] and
+  [[https://github.com/thi-ng/strf/src/core.org#date-formatting][thi.ng/strf]] for details.
+
+See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section in the /fabric-facts/ module for more details.
+
 #+BEGIN_SRC clojure :noweb-ref logger
   (defrecord FactLog [config graph logger prefixes]
     comp/Lifecycle
@@ -156,6 +210,7 @@ digraph g {
       (info "starting fact log")
       (let [log-fn ((:fn config) config prefixes)
             logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
+        (run! #(log-fn [:add-fact %]) (get-facts graph))
         (assoc _ :logger logger)))
     (stop
       [_]
@@ -169,8 +224,7 @@ digraph g {
 
   (defn default-logger
     [config prefixes]
-    (let [session (strf/format-date :yyyymmdd-hhmmss (strf/now))
-          path    (strf/format (:path config) session)]
+    (let [path (strf/format (:path config) (strf/now))]
       (info "fact logger writing to:" path)
       (fn [evt]
         (info :fact-log evt)
@@ -178,6 +232,16 @@ digraph g {
 #+END_SRC
 
 *** Graph model
+
+The =LDGraphModel= is /the/ central component of this system. It acts
+as facade to the =LDGraph= component above and provides a managed
+async execution context, as well as all operations to add/remove
+facts, queries & rules to/from the graph model.
+
+All modifications requests are pushed into a work queue (core.async
+channel) and then processed serially by the execution context. Users
+can subscribe to execution results by tapping the =result-event-bus=
+(using =core.async/tap=).
 
 #+BEGIN_SRC clojure :noweb-ref model
   (defn- model-work-queue-processor
@@ -192,6 +256,9 @@ digraph g {
               (recur)
               (info "context finished")))
           (info "work queue closed")))))
+
+  (defn- queue-task
+    [queue id f] (go (>! queue [id f])))
 
   (defn- model-result-log
     [rbus]
@@ -245,65 +312,53 @@ digraph g {
       [_] rbus)
     (add-facts!
       [_ facts]
-      (go
-        (>! queue
-            [:add-facts
-             (fn []
-               (let [g (get-graph graph)]
-                 (run! #(ff/add-fact! g %) facts)
-                 (f/notify! ctx)))]))
+      (queue-task queue :add-facts
+                  (fn []
+                    (let [g (get-graph graph)]
+                      (run! #(ff/add-fact! g %) facts)
+                      (f/notify! ctx))))
       _)
     (remove-facts!
       [_ facts]
-      (go
-        (>! queue
-            [:remove-facts
-             (fn []
-               (let [g (get-graph graph)]
-                 (run! #(ff/remove-fact! g %) facts)
-                 (f/notify! ctx)))]))
+      (queue-task queue :remove-facts
+                  (fn []
+                    (let [g (get-graph graph)]
+                      (run! #(ff/remove-fact! g %) facts)
+                      (f/notify! ctx))))
       _)
     (transform-query
       [_ q] (untransform-pnames-in-query prefixes q))
     (add-query!
       [_ q]
       (let [out (promise)]
-        (go
-          (>! queue
-              [:add-query
-               (fn []
-                 (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
-                   (f/notify! ctx)
-                   (deliver out q)))]))
+        (queue-task queue :add-query
+                    (fn []
+                      (let [q (dsl/add-query-from-spec! (get-graph graph) q)]
+                        (f/notify! ctx)
+                        (deliver out q))))
         @out))
     (remove-query!
       [_ q]
-      (go
-        (>! queue
-            [:remove-query
-             (fn []
-               (f/remove-from-graph! q (get-graph graph))
-               (f/notify! ctx))]))
+      (queue-task queue :remove-query
+                  (fn []
+                    (f/remove-from-graph! q (get-graph graph))
+                    (f/notify! ctx)))
       _)
     (add-rule!
       [_ rule]
       (let [out (promise)]
-        (go
-          (>! queue
-              [:add-rule
-               (fn []
-                 (let [r (ff/add-rule! (get-graph graph) rule)]
-                   (f/notify! ctx)
-                   (deliver out r)))]))
+        (queue-task queue :add-rule
+                    (fn []
+                      (let [r (ff/add-rule! (get-graph graph) rule)]
+                        (f/notify! ctx)
+                        (deliver out r))))
         @out))
     (remove-rule!
       [_ rule]
-      (go
-        (>! queue
-            [:remove-rule
-             (fn []
-               (f/remove-from-graph! rule (get-graph graph))
-               (f/notify! ctx))]))
+      (queue-task queue :remove-rule
+                  (fn []
+                    (f/remove-from-graph! rule (get-graph graph))
+                    (f/notify! ctx)))
       _))
 
   (defn make-graph-model
@@ -365,7 +420,6 @@ a more efficient manner.
 #+END_SRC
 
 **** Query registry
-
 ***** TODO define vocab for queries defined in graph
 ***** Impl
 
@@ -1228,7 +1282,7 @@ a more efficient manner.
                             "schema"  "http://schema.org/"
                             "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :log      {:fn        default-logger
-                :path      ["session" str ".edn"]}
+                :path      ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
      :graph    {:edn-paths [(io/resource "fabric.edn")]
                 ;;:restore   "session-20150910-222204.edn"
                 :index     (ff/alias-index-vertex #{"owl:sameAs"})}
