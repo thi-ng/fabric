@@ -795,8 +795,11 @@ a more efficient manner.
      :int (fn [x] (strf/parse-int x 10 x))})
 
   (def validations
-    {:query   {:q [(v/sequential "must be a vector of sub-query maps") (v/min-length 1)]}
-     :opt-int (v/optional (v/pos "must be positive integer"))})
+    {:query   {:q [(v/sequential "must be a vector of sub-query maps")
+                   (v/min-length 1)]}
+     :opt-int (v/optional (v/pos "must be positive integer"))
+     :limit   [(v/optional (v/pos "must be positive integer"))
+               (v/optional (v/less-than 1001 "must be <= 1000"))]})
 
   (defn coerce-params
     [coercs params]
@@ -840,20 +843,23 @@ a more efficient manner.
 **** Async handler wrapper
 
 #+BEGIN_SRC clojure :noweb-ref handler
+  (defn- deliver-delayed-response
+    [model ch handler]
+    (async/untap (result-event-bus model) ch)
+    (async/close! ch)
+    (handler))
+
   (defn delayed-response-handler
     [model ready? handler]
     (d/->deferred
      (go
        (let [ch  (async/tap (result-event-bus model) (async/chan))]
-         (loop []
-           (let [res (<! ch)]
-             (if (ready?)
-               (do
-                 (async/untap (result-event-bus model) ch)
-                 (async/close! ch)
-                 (debug :result res)
-                 (handler))
-               (recur))))))))
+         (loop [i 0]
+           (if (ready?)
+             (deliver-delayed-response model ch handler)
+             (do (<! ch)
+                 (info :delay-recur i)
+                 (recur (inc i)))))))))
 #+END_SRC
 
 **** Registry listing
@@ -900,7 +906,7 @@ a more efficient manner.
        req
        {:limit  :int
         :offset :int}
-       {:limit  :opt-int
+       {:limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [limit offset]}]
          (let [limit  (or limit 100)
@@ -929,7 +935,7 @@ a more efficient manner.
         :limit  :int
         :offset :int}
        {:spec   :query
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [spec limit offset] :as params}]
          (let [spec    (transform-query model spec)
@@ -981,7 +987,7 @@ a more efficient manner.
         :offset :int}
        {:id     (v/required)
         :spec   {:q [(fn [_ v] (nil? v)) "spec must not have a :q key"]}
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id spec limit offset] :as params}]
          (let [q (lookup queries id)]
@@ -1050,7 +1056,7 @@ a more efficient manner.
        {:limit  :int
         :offset :int}
        {:id     (v/required)
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id limit offset] :as params}]
          (let [r (lookup rules id)]
