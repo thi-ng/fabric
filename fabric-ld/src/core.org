@@ -285,7 +285,6 @@ See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section
     (let [path (strf/format (:path config) (strf/now))]
       (info "fact logger writing to:" path)
       (fn [evt]
-        (info :fact-log evt)
         (spit path (str (pr-str evt) "\n") :append true))))
 #+END_SRC
 
@@ -683,6 +682,12 @@ a more efficient manner.
      {"@id" s}
      vals))
 
+  (defn- collect-qvars
+    [res spec]
+    (if-let [sel (:select spec)]
+      (if (sequential? sel) sel [sel])
+      (into #{} (mapcat keys) res)))
+
   ;; http://www.w3.org/TR/json-ld/
   (defmethod api-response ["application/ld+json" :default]
     [_ body _]
@@ -693,9 +698,7 @@ a more efficient manner.
   ;; http://www.w3.org/TR/sparql11-results-json/
   (defmethod api-response ["application/sparql-results+json" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                  (if (sequential? sel) sel [sel])
-                  (into #{} (mapcat keys) (:body body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
           qvars (mapv ff/qvar-name qvars)
           body  (map
                  (fn [res]
@@ -708,6 +711,11 @@ a more efficient manner.
         :results {:bindings body}}
        "application/sparql-results+json")))
 
+  (defmethod api-response ["application/sparql-results+json" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "application/sparql-results+json" body :query)))
+
   (defn- csv-response
     [body & opts]
     [(with-open [out (java.io.StringWriter.)]
@@ -716,31 +724,39 @@ a more efficient manner.
      "text/csv"])
 
   (defn- sparql-csv-item
-    [res qvar]
-    (let [x (res qvar)]
-      (if (uri? x) (str \< x \>) x)))
+    ([x]
+     (if (uri? x) (str \< x \>) x))
+    ([res qvar]
+     (sparql-csv-item (res qvar))))
 
+  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :default]
     [_ body _]
     (if-let [body' (:body body)]
-      (let [body' (if-let [cols (:columns body)] (cons cols body') body)]
+      (let [body' (map (fn [res] (mapv sparql-csv-item res)) body')
+            body' (if-let [cols (:columns body)] (cons cols body') body)]
         (csv-response body'))
       [(pr-str (:error body)) "text/csv"]))
 
-  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                    (if (sequential? sel) sel [sel])
-                    (into #{} (mapcat keys) (:body body)))
-            qvars (vec (sort qvars))
-            body  (into [(mapv ff/qvar-name qvars)]
-                        (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
-                        (:body body))]
-        (csv-response body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
+          qvars (vec (sort qvars))
+          body  (into [(mapv ff/qvar-name qvars)]
+                      (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
+                      (:body body))]
+      (csv-response body)))
+
+  (defmethod api-response ["text/csv" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "text/csv" body :query)))
 
   (defmethod api-response ["application/sparql-results+csv" :query]
     [_ body _] (api-response "text/csv" body :query))
+
+  (defmethod api-response ["application/sparql-results+csv" :query]
+    [_ body _] (api-response "text/csv" body :query-group))
 
   (defn parse-accept-header
     [accept]
