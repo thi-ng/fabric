@@ -800,19 +800,34 @@ a more efficient manner.
      :int (fn [x] (strf/parse-int x 10 x))})
 
   (def validations
-    {:query   {:q         [(v/sequential "must be a vector of sub-query maps")
-                           (v/min-length 1)]
-               :prefixes  (v/optional (v/map))
-               :bind      (v/optional (v/map))
-               :values    (v/optional (v/map))
-               :aggregate (v/optional (v/map))
-               :select    (v/optional (v/alts [(v/equals :*) (v/symbol) (v/sequential)]))
-               :filter    (v/optional (v/alts [(v/symbol) (v/sequential)]))
-               :group-by  (v/optional (v/alts [(v/symbol) (v/sequential)]))
-               :order-by  (v/optional (v/alts [(v/symbol) (v/sequential)]))}
-     :opt-int (v/optional (v/pos "must be positive integer"))
-     :limit   [(v/optional (v/pos "must be positive integer"))
-               (v/optional (v/less-than 1001 "must be <= 1000"))]})
+    (let [qvar        (v/validator
+                       (fn [_ v] (ff/qvar? v)) "must be a qvar")
+          qvar-or-exp (v/optional
+                       (v/alts [(qvar) (v/sequential)]
+                               "must be qvar or expression"))
+          qvar-map    (v/optional
+                       ((v/validator
+                         (fn [_ v] (and (map? v) (every? ff/qvar? (keys v))))
+                         "must be a map with qvar keys")))
+          opt-int     (v/optional
+                       (v/pos "must be positive integer"))]
+      {:query   {:q         [(v/sequential "must be a vector of sub-query maps")
+                             (v/min-length 1)]
+                 :prefixes  (v/optional
+                             ((v/validator
+                               (fn [_ v] (and (map? v) (every? string? (keys v)) (every? string? (vals v))))
+                               "must be a map with only string keys and values")))
+                 :bind      qvar-map
+                 :values    qvar-map
+                 :aggregate qvar-map
+                 :select    (v/optional (v/alts [(v/equals :*) (qvar) (v/sequential)]
+                                                "must be :*, qvar or seq of qvars"))
+                 :filter    qvar-or-exp
+                 :group-by  qvar-or-exp
+                 :order-by  qvar-or-exp}
+       :qvar    qvar
+       :opt-int opt-int
+       :limit   [opt-int (v/optional (v/less-than 1001 "must be <= 1000"))]}))
 
   (defn coerce-params
     [coercs params]
