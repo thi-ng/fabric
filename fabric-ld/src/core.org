@@ -416,8 +416,13 @@ the =result-event-bus= (using =core.async/tap=).
           (recur)))))
 
   (defn untransform-pnames-in-query
-    [tx spec]
-    (let [spec (reduce
+    [prefixes spec]
+    (let [tx   (if-let [prefixes' (:prefixes spec)]
+                 (-> {:prefixes (merge (list-registry prefixes) prefixes')}
+                     (make-prefix-registry)
+                     (comp/start))
+                 prefixes)
+          spec (reduce
                 (fn [acc k]
                   (let [v (acc k)]
                     (cond
@@ -795,8 +800,16 @@ a more efficient manner.
      :int (fn [x] (strf/parse-int x 10 x))})
 
   (def validations
-    {:query   {:q [(v/sequential "must be a vector of sub-query maps")
-                   (v/min-length 1)]}
+    {:query   {:q         [(v/sequential "must be a vector of sub-query maps")
+                           (v/min-length 1)]
+               :prefixes  (v/optional (v/map))
+               :bind      (v/optional (v/map))
+               :values    (v/optional (v/map))
+               :aggregate (v/optional (v/map))
+               :select    (v/optional (v/alts [(v/equals :*) (v/symbol) (v/sequential)]))
+               :filter    (v/optional (v/alts [(v/symbol) (v/sequential)]))
+               :group-by  (v/optional (v/alts [(v/symbol) (v/sequential)]))
+               :order-by  (v/optional (v/alts [(v/symbol) (v/sequential)]))}
      :opt-int (v/optional (v/pos "must be positive integer"))
      :limit   [(v/optional (v/pos "must be positive integer"))
                (v/optional (v/less-than 1001 "must be <= 1000"))]})
