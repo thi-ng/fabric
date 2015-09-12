@@ -285,7 +285,6 @@ See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section
     (let [path (strf/format (:path config) (strf/now))]
       (info "fact logger writing to:" path)
       (fn [evt]
-        (info :fact-log evt)
         (spit path (str (pr-str evt) "\n") :append true))))
 #+END_SRC
 
@@ -683,6 +682,12 @@ a more efficient manner.
      {"@id" s}
      vals))
 
+  (defn- collect-qvars
+    [res spec]
+    (if-let [sel (:select spec)]
+      (if (sequential? sel) sel [sel])
+      (into #{} (mapcat keys) res)))
+
   ;; http://www.w3.org/TR/json-ld/
   (defmethod api-response ["application/ld+json" :default]
     [_ body _]
@@ -693,9 +698,7 @@ a more efficient manner.
   ;; http://www.w3.org/TR/sparql11-results-json/
   (defmethod api-response ["application/sparql-results+json" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                  (if (sequential? sel) sel [sel])
-                  (into #{} (mapcat keys) (:body body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
           qvars (mapv ff/qvar-name qvars)
           body  (map
                  (fn [res]
@@ -708,6 +711,11 @@ a more efficient manner.
         :results {:bindings body}}
        "application/sparql-results+json")))
 
+  (defmethod api-response ["application/sparql-results+json" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "application/sparql-results+json" body :query)))
+
   (defn- csv-response
     [body & opts]
     [(with-open [out (java.io.StringWriter.)]
@@ -716,31 +724,39 @@ a more efficient manner.
      "text/csv"])
 
   (defn- sparql-csv-item
-    [res qvar]
-    (let [x (res qvar)]
-      (if (uri? x) (str \< x \>) x)))
+    ([x]
+     (if (uri? x) (str \< x \>) x))
+    ([res qvar]
+     (sparql-csv-item (res qvar))))
 
+  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :default]
     [_ body _]
     (if-let [body' (:body body)]
-      (let [body' (if-let [cols (:columns body)] (cons cols body') body)]
+      (let [body' (map (fn [res] (mapv sparql-csv-item res)) body')
+            body' (if-let [cols (:columns body)] (cons cols body') body)]
         (csv-response body'))
       [(pr-str (:error body)) "text/csv"]))
 
-  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                    (if (sequential? sel) sel [sel])
-                    (into #{} (mapcat keys) (:body body)))
-            qvars (vec (sort qvars))
-            body  (into [(mapv ff/qvar-name qvars)]
-                        (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
-                        (:body body))]
-        (csv-response body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
+          qvars (vec (sort qvars))
+          body  (into [(mapv ff/qvar-name qvars)]
+                      (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
+                      (:body body))]
+      (csv-response body)))
+
+  (defmethod api-response ["text/csv" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "text/csv" body :query)))
 
   (defmethod api-response ["application/sparql-results+csv" :query]
     [_ body _] (api-response "text/csv" body :query))
+
+  (defmethod api-response ["application/sparql-results+csv" :query]
+    [_ body _] (api-response "text/csv" body :query-group))
 
   (defn parse-accept-header
     [accept]
@@ -779,8 +795,11 @@ a more efficient manner.
      :int (fn [x] (strf/parse-int x 10 x))})
 
   (def validations
-    {:query   {:q [(v/sequential "must be a vector of sub-query maps") (v/min-length 1)]}
-     :opt-int (v/optional (v/pos "must be positive integer"))})
+    {:query   {:q [(v/sequential "must be a vector of sub-query maps")
+                   (v/min-length 1)]}
+     :opt-int (v/optional (v/pos "must be positive integer"))
+     :limit   [(v/optional (v/pos "must be positive integer"))
+               (v/optional (v/less-than 1001 "must be <= 1000"))]})
 
   (defn coerce-params
     [coercs params]
@@ -824,20 +843,23 @@ a more efficient manner.
 **** Async handler wrapper
 
 #+BEGIN_SRC clojure :noweb-ref handler
+  (defn- deliver-delayed-response
+    [model ch handler]
+    (async/untap (result-event-bus model) ch)
+    (async/close! ch)
+    (handler))
+
   (defn delayed-response-handler
     [model ready? handler]
     (d/->deferred
      (go
        (let [ch  (async/tap (result-event-bus model) (async/chan))]
-         (loop []
-           (let [res (<! ch)]
-             (if (ready?)
-               (do
-                 (async/untap (result-event-bus model) ch)
-                 (async/close! ch)
-                 (debug :result res)
-                 (handler))
-               (recur))))))))
+         (loop [i 0]
+           (if (ready?)
+             (deliver-delayed-response model ch handler)
+             (do (<! ch)
+                 (info :delay-recur i)
+                 (recur (inc i)))))))))
 #+END_SRC
 
 **** Registry listing
@@ -884,7 +906,7 @@ a more efficient manner.
        req
        {:limit  :int
         :offset :int}
-       {:limit  :opt-int
+       {:limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [limit offset]}]
          (let [limit  (or limit 100)
@@ -913,7 +935,7 @@ a more efficient manner.
         :limit  :int
         :offset :int}
        {:spec   :query
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [spec limit offset] :as params}]
          (let [spec    (transform-query model spec)
@@ -965,7 +987,7 @@ a more efficient manner.
         :offset :int}
        {:id     (v/required)
         :spec   {:q [(fn [_ v] (nil? v)) "spec must not have a :q key"]}
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id spec limit offset] :as params}]
          (let [q (lookup queries id)]
@@ -1034,7 +1056,7 @@ a more efficient manner.
        {:limit  :int
         :offset :int}
        {:id     (v/required)
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id limit offset] :as params}]
          (let [r (lookup rules id)]
