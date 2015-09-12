@@ -49,7 +49,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.312"]
+  [thi.ng/fabric "0.0.338"]
 #+END_SRC
 
 ** Overview
@@ -105,7 +105,7 @@ into different modules (all described & linked below).
 
 - Modular architecture (see [[#modules][Modules]] section below)
 - Easy-to-use API
-- Literate programming format w/ diagrams & examples
+- Literate programming format w/ extensive docs, diagrams & examples
 - Over 150 tests
 
 **** fabric-core
@@ -145,8 +145,10 @@ into different modules (all described & linked below).
 
 - Linked Data server components & ready-to-go default setup (using Stuart Sierra's component lib)
 - HTTP API to manipulate & query fact graphs
-- Async handlers & graph processing (default config uses Aleph server)
+- EDN/N-Triples facts import via URIs (w/ 303 redirect handling)
+- Async request handlers & graph processing (default config uses Aleph server)
 - Registered queries/rules w/ auto-updating results
+- OWL-RL inference rules (sub-set)
 - Multiple response formats (EDN, JSON, JSON-LD, SPARQL JSON, CSV)
 
 See the README of modules below for full feature sets...
@@ -657,22 +659,23 @@ dependencies to all currently existing modules.
 
 ** Release history
 
-| *Version* | *Released* | *Description*                                                                    |
-|-----------+------------+----------------------------------------------------------------------------------|
-|   0.0.312 | 2015-09-08 | no code changes, only include ld module as dependency to main fabric artefact        |
-|   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                  |
-|   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL        |
-|   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates |
-|   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling           |
-|   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests      |
-|   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                          |
-|   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                                   |
-|   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring              |
-|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                     |
-|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                           |
-|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                     |
-|   0.0.116 | 2015-08-15 | more reusable fact queries                                                       |
-|   0.0.108 | 2015-08-14 | 1st public release                                                               |
+| *Version* | *Released* | *Description*                                                                      |
+|-----------+------------+------------------------------------------------------------------------------------|
+|   0.0.338 | 2015-09-12 | LD module updates, add response types, request validation, DSL bugfixes, more docs |
+|   0.0.312 | 2015-09-08 | no code changes, only include ld module as dependency to main fabric artefact      |
+|   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                    |
+|   0.0.262 | 2015-09-05 | add optional collect-final!, bugfix group-by qvar selection, refactor DSL          |
+|   0.0.247 | 2015-09-04 | :bind, :values query opts, negation queries, index sel optimization, DSL updates   |
+|   0.0.231 | 2015-09-02 | bugfixes, add sub-query opts, DSL extension, map->facts bnode handling             |
+|   0.0.214 | 2015-08-29 | DSL/aggregation updates, map->facts conversion, fact transforms, more tests        |
+|   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                            |
+|   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                                     |
+|   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring                |
+|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                       |
+|   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                             |
+|   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                       |
+|   0.0.116 | 2015-08-15 | more reusable fact queries                                                         |
+|   0.0.108 | 2015-08-14 | 1st public release                                                                 |
 
 ** Contributors
 
