@@ -104,6 +104,12 @@ into different modules (all described & linked below).
 *** Features
 
 - Modular architecture (see [[#modules][Modules]] section below)
+- Easy-to-use API
+- Literate programming format w/ diagrams & examples
+- Over 150 tests
+
+**** fabric-core
+
 - Protocol based implementation
 - Customizable vertex, edge, graph & execution context types
 - 3 types of graph execution contexts built-in
@@ -117,21 +123,31 @@ into different modules (all described & linked below).
 - Support for graph modification logging (persistence, event sourcing etc.)
 - Self-modifiable graphs during execution (add/remove/modify vertices/edges)
 
-Extra features provided by sub-modules:
+**** fabric-facts
 
-- Knowledge graphs (triples & quads)
-- Fully featured, efficient query engine (pattern based, variables,
-  sub-queries, joins, optional joins, unions, negation, filters,
-  pre-filters, grouping, value injection, aggregation)
+- Knowledge graph (triple or quad based)
+- Fully featured, efficient query engine using query trees
+  - Graph pattern matching w/ variables
+  - Sub-queries (joins, optional joins, unions, negation)
+  - Filters / pre-filters
+  - Grouping (based on vars or expressions)
+  - Computed vars result injection
+  - Aggregation
+  - Bounded length (variable) path queries (with min/max limits)
+  - Pervasive re-use of intermediate results
 - Optional map based query & expression DSL (EDN serializable)
-- Bounded length (variable) path queries (with min/max limits)
 - Query & rule based fact inferencing (additions & retractions)
-- Linked Data server components
-- HTTP API to manipulate & query fact graphs
 - Fact conversion/transformation/indexing
+- Conversion of nested Clojure map to triples
 - N-Triples parser w/ extensible object literal conversions
-- Easy-to-use API
-- Literate programming format w/ diagrams & examples
+
+**** fabric-ld
+
+- Linked Data server components & ready-to-go default setup (using Stuart Sierra's component lib)
+- HTTP API to manipulate & query fact graphs
+- Async handlers & graph processing (default config uses Aleph server)
+- Registered queries/rules w/ auto-updating results
+- Multiple response formats (EDN, JSON, JSON-LD, SPARQL JSON, CSV)
 
 See the README of modules below for full feature sets...
 
@@ -556,7 +572,6 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   ;; :net 1900.0
   ;; :total 2280.0
 #+END_SRC
-
 
 * Project definition
 
