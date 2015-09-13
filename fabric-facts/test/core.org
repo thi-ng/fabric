@@ -332,7 +332,7 @@
     (is (== 1024 ((dsl/compile-expr '(int (pow ?a ?b))) '{?a 2 ?b 10})))
     (is (== 10 ((dsl/compile-expr '(int (logn ?a ?b))) '{?a 1024 ?b 2})))
     (is ((dsl/compile-expr '(match #"\w+" ?a)) '{?a "hello123"}))
-    (is ((dsl/compile-expr '(match "\w+" ?a)) '{?a "hello123"}))
+    (is ((dsl/compile-expr '(match "\\w+" ?a)) '{?a "hello123"}))
     (is (not ((dsl/compile-expr '(match #"\w+" ?a)) {})))
     (is ((dsl/compile-expr '(and ?a ?b)) '{?a 1024 ?b 2}))
     (is (not ((dsl/compile-expr '(and ?a ?b ?c)) '{?a 1024 ?b 2})))
