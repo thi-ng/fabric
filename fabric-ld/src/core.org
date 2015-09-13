@@ -248,12 +248,16 @@ always captures the full sets of facts.
 runtime sessions, any details of fact removals from earlier sessions
 will be lost.
 
-| *Key*   | *Value*       | *Required* | *Description*                              |
-|---------+---------------+------------+--------------------------------------------|
-| =:fn=   | function      | Y          | Log fn to log fact additions/removals      |
-| =:path= | format vector | Y          | Formatting vector for log destination path |
+| *Key*     | *Value*       | *Required* | *Description*                              |
+|-----------+---------------+------------+--------------------------------------------|
+| =:fn=     | function      | Y          | Log fn to log fact additions/removals      |
+| =:path=   | format vector | Y          | Formatting vector for log destination path |
+| =:buffer= | int           | N          | Buffer size for core.async channel         |
 
 - The default config uses =default-logger= as =:fn= option.
+- If unspecified, a buffer size of 1024 is used. For large graphs this
+  must be (drastically) increased, especially if the =:restore= option
+  is specified for the =LDGraph= component.
 - The path format vector /can/ have one date format element, which
   will be given the current timestamp, see [[#default-configuration][default config]] and
   [[https://github.com/thi-ng/strf/src/core.org#date-formatting][thi.ng/strf]] for details.
@@ -266,8 +270,9 @@ See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section
     (start
       [_]
       (info "starting fact log")
-      (let [log-fn ((:fn config) config prefixes)
-            logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
+      (let [log-fn   ((:fn config) config prefixes)
+            buf-size (config :buffer 1024)
+            logger   (ff/add-fact-graph-logger (get-graph graph) log-fn buf-size)]
         (run! #(log-fn [:add-fact %]) (get-facts graph))
         (assoc _ :logger logger)))
     (stop
@@ -968,6 +973,7 @@ a more efficient manner.
        (fn [_ {:keys [spec limit offset] :as params}]
          (let [spec    (transform-query model spec)
                _       (info :one-off-query spec)
+               t0      (f/now)
                q       (add-query! model spec)
                handler (delayed-response-handler
                         model
@@ -982,6 +988,7 @@ a more efficient manner.
                              :total  (count @q)
                              :offset offset
                              :spec   spec
+                             :time   (f/millis-since t0)
                              :body   body}
                             (if (:group-by spec) :query-group :query)
                             200)))]
@@ -1022,6 +1029,7 @@ a more efficient manner.
            (if-let [qq (:query q)]
              (let [limit  (or limit 100)
                    offset (or offset 0)
+                   t0     (f/now)
                    res    (if spec
                             (let [spec (select-keys spec [:filter :aggregate :order :group-by :select :bind])
                                   spec (transform-query model spec)
@@ -1040,6 +1048,7 @@ a more efficient manner.
                  :total  (count res)
                  :offset offset
                  :spec   (:spec q)
+                 :time   (f/millis-since t0)
                  :body   body}
                 (if (:group-by spec) :query-group :query)
                 200))
@@ -1400,6 +1409,7 @@ a more efficient manner.
                            "schema"  "http://schema.org/"
                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :log      {:fn       default-logger
+                :buffer   (* 128 1024)
                 :path     ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
      :graph    {:import   [(io/resource "fabric.edn")]
                 ;;:restore  "session-20150910-222204.edn"
@@ -1511,7 +1521,7 @@ a more efficient manner.
     (:import
      java.io.PushbackReader))
 
-  (taoensso.timbre/set-level! :info)
+  (taoensso.timbre/set-level! :warn)
 
   <<protocols>>
 
