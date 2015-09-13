@@ -1941,23 +1941,27 @@ function which is called with a single arg, a 2-element vector of
     (map (fn [[op f]] [({:add-fact :add :remove-fact :remove} op) f])))
 
   (defn add-fact-graph-logger
-    [g log-fn]
-    (let [ch        (chan 1024)
-          watch-id  (f/random-id)
-          log->chan #(go (>! ch %))]
-      (go-loop []
-        (when-let [t (<! ch)]
-          (log-fn t)
-          (recur)))
-      (f/add-watch! g :add-fact watch-id log->chan)
-      (f/add-watch! g :remove-fact watch-id log->chan)
-      {:graph g :chan ch :watch-id watch-id}))
+    ([g log-fn]
+     (add-fact-graph-logger g log-fn 1024))
+    ([g log-fn buf-size]
+     (let [ch        (async/chan buf-size)
+           watch-id  (f/random-id)
+           log->chan #(go (>! ch %))]
+       (async/thread
+         (loop []
+           (when-let [t (<!! ch)]
+             (log-fn t)
+             (recur))))
+       (f/add-watch! g :add-fact watch-id log->chan)
+       (f/add-watch! g :remove-fact watch-id log->chan)
+       (info "started fact logger with buffer" buf-size)
+       {:graph g :chan ch :watch-id watch-id})))
 
   (defn remove-fact-graph-logger
     [{:keys [graph watch-id chan]}]
     (f/remove-watch! graph :add-fact watch-id)
     (f/remove-watch! graph :remove-fact watch-id)
-    (close! chan))
+    (async/close! chan))
 #+END_SRC
 
 ** Generic helpers
@@ -2053,7 +2057,7 @@ The following example demonstrates all these rules:
           [thi.ng.dstruct.unionfind :as uf]
           [clojure.set :as set]
           [clojure.data.int-map :as imap]
-          [clojure.core.async :as a :refer [go go-loop chan close! <! >! alts! timeout]]
+          [clojure.core.async :as async :refer [go go-loop <! <!! >!]]
           [taoensso.timbre :refer [debug info warn]])]
         :cljs
         [(:require-macros
@@ -2064,7 +2068,7 @@ The following example demonstrates all these rules:
           [thi.ng.xerror.core :as err]
           [thi.ng.strf.core :as strf]
           [clojure.set :as set]
-          [cljs.core.async :refer [chan close! <! >! alts! timeout]])]))
+          [cljs.core.async :as async :refer [<! <!! >!]])]))
 
   (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
