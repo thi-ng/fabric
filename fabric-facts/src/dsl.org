@@ -470,17 +470,17 @@ TODO (see tests for various examples)
     {'not   [nil not]
      'int   [number? int]
      'float [number? double]
-     'abs   [number? #(Math/abs %)]
-     'sqrt  [number? #(Math/sqrt %)]
-     'exp   [number? #(Math/exp %)]
-     'sin   [number? #(Math/sin %)]
-     'asin  [number? #(Math/asin %)]
-     'cos   [number? #(Math/cos %)]
-     'acos  [number? #(Math/acos %)]
-     'tan   [number? #(Math/tan %)]
-     'atan  [number? #(Math/atan %)]
-     'floor [number? #(long (Math/floor %))]
-     'ceil  [number? #(long (Math/ceil %))]
+     'abs   [number? #(if (neg? %) (- %) %)]
+     'sqrt  [number? #(Math/sqrt (double %))]
+     'exp   [number? #(Math/exp (double %))]
+     'sin   [number? #(Math/sin (double %))]
+     'asin  [number? #(Math/asin (double %))]
+     'cos   [number? #(Math/cos (double %))]
+     'acos  [number? #(Math/acos (double %))]
+     'tan   [number? #(Math/tan (double %))]
+     'atan  [number? #(Math/atan (double %))]
+     'floor [number? #(long (Math/floor (double %)))]
+     'ceil  [number? #(long (Math/ceil (double %)))]
      'round [number? #(Math/round (double %))]})
 
   (def binary-ops
@@ -488,9 +488,9 @@ TODO (see tests for various examples)
      '>     [nil nil #(pos? (compare % %2))]
      '<=    [nil nil #(<= (compare % %2) 0)]
      '>=    [nil nil #(>= (compare % %2) 0)]
-     'pow   [number? number? #(Math/pow % %2)]
-     'atan2 [number? number? #(Math/atan2 % %2)]
-     'logn  [number? number? #(/ (Math/log %) (Math/log %2))]})
+     'pow   [number? number? #(Math/pow (double %) (double %2))]
+     'atan2 [number? number? #(Math/atan2 (double %) (double %2))]
+     'logn  [number? number? #(/ (Math/log (double %)) (Math/log (double %2)))]})
 
   (defmulti compile-expr
     (fn [expr]
