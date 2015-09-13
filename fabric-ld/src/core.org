@@ -458,45 +458,70 @@ implements the =ITwoWayTransform= defined in the [[../../fabric-facts/src/core.o
 namespace. It is used as fact transform by the graph to store facts in
 a more efficient manner.
 
+:registry - pname -> uri
+:cache - pname -> pname instances
+
 #+BEGIN_SRC clojure :noweb-ref registry
-  (defrecord PrefixRegistry [config registry]
+  (defrecord PrefixRegistry [config prefixes sorted cache]
     comp/Lifecycle
     (start
       [_]
       (info "starting prefix registry")
-      (let [this (assoc _ :registry (atom {:prefixes (sorted-map)}))]
+      (let [this (assoc _
+                        :prefixes (atom (sorted-map))
+                        :sorted   (atom nil)
+                        :cache    (atom (hash-map)))]
         (run! (fn [[pre uri]] (register! this pre uri)) (:prefixes config))
         this))
     (stop
       [_]
       (info "stopping prefix registry")
-      (assoc _ :registry nil))
+      (assoc _ :prefixes nil :sorted nil :cache nil))
     IEntityRegistry
     (register!
       [_ prefix uri]
       (info "register! prefix:" prefix uri)
-      (swap! registry
-             (fn [reg]
-               (let [reg (assoc-in reg [:prefixes prefix] uri)]
-                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      (swap! prefixes assoc prefix uri)
+      (reset! sorted (ff/sort-prefixes @prefixes))
       _)
     (deregister!
       [_ prefix]
       (info "deregister! prefix:" prefix)
-      (swap! registry
-             (fn [reg]
-               (let [reg (update reg :prefixes dissoc prefix)]
-                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      (swap! prefixes dissoc prefix)
+      (reset! sorted (ff/sort-prefixes @prefixes))
       _)
     (list-registry
-      [_] (:prefixes @registry))
+      [_] @prefixes)
     (lookup
-      [_ prefix] (get-in @registry [:prefixes prefix]))
+      [_ prefix] (@prefixes prefix))
     ff/ITwoWayTransform
     (transform
-      [_ x] (ff/->prefix-string (:sorted @registry) x))
+      [_ x]
+      (if (string? x)
+        (if-let [v (find @cache x)]
+          (key v)
+          (reduce
+           (fn [acc p]
+             (if (.startsWith ^String x ^String (val p))
+               (let [pre  (first p)
+                     name (.substring ^String x (count (val p)))
+                     pn   (str pre \: name)]
+                 (reduced
+                  (if-let [v (find @cache pn)]
+                    (key v)
+                    (do (swap! cache assoc pn x) pn))))
+               acc))
+           x @sorted))
+        x))
     (untransform
-      [_ x] (ff/<-prefix-string (:prefixes @registry) x)))
+      [_ x]
+      (if (string? x)
+        (or (@cache x)
+            (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
+              (if-let [p (@prefixes p)]
+                (str p n)
+                x)))
+        x)))
 
   (defn make-prefix-registry
     [config]
@@ -1304,7 +1329,8 @@ a more efficient manner.
                         [:add ["owl:Nothing" "rdfs:subClassOf" ?c]]]}
 
       :scm-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
-                                     [?c2 "rdfs:subClassOf" ?c3]]}]}
+                                     [?c2 "rdfs:subClassOf" ?c3]]
+                             :unique true}]}
                  :prod [[:add [?c1 "rdfs:subClassOf" ?c3]]]}
 
       :scm-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]]}]}
