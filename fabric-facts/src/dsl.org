@@ -68,9 +68,8 @@ namespace.
 #+BEGIN_SRC clojure
   (dsl/add-query-from-spec!
    graph
-   '{:select    [?res ?type ?num]
-     :q         [{:where [[?res title ?t] [?res type ?type]]}
-                 {:optional [[?res schema ?schema]]}]
+   '{:q         [{:where [[?res schema ?schema] [?res type ?type]]}
+                 {:optional [[?res title ?title]]}]
      :filter    (or (= ?res toxi) (= ?type person))
      :group-by  [?type ?res]
      :aggregate {?num (agg-count ?res)}
