@@ -1551,7 +1551,7 @@ a more efficient manner.
     (:import
      java.io.PushbackReader))
 
-  (taoensso.timbre/set-level! :warn)
+  (taoensso.timbre/set-level! :info)
 
   <<protocols>>
 
