@@ -2,9 +2,140 @@
 
 * Contents                                                         :toc_4_gh:
  - [[#namespace-thingfabricfactsqueryviz][Namespace: thi.ng.fabric.facts.queryviz]]
+     - [[#overview][Overview]]
+     - [[#examples][Examples]]
+         - [[#all-features][All features]]
+         - [[#lubm-benchmark-queries][LUBM benchmark queries]]
+     - [[#public-api][Public API]]
+     - [[#implementation][Implementation]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.facts.queryviz
+
+** Overview
+
+This namespace provides a query visualization engine to help
+documenting and debugging complex queries defined via the [[./dsl.org][query DSL]]
+provided by this module.
+
+The visualizer transforms query specs into the [[http://graphviz.org][Graphviz]] DOT format and
+can then be exported (via Graphviz) into a number of image formats:
+
+#+BEGIN_SRC bash
+# general graphviz command line usage to export as PNG
+dot -Tpng -o qviz.png qviz.dot
+# or SVG
+dot -Tsvg -o qviz.svg qviz.dot
+#+END_SRC
+
+** Examples
+
+*** All features
+
+This example query shows most of the features of the query visualizer:
+
+#+BEGIN_SRC clojure
+  (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
+                     {:minus [[?p "foaf:mother" "ex:P100"]]}
+                     {:where [[?p "foaf:name" ?pname]]}
+                     {:where [[?d "foaf:name" ?dname]]}
+                     {:optional [[?d "ex:dob" ?dob]]
+                      :filter   (< ?dob #inst "2000-01-01")}]
+         :aggregate {?birthdays (agg-collect ?dob)}
+         :bind      {?rel (str ?pname " -> " ?dname)}
+         :values    {?p #{"ex:P1" "ex:P2"}}
+         :group-by  ?p
+         :order     ?d
+         :select    [?p ?d ?rel ?birthdays]}
+       (query->graphviz)
+       (spit "qviz-ex01.dot"))
+#+END_SRC
+
+[[../../assets/qviz-ex01.png]]
+
+- Each subquery creates a cluster
+- All query variables (qvars) highlighted to better distinquish from
+  literals
+- Selected qvars highlighted in stronger color
+- =:optional= subqueries shown as dashed arcs
+- In =:path= subqueries the path part itself is represented as
+  additional cluster (w/ range attribs)
+- Result subtractions (=:minus= subqueries) shown as red arcs
+- Query/sub-query options shown in grey and their expressions linked
+  to all related qvars
+
+*Note*: See the [[./dsl.org][DSL namespace]] for a detailed description of the
+overall query spec and options.
+
+*** LUBM benchmark queries
+
+The [[http://swat.cse.lehigh.edu/projects/lubm/][Lehigh University Benchmark]] is one of the standard benchmarks in
+the RDF world. Here're visualize some the benchmark queries ([[http://swat.cse.lehigh.edu/projects/lubm/queries-sparql.txt][converted
+from SPARQL]]).
+
+First off, with default configuration (vertical layout, default colors):
+
+#+BEGIN_SRC clojure
+  (->> '{:prefixes {"ub" "http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#"}
+         :q [{:where [[?x "rdf:type" "ub:GraduateStudent"]
+                      [?y "rdf:type" "ub:University"]
+                      [?z "rdf:type" "ub:Department"]
+                      [?x "ub:memberOf" ?z]
+                      [?z "ub:subOrganizationOf" ?y]
+                      [?x "ub:undergraduateDegreeFrom" ?y]]}]}
+       (query->graphviz)
+       (spit "qviz-lubm-q2.dot"))
+#+END_SRC
+
+[[../../assets/qviz-lubm-q2.png]]
+
+The following example modifies the default config to use horizontal
+layout and different colors:
+
+#+BEGIN_SRC clojure
+  (->> '{:prefixes {"ub" "http://swat.cse.lehigh.edu/onto/univ-bench.owl#"}
+         :select   [?x ?z]
+         :q        [{:where [[?x "rdf:type" "ub:Student"]
+                             [?y "rdf:type" "ub:Faculty"]
+                             [?z "rdf:type" "ub:Course"]
+                             [?x "ub:advisor" ?y]
+                             [?y "ub:teacherOf" ?z]
+                             [?x "ub:takesCourse" ?z]]}]}
+       (query->graphviz
+        (-> default-config
+            (update :prelude conj "rankdir=LR;")
+            (assoc-in [:qvars :color] "#6699cc")
+            (assoc-in [:select :color] "#0099cc")))
+       (spit "qviz-lubm-q9.dot"))
+#+END_SRC
+
+[[../../assets/qviz-lubm-q9.png]]
+
+** Public API
+
+#+BEGIN_SRC clojure :noweb-ref public
+  (defn query->graphviz
+    ([q]
+     (query->graphviz default-config q))
+    ([config q]
+     (let [qvars (into {} (map #(vector % (:qvars config))) (unique-qvars q))
+           sel   (set (let [sel (:select q)]
+                        (if (or (nil? sel) (= :* sel))
+                          (keys qvars)
+                          (if (sequential? sel) sel [sel]))))
+           qvars (reduce
+                  (fn [acc k] (update acc k merge (:select config)))
+                  qvars sel)
+           ctx   (-> (reduce
+                      #(transform-sub-query % {} config %2)
+                      [qvars []] (:q q))
+                     (transform-query-options {} config q))
+           nodes (map #(apply make-node %) (first ctx))
+           body  (concat ["digraph g {"] (:prelude config) nodes (peek ctx) ["}"])]
+       (str/join "\n" body))))
+#+END_SRC
+
+** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref query-viz
   (defn unique-qvars
@@ -149,33 +280,12 @@
   (def default-config
     {:prelude ["node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];"
                "edge[fontname=Inconsolata,fontsize=9];"
-               "rankdir=LR;"
                "fontname=Inconsolata;"
                "fontsize=9;"
                "compound=true;"]
-     :qvars   {:color "#6699cc"}
-     :select  {:color "#0099cc"}
+     :qvars   {:color "#cc99cc"}
+     :select  {:color "#cc0099"}
      :expr    {:color "#999999"}})
-
-  (defn transform-query
-    ([q]
-     (transform-query default-config q))
-    ([config q]
-     (let [qvars (into {} (map #(vector % (:qvars config))) (unique-qvars q))
-           sel   (set (let [sel (:select q)]
-                        (if (or (nil? sel) (= :* sel))
-                          (keys qvars)
-                          (if (sequential? sel) sel [sel]))))
-           qvars (reduce
-                  (fn [acc k] (update acc k merge (:select config)))
-                  qvars sel)
-           ctx   (-> (reduce
-                      #(transform-sub-query % {} config %2)
-                      [qvars []] (:q q))
-                     (transform-query-options {} config q))
-           nodes (map #(apply make-node %) (first ctx))
-           body  (concat ["digraph g {"] (:prelude config) nodes (peek ctx) ["}"])]
-       (str/join "\n" body))))
 #+END_SRC
 
 ** Complete namespace definition
@@ -189,4 +299,6 @@
      [clojure.string :as str]))
 
   <<query-viz>>
+
+  <<public>>
 #+END_SRC
