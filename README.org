@@ -60,7 +60,7 @@ functions sending possibly transformed states to other vertices in the
 graph. All processing is done in two phases, both of which are score
 guided and completely customizable:
 
-- *Signalling*: The operations carried out by edge functions, each
+- *Signaling*: The operations carried out by edge functions, each
   accepting their source vertex' state value, transforming it and
   placing it in a signal map/queue of their target vertex. Vertices
   only signal if the user defined (or default) scoring function
@@ -68,7 +68,7 @@ guided and completely customizable:
 
 - *Collecting*: Each vertex can define its own collection function,
   responsible for processing any uncollected signal values and
-  producing a new state value. As with signalling, vertices only
+  producing a new state value. As with signaling, vertices only
   collect if their collection score exceeds a threshold value. This
   allows users to implement different collection behaviors (e.g.
   semi-lazy or batched or only after certain amount of uncollected
@@ -168,7 +168,7 @@ ALPHA quality, in active development.
 ** Example usage
 
 Currently, the included test cases and examples for each module act as
-the best demonstation of usage patterns and also show most of the
+the best demonstration of usage patterns and also show most of the
 currently implemented functionality:
 
 *** General compute graph examples
@@ -198,7 +198,7 @@ addition to setting up the graph):
 
 **** Vertex coloring in random graphs
 
-Assign each vertex a color from a limited pallete such that no two
+Assign each vertex a color from a limited pallette such that no two
 neighbors have the same color. This is one of the examples used for
 the above benchmarks. Please note the drastic [[#benchmarks][performance difference]]
 between different execution models (synchronous vs. eager). If the
@@ -313,7 +313,7 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
 *** fabric-facts query trees & rule based inference
 
 *Note:* This example is somewhat out of date in that it hardly uses
-the more userfriendly and powerful query DSL and instead largely
+the more user-friendly and powerful query DSL and instead largely
 defines queries via low-level forms. For a better overview please
 consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the /[[./fabric-facts/README.org][facts module]]/,
 as well as the /[[./fabric-ld/README.org][fabric-ld]]/ module.
@@ -552,7 +552,7 @@ model and allow for parallel execution.
 
 *** Pervasive caching, easy introspection, algorithm visualization
 
-Intermediate results can be easily reused by multiple consumbers and
+Intermediate results can be easily reused by multiple consumers and
 retrieved through vertex inspection. Compute graphs can also be
 visualized, allowing for the development of visual programming tools.
 
@@ -746,7 +746,7 @@ dependencies to all currently existing modules.
 |   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                            |
 |   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                                     |
 |   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring                |
-|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                       |
+|   0.0.144 | 2015-08-20 | fact query optimizations, N-Triples parser, quad fact support                      |
 |   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                             |
 |   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                       |
 |   0.0.116 | 2015-08-15 | more reusable fact queries                                                         |

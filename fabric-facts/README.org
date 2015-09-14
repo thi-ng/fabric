@@ -69,9 +69,9 @@ information can be found in the core and test namespaces:
 * Namespaces
 
 - [[./src/core.org][thi.ng.fabric.facts.core]] - Fact graph, indexing & query tree functionality
-- [[./src/dsl.org][thi.ng.fabric.facts.dsl]] - Highlevel, declararite query DSL
+- [[./src/dsl.org][thi.ng.fabric.facts.dsl]] - High-level, declarative query DSL
 - [[./src/viz.org][thi.ng.fabric.facts.queryviz]] - Visualization of DSL query specs
-- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]] - RDF NTriples parser
+- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]] - RDF N-Triples parser
 
 * Tests
 
