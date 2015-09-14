@@ -63,7 +63,7 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-The [[../README.org#automatically-updating-fact-graph-queries-with-rule-based-inferencing][main README]] contains an example for this module and more detailed
+The [[../README.org#fabric-facts-query-trees--rule-based-inference][main README]] contains an example for this module and more detailed
 information can be found in the core and test namespaces:
 
 * Namespaces
