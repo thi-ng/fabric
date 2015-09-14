@@ -10,6 +10,8 @@
          - [[#query--sub-query-options][Query & sub-query options]]
      - [[#implementation][Implementation]]
      - [[#expressions][Expressions]]
+         - [[#overview--examples][Overview & examples]]
+         - [[#implementation][Implementation]]
          - [[#aggregation-expressions][Aggregation expressions]]
          - [[#grouping-expressions][Grouping expressions]]
      - [[#helper-functions][Helper functions]]
@@ -62,7 +64,7 @@ The only public part of this namespace consists of this single function:
 
 Dozens of examples can be found in the [[../test/core.org][test]] namespace for this module.
 For a general overview of query patterns and supported query types,
-please also see the [[core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
+please also see the [[./core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
 namespace.
 
 #+BEGIN_SRC clojure
@@ -107,7 +109,7 @@ The DSL supports the following sub-query types. Each type (apart from
 joined result set. The sub-query types only differ in how each
 sub-query's results are merged with those of others. Each sub-query
 can also specify a number of options to modify its result set. These
-options are described [[#sub-query-modifiers][over here]].
+options are described [[#query--sub-query-options][in this section]].
 
 **** :where - join queries
 
@@ -203,6 +205,26 @@ queries. So in cases where there're many similar queries, it is
 recommended to only apply top-level options, manipulating the final
 result set of a query.
 
+**** :aggregate
+
+TODO (see tests for various examples)
+
+**** :bind
+
+Inject (or overwrite) qvars in result maps (e.g. to format dates,
+concatenate strings etc.). The value of this option must be a map of
+={?qvar expression..}=
+
+#+BEGIN_SRC clojure
+  ;; find all persons and their first/surnames
+  ;; inject new qvar ?name (string concat) into results
+  ;; only return person & name
+  {:q [{:where [[?p firstname ?fn]
+                [?p surname ?sn]]
+        :bind {?name (str ?fn " " ?sn)}
+        :select [?p ?name]}]}
+#+END_SRC
+
 **** :filter
 
 A single DSL expression or Clojure predicate fn applied to each single
@@ -284,22 +306,6 @@ is essential for some queries, as shown below.
   #{{?x a, ?z c} {?x c, ?z a}}
 #+END_SRC
 
-**** :bind
-
-Inject (or overwrite) qvars in result maps (e.g. to format dates,
-concatenate strings etc.). The value of this option must be a map of
-={?qvar expression..}=
-
-#+BEGIN_SRC clojure
-  ;; find all persons and their first/surnames
-  ;; inject new qvar ?name (string concat) into results
-  ;; only return person & name
-  {:q [{:where [[?p firstname ?fn]
-                [?p surname ?sn]]
-        :bind {?name (str ?fn " " ?sn)}
-        :select [?p ?name]}]}
-#+END_SRC
-
 **** :values
 
 Pre-constrains qvars to a set of possible values. Unlike the =:filter=
@@ -319,10 +325,6 @@ potentially much smaller.
        {:optional [[?p author ?a]]}]
    :values {?a #{alice bob charlie}}}
 #+END_SRC
-
-**** :aggregate
-
-TODO (see tests for various examples)
 
 ** Implementation
 
@@ -464,6 +466,63 @@ TODO (see tests for various examples)
 #+END_SRC
 
 ** Expressions
+
+Expressions in the DSL are defined as standard S-Expressions and in
+general follow the same rules as in Clojure/Lisp. However, due to the
+context in which they're used, there're slightly different evaluation
+semantics. Furthermore, the DSL does *not* differentiate between lists
+or vectors, so it's valid to use either =(expr (expr))= or =[expr
+[expr]]=. Using S-Expressions allows users to serialize query specs as
+EDN and the multi-method based implementation provides an easy-to-use
+mechanism to extend the DSL with more functionality.
+
+*** Overview & examples
+
+A simple query filter might state =(< ?age 21)= (or =[< ?age 21]=). As
+in standard Clojure, this is a predicate producing a boolean result.
+However, the DSL compiles this expression to this Clojure code:
+
+#+BEGIN_SRC clojure
+(fn [res] (< ((fn [r] (r '?age)) res) ((fn [_] 21) res)))
+#+END_SRC
+
+This indirection is needed because the qvar =?age= is not bound to a
+fixed value (remember, the result set of a query is a multi-set) and
+for a =:filter= expression this compiled function is applied to each
+individual result map in the set:
+
+#+BEGIN_SRC clojure
+  (def results '#{{?age 23 ?name "alice"} {?age 18 ?name "bob"}})
+
+  (filter (compile-expr '(< ?age 21)) results)
+  ;; ({?age 18, ?name "bob"})
+#+END_SRC
+
+The =compile-expr= multi-method is used recursively to analyze and
+compile a given DSL (sub)expression and (if possible) delegates to
+matched implementations:
+
+- =::const= => basically =identity= (default catch-all)
+- =::qvar= => query variable lookup function
+- =::unary= => special overrides for single arity fns
+- =::binary= => special overrides for 2-arity fns
+- =::varargs= => fns with variable length arity
+
+**** Type checking
+
+The last 3 types can make use of basic type checking of their
+arguments and will return =nil= if any of the args violates the type
+check. If type checking is disabled (e.g. see =str= below), any
+argument type can be used.
+
+**** Polymorphic
+
+Comparisons have been implemented using =c.c/compare= to allow not
+just comparing of numbers, but also strings, dates etc. This is only
+safe to use though, if it's known that both arguments are of the same
+type.
+
+*** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
