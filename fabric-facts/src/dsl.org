@@ -80,7 +80,7 @@ Via the thi.ng.fabric.facts.queryviz namespace, such query specs can
 also be visualized (using Graphviz). The following diagram is a visual
 representation of the query above:
 
-[[../../assets/qviz-dsl-ex01.png]]
+[[../../assets/qviz-dsl-ex01a.png]]
 
 ** Query specification
 
