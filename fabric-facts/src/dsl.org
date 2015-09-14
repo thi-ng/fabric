@@ -4,7 +4,7 @@
  - [[#namespace-thingfabricfactsdsl][Namespace: thi.ng.fabric.facts.dsl]]
      - [[#introduction][Introduction]]
      - [[#public-api][Public API]]
-     - [[#todo-examples][TODO Examples]]
+     - [[#examples][Examples]]
      - [[#query-specification][Query specification]]
          - [[#sub-query-types][Sub-query types]]
          - [[#query--sub-query-options][Query & sub-query options]]
@@ -28,9 +28,12 @@ functionality, like an expression language to define result filters,
 query variable projection, variable injections, aggregations, sorting
 etc.
 
-The query spec DSL is highly inspired by the W3C SPARQL language,
-albeit expressed in a more Clojuresque way and not limited to RDF
-semantics.
+The overall approach to define queries is based on the idea of
+matching patterns in the graph, usually by specifying a mixture of
+/qvars/ (query variables) and fixed literals and/or other constraint
+expressions. The query spec DSL is highly inspired by the [[http://www.w3.org/TR/sparql11-query/][W3C SPARQL
+language]], albeit expressed in a more Clojuresque way and not limited
+to RDF semantics.
 
 Query specs are described as standard Clojure maps and therefore offer
 all the usual benefits including composability & EDN serialization. The
@@ -39,10 +42,10 @@ part of facts and then be able to define queries returning query specs
 (e.g. for UI templating/widgets), thus enabling a completely dynamic
 and datadriven approach to design applications/UIs.
 
-The expression language is responsible to compile variable lookups and
-result processing expressions into actual Clojure functions. The
-language is extensible via its multi-method implementation. See
-[[#expressions][section]] further below for details.
+The expression language part of the DSL is responsible to compile
+variable lookups and result processing expressions into actual Clojure
+functions. The language is extensible via its multi-method
+implementation. See [[#expressions][section]] further below for details.
 
 ** Public API
 
@@ -55,7 +58,7 @@ The only public part of this namespace consists of this single function:
         (compile-query-result g spec)))
 #+END_SRC
 
-** TODO Examples
+** Examples
 
 Dozens of examples can be found in the [[../test/core.org][test]] namespace for this module.
 For a general overview of query patterns and supported query types,
@@ -65,14 +68,20 @@ namespace.
 #+BEGIN_SRC clojure
   (dsl/add-query-from-spec!
    graph
-   '{:select    [?res ?type ...]
-     :q         [{:where [[?res :title ?t] [?res :type ?type]]}
-                 {:optional [[?res :schema ?schema]]}]
-     :filter    (or (= ?res :toxi) (= ?type :person))
+   '{:select    [?res ?type ?num]
+     :q         [{:where [[?res title ?t] [?res type ?type]]}
+                 {:optional [[?res schema ?schema]]}]
+     :filter    (or (= ?res toxi) (= ?type person))
      :group-by  [?type ?res]
-     :aggregate {?num (agg-count)}
+     :aggregate {?num (agg-count ?res)}
      :order     ?type})
 #+END_SRC
+
+Via the thi.ng.fabric.facts.queryviz namespace, such query specs can
+also be visualized (using Graphviz). The following diagram is a visual
+representation of the query above:
+
+[[../../assets/qviz-dsl-ex01.png]]
 
 ** Query specification
 
