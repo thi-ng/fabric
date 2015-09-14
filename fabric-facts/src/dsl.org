@@ -90,14 +90,15 @@ key is required, all others are optional.*
 | *Key*        | *Possible values*            | *Default* | *Description*                                        |
 |--------------+------------------------------+-----------+------------------------------------------------------|
 | =:q=         | Vector                       | none      | Vector of sub-queries (see below)                    |
-| =:select=    | =:*= or =[?a ?b ..]=         | :*        | Keep all or only given qvars in result maps          |
-| =:unique=    | true / false                 | false     | Ensure all qvars in each result map have unique vals |
-| =:filter=    | predicate fn / DSL expr      | none      | Keep only result maps for which fn returns truthy    |
-| =:limit=     | positive int                 | none      | Limit results to max. N items                        |
-| =:order=     | fn, qvar, qvar vec, DSL expr | none      | Sort results by given key fn                         |
-| =:group-by=  | fn, qvar, qvar vec, DSL expr | none      | Grouping criteria for results, causes result map     |
 | =:aggregate= | aggregation fn / DSL expr    | none      | Inject new qvars of aggregated values                |
 | =:bind=      | {?qvar fn}                   | none      | Inject new qvars in result maps                      |
+| =:filter=    | predicate fn / DSL expr      | none      | Keep only result maps for which fn returns truthy    |
+| =:group-by=  | fn, qvar, qvar vec, DSL expr | none      | Grouping criteria for results, causes result map     |
+| =:limit=     | positive int                 | none      | Limit results to max. N items                        |
+| =:order=     | fn, qvar, qvar vec, DSL expr | none      | Sort results by given key fn                         |
+| =:select=    | =:*= or =[?a ?b ..]=         | :*        | Keep all or only given qvars in result maps          |
+| =:unique=    | true / false                 | false     | Ensure all qvars in each result map have unique vals |
+| =:values=    | {?qvar #{v1 v2} ...}         | none      | Pre-bind qvar to set of possible values              |
 
 *** Sub-query types
 
