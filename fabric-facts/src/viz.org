@@ -62,24 +62,43 @@
             (partition 2 1 (d/wrap-seq ids s o))))]))
 
   (defn transform-query-expr
-    [opt]
-    (fn [[qvars out] attribs q]
-      (let [id      (gensym)
-            expr    (opt q)
-            label   (str/replace (pr-str expr) "\"" "\\\"")
-            attribs (entity-attribs {:label opt :color "#999999"})
-            out     (conj out (make-node id {:color "#999999" :label label}))]
-        [qvars
-         (into out (map #(make-edge % id attribs)) (unique-qvars expr))])))
+    [[qvars out] attribs config opt expr]
+    (let [id      (gensym)
+          label   (str/replace (pr-str expr) "\"" "\\\"")
+          config  (or (config opt) (:expr config))
+          attribs (entity-attribs (assoc config :label opt))
+          out     (conj out (make-node id (assoc config :label label)))]
+      [qvars
+       (into out (map #(make-edge % id attribs)) (unique-qvars expr))]))
+
+  (defn transform-query-expr-map
+    [ctx attribs config opt expr-map]
+    (let [config (or (config opt) (:expr config))]
+      (reduce
+       (fn [[qvars out] [k v]]
+         (let [id      (gensym)
+               label   (str/replace (pr-str v) "\"" "\\\"")
+               attribs (entity-attribs (assoc config :label opt))
+               out     (conj out (make-node id (assoc config :label label)))
+               uniques (unique-qvars v)
+               out     (into out (map #(make-edge % id attribs)) uniques)
+               out     (if-not (uniques k)
+                         (conj out (make-edge id k attribs))
+                         out)]
+           [qvars out]))
+       ctx expr-map)))
 
   (defn transform-query-options
-    [ctx attribs q]
+    [ctx attribs config q]
     (reduce
-     (fn [ctx [opt f]] (if (q opt) (f ctx attribs q) ctx))
-     ctx {:filter   (transform-query-expr :filter)
-          :order    (transform-query-expr :order)
-          :group-by (transform-query-expr :group-by)
-          :select   (transform-query-expr :select)}))
+     (fn [ctx [opt f]] (if-let [expr (q opt)] (f ctx attribs config opt expr) ctx))
+     ctx {:filter    transform-query-expr
+          :order     transform-query-expr
+          :group-by  transform-query-expr
+          :bind      transform-query-expr-map
+          :aggregate transform-query-expr-map
+          :values    transform-query-expr-map
+          :select    transform-query-expr}))
 
   (defn cluster
     [[qvars out] type f]
@@ -92,37 +111,37 @@
            (conj "}"))]))
 
   (defn cluster-sub-query
-    ([ctx attribs q type]
-     (cluster-sub-query ctx attribs transform-pattern q type))
-    ([ctx attribs ptx q type]
+    ([ctx attribs config q type]
+     (cluster-sub-query ctx attribs config transform-pattern q type))
+    ([ctx attribs config ptx q type]
      (cluster
       ctx type
       (fn [ctx]
         (-> (reduce #(ptx % attribs %2 q) ctx (type q))
-            (transform-query-options attribs q))))))
+            (transform-query-options attribs config q))))))
 
   (defn transform-sub-query
-    [ctx attribs q]
+    [ctx attribs config q]
     (some
      (fn [type]
        (cond
          (= :where type)
-         (cluster-sub-query ctx attribs q type)
+         (cluster-sub-query ctx attribs config q type)
 
          (= :minus type)
          (let [attribs (assoc attribs :color "red" :label (str type "\\n"))]
-           (cluster-sub-query ctx attribs q type))
+           (cluster-sub-query ctx attribs config q type))
 
          (= :path type)
          (let [attribs (assoc attribs :label (str type "\\n"))]
            (cluster-sub-query
-            ctx attribs transform-path-pattern
+            ctx attribs config transform-path-pattern
             (update q :path (fn [p] [p]))
             type))
 
          (#{:optional :union} type)
          (let [attribs (assoc attribs :style "dashed" :label (str type "\\n"))]
-           (cluster-sub-query ctx attribs q type))
+           (cluster-sub-query ctx attribs config q type))
 
          :else nil))
      (keys q)))
@@ -134,8 +153,9 @@
                "fontname=Inconsolata;"
                "fontsize=9;"
                "compound=true;"]
-     :qvars   {:color "#cc9999"}
-     :select  {:color "#cc0099"}})
+     :qvars   {:color "#6699cc"}
+     :select  {:color "#0099cc"}
+     :expr    {:color "#999999"}})
 
   (defn transform-query
     ([q]
@@ -150,9 +170,9 @@
                   (fn [acc k] (update acc k merge (:select config)))
                   qvars sel)
            ctx   (-> (reduce
-                      #(transform-sub-query % {} %2)
+                      #(transform-sub-query % {} config %2)
                       [qvars []] (:q q))
-                     (transform-query-options {} q))
+                     (transform-query-options {} config q))
            nodes (map #(apply make-node %) (first ctx))
            body  (concat ["digraph g {"] (:prelude config) nodes (peek ctx) ["}"])]
        (str/join "\n" body))))
