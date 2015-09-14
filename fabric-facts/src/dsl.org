@@ -502,17 +502,17 @@ The =compile-expr= multi-method is used recursively to analyze and
 compile a given DSL (sub)expression and (if possible) delegates to
 matched implementations:
 
-- =::const= => basically =identity= (default catch-all)
-- =::qvar= => query variable lookup function
-- =::unary= => special overrides for single arity fns
-- =::binary= => special overrides for 2-arity fns
-- =::varargs= => fns with variable length arity
+- =::const= - equivalent to =identity= (default catch-all)
+- =::qvar= - query variable lookup function
+- =::unary= - special overrides for single arity fns
+- =::binary= - special overrides for 2-arity fns
+- =::varargs= - fns with variable length arity
 
 **** Type checking
 
-The last 3 types can make use of basic type checking of their
-arguments and will return =nil= if any of the args violates the type
-check. If type checking is disabled (e.g. see =str= below), any
+The last 3 dispatch types above can make use of basic type checking of
+their arguments and will return =nil= if any of the args violates the
+type check. If type checking is disabled (e.g. see =str= below), any
 argument type can be used.
 
 **** Polymorphic
@@ -639,6 +639,17 @@ type.
 #+END_SRC
 
 *** Aggregation expressions
+
+These expressions are used to compute reductions and inject them as
+new qvars into the result set. Unlike the other expressions above,
+aggregation fns are provided the full result set (instead of just
+single results).
+
+*Important:* For queries making use of =:group-by= and =:aggregate=,
+the aggregation fns are applied to each group separately, thus only
+receiving sub-sets of the full result set. A decision had to be made
+which of the two options is processed earlier and =:group-by= made
+sense to take precedence in most use cases.
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (defn aggregation-with
