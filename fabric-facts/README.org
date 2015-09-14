@@ -23,7 +23,7 @@
 ** Overview
 
 This module provides the following features on top of the
-/fabric-core/ compute graph setup:
+/[[../fabric-core/README.org][fabric-core]]/ compute graph setup:
 
 - Triple or Quad fact graphs
 - Specialized, more lightweight fact vertices

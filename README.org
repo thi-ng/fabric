@@ -232,7 +232,7 @@ each vertex:
 
 *** fabric-facts query visualization
 
-The /fabric-facts/ module provides a map based [[./fabric-facts/src/dsl.org][DSL]] to specify fact
+The /[[./fabric-facts/README.org][fabric-facts]]/ module provides a map based [[./fabric-facts/src/dsl.org][DSL]] to specify fact
 queries based on graph pattern matching (similar to [[http://www.w3.org/TR/sparql11-query/][SPARQL]]). The
 module also provides a [[./fabric-facts/src/viz.org][visualizer]] to help document & debug complex
 queries. E.g. the following query can be visualized (using Graphviz)
@@ -267,7 +267,7 @@ like this:
 
 *** fabric-ld server example
 
-Excerpt of an example interaction with a /fabric-ld/ server from the
+Excerpt of an example interaction with a /[[./fabric-ld/README.org][fabric-ld]]/ server from the
 command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
 
 #+BEGIN_SRC bash
