@@ -18,15 +18,15 @@ Clojure & Clojurescript. Written in a Literate Programming format.
          - [[#general-compute-graph-examples][General compute graph examples]]
          - [[#fabric-facts-query-visualization][fabric-facts query visualization]]
          - [[#fabric-ld-server-example][fabric-ld server example]]
-         - [[#fabric-facts-queries--rule-based-inference][fabric-facts queries & rule based inference]]
+         - [[#fabric-facts-query-trees--rule-based-inference][fabric-facts query trees & rule based inference]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
      - [[#motivation--use-cases][Motivation & use cases]]
          - [[#alternative-programming-model][Alternative programming model]]
          - [[#pervasive-caching-easy-introspection-algorithm-visualization][Pervasive caching, easy introspection, algorithm visualization]]
-         - [[#reactive-programming-wip][Reactive programming (WIP)]]
-         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
          - [[#self-organizing-workflows][Self-organizing workflows]]
+         - [[#reactive-programming-wip][Reactive programming (WIP)]]
          - [[#semantic-knowledge-graphs-queries--reasoning][(Semantic) knowledge graphs, queries & reasoning]]
+         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
          - [[#toolkit-w-clojurescript-support][Toolkit w/ Clojurescript support]]
      - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
      - [[#benchmarks][Benchmarks]]
@@ -276,12 +276,13 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
   # {:body "adding 9023 facts from http://schema.org/version/2.0/schema.nt"}
 
   # add facts in EDN format about this project
-  # EDN maps are a concise way to declare multiple relationships for
+  # EDN maps offser a concise way to declare multiple relationships for
   # for a common subject and are automatically resolved to triples
+  # facts can also be given as EDN triple vectors
   http -f POST :8000/facts \
-       facts='{"projects:fabric" \
+       facts='{"http://thi.ng/fabric" \
                {"rdf:type" "foaf:Project" \
-                "schema:isPartOf" "projects:thing" \
+                "schema:isPartOf" "http://thi.ng" \
                 "dcterms:creator" "people:toxi"}}'
   # {:body "adding 3 facts"}
 
@@ -301,21 +302,21 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
   #         :order ?p,
   #         :group-by ?prj,
   #         :select [?p ?o]},
-  #  :body {"projects:fabric"
+  #  :body {"http://thi.ng/fabric"
   #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
-  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://schema.org/isPartOf", ?o "http://thi.ng"}
   #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
 #+END_SRC
 
 [[./fabric-ld/README#interacting-with-the-server][more examples]]
 
-*** fabric-facts queries & rule based inference
+*** fabric-facts query trees & rule based inference
 
-*Note: This example is somewhat out of date in that it hardly uses
+*Note:* This example is somewhat out of date in that it hardly uses
 the more userfriendly and powerful query DSL and instead largely
 defines queries via low-level forms. For a better overview please
 consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the /[[./fabric-facts/README.org][facts module]]/,
-as well as the /[[./fabric-ld/README.org][fabric-ld]]/ module.*
+as well as the /[[./fabric-ld/README.org][fabric-ld]]/ module.
 
 This example (and module) uses a compute graph to store facts, fact
 queries and inference rules (based on queries) to create new facts.
@@ -354,9 +355,10 @@ limit/avoid work to do.
       [ancestor domain person]
       [ancestor range person]])
 
-  ;; Rule specs (join queries) and their production functions The fns
-  ;; take 3 args: the graph, the inference vertex (for context, though
-  ;; here unused) and a single query result
+  ;; Rule specs (all join queries) and their production functions
+  ;; The production fns take 3 args: the graph, the inference vertex
+  ;; (for context, though here unused) and a single query result
+  ;; from which a new fact is inferred...
 
   (def inference-rules
     {;; infer type of subject for any property which declares a domain
@@ -397,8 +399,8 @@ limit/avoid work to do.
 
   (f/execute! ctx)
 
-  ;; The `all` var is a defrecord holding all related process
-  ;; vertices of the query. Its result can obtained by dereferencing...
+  ;; The `all` var (defined above) is closing over all its related vertices.
+  ;; Its query result can obtained by dereferencing...
 
   (prn (sort @all))
   ;; ([ancestor domain person]
@@ -420,7 +422,7 @@ limit/avoid work to do.
   ;;  [toxi parent noah]
   ;;  [toxi type person])                 ;; inferred
 
-  ;; Add another query, this time with variable bindings
+  ;; Add another query, this time with a variable binding (?p)
 
   (def people (ff/add-param-query! g '[?p type person] {}))
   (f/execute! ctx)
@@ -430,7 +432,7 @@ limit/avoid work to do.
 
   ;; complex queries can be more easily defined via query specs:
   ;; here, a filtered join query (reusing above people query) to only select
-  ;; people with age < 20 and inject a new result var ?num (result count)
+  ;; people with age < 20 and inject a new result var ?num (aggregated result count)
 
   (def children
     (dsl/add-query-from-spec!
@@ -554,21 +556,17 @@ Intermediate results can be easily reused by multiple consumbers and
 retrieved through vertex inspection. Compute graphs can also be
 visualized, allowing for the development of visual programming tools.
 
-*** Reactive programming (WIP)
-
-Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
-mandatory integration or reliance on React.js or DOM rendering cycle
-
-*** Single machine or distributed processing
-
-Distributed, multi-environment graphs not yet implemented (WIP)
-
 *** Self-organizing workflows
 
 Think self-updating visualizations when inputs are changing. Using
 custom collection thresholds, this model can also be extended to only
 operate when a minimum number of new signals has been received
 (throttling) or after a period of time since the last computation.
+
+*** Reactive programming (WIP)
+
+Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
+mandatory integration or reliance on React.js or DOM rendering cycle
 
 *** (Semantic) knowledge graphs, queries & reasoning
 
@@ -579,12 +577,15 @@ operate when a minimum number of new signals has been received
   reuse intermediate sub-query results from similar queries, leading
   to better performance.
 
-- Use as storage backend for [[http://thi.ng/trio][thi.ng/trio]]
-
 - Implement Rete-style rule engines, using vertices for pervasive
   intermediate result caching and define custom signal and scoring
   functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
   module)
+
+*** Single machine or distributed processing
+
+Distributed, multi-environment graphs not yet implemented (WIP, only
+in-memory graphs are currently supported).
 
 *** Toolkit w/ Clojurescript support
 
