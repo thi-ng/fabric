@@ -20,7 +20,7 @@ Clojure & Clojurescript. Written in a Literate Programming format.
          - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
          - [[#fabric-facts-query-visualization][fabric-facts query visualization]]
          - [[#fabric-ld-server-example][fabric-ld server example]]
-         - [[#fabric-facts-module-example][fabric-facts module example]]
+         - [[#fabric-facts-queries--rule-based-inference][fabric-facts queries & rule based inference]]
          - [[#spreadsheet-like-computation][Spreadsheet like computation]]
      - [[#motivation--use-cases][Motivation & use cases]]
          - [[#alternative-programming-model][Alternative programming model]]
@@ -224,8 +224,6 @@ queries based on graph pattern matching. The module also provides a
 [[./fabric-facts/src/viz.org][visualizer]] to help document & debug complex queries. E.g. the
 following query can be visualized (using Graphviz) like this:
 
-[[./assets/qviz-ex01.png]]
-
 #+BEGIN_SRC clojure
   (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
                      {:minus [[?p "foaf:mother" "ex:P100"]]}
@@ -242,6 +240,8 @@ following query can be visualized (using Graphviz) like this:
        (query->graphviz)
        (spit "qviz-ex01.dot"))
 #+END_SRC
+
+[[./assets/qviz-ex01.png]]
 
 *** fabric-ld server example
 
@@ -275,7 +275,7 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
   #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
 #+END_SRC
 
-*** fabric-facts module example
+*** fabric-facts queries & rule based inference
 
 This example uses a compute graph to store facts, fact queries and
 inference rules (based on queries) to create new facts. Since the
