@@ -11,13 +11,11 @@ Clojure & Clojurescript. Written in a Literate Programming format.
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#overview][Overview]]
          - [[#general-compute-graph-concepts][General Compute Graph concepts]]
-         - [[#features][Features]]
+         - [[#project-features][Project features]]
      - [[#modules][Modules]]
      - [[#status][Status]]
      - [[#example-usage][Example usage]]
-         - [[#single-source-shortest-path][Single-source shortest path]]
-         - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
-         - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
+         - [[#general-compute-graph-examples][General compute graph examples]]
          - [[#fabric-facts-query-visualization][fabric-facts query visualization]]
          - [[#fabric-ld-server-example][fabric-ld server example]]
          - [[#fabric-facts-queries--rule-based-inference][fabric-facts queries & rule based inference]]
@@ -54,7 +52,6 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 #+END_SRC
 
 ** Overview
-
 *** General Compute Graph concepts
 
 These libraries are built around the model of a directed, potentially
@@ -102,16 +99,16 @@ for many problem domains. To avoid a monolithic one-fits-all approach
 and provide somewhat of a thematic focus, this project is structured
 into different modules (all described & linked below).
 
-*** Features
+*** Project features
 
 - Modular architecture (see [[#modules][Modules]] section below)
-- Easy-to-use API
+- Easy-to-use API, each module exposes both high & low-level functionality
+- Protocol based implementation for extensibility
 - Literate programming format w/ extensive docs, diagrams & examples
 - Over 150 tests
 
 **** fabric-core
 
-- Protocol based implementation
 - Customizable vertex, edge, graph & execution context types
 - 3 types of graph execution contexts built-in
 - Sync, async, parallel & continuous processing (and mixtures of)
@@ -126,7 +123,7 @@ into different modules (all described & linked below).
 
 **** fabric-facts
 
-- Knowledge graph (triple or quad based)
+- Semantic knowledge graph (triple or quad based)
 - Fully featured, efficient query engine using query trees
   - Graph pattern matching w/ variables
   - Sub-queries (joins, optional joins, unions, negation)
@@ -170,33 +167,49 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-Currently, the included test cases for each module act as the best
-demonstation of usage patterns and also show most of the currently
-implemented functionality:
+Currently, the included test cases and examples for each module act as
+the best demonstation of usage patterns and also show most of the
+currently implemented functionality:
 
-*** Single-source shortest path
+*** General compute graph examples
+**** Single-source shortest path
 
 Calculate minimum distance from a single node to all others
-(connected) in the graph. Also see benchmark above.
+(connected) in the graph. Also see [[#benchmarks][benchmarks]].
+
+Only these two custom signal & collect functions are needed (in
+addition to setting up the graph):
+
+#+BEGIN_SRC clojure
+  (defn signal-sssp
+    [vertex dist] (if-let [v @vertex] (+ dist v)))
+
+  (def collect-sssp
+    (f/collect-pure
+     (fn [val uncollected]
+       (if val (reduce min val uncollected) (reduce min uncollected)))))
+#+END_SRC
 
 [[./assets/sssp.jpg]]
 
+(Click image to view bigger version to see edge weights/distances)
+
 [[./fabric-core/test/sssp.org][source]]
 
-*** Vertex coloring in random graphs
+**** Vertex coloring in random graphs
 
 Assign each vertex a color from a limited pallete such that no two
 neighbors have the same color. This is one of the examples used for
-the above benchmarks. Please note the drastic difference between
-different execution models (synchronous vs. eager). If the number of
-possible colors is reduced further, the synchronous approach will not
-converge at all.
+the above benchmarks. Please note the drastic [[#benchmarks][performance difference]]
+between different execution models (synchronous vs. eager). If the
+number of possible colors is reduced further, the synchronous approach
+will not converge at all.
 
 [[./assets/vcolor.jpg]]
 
 [[./fabric-core/test/vertexcoloring.org][source]]
 
-*** Transitive closure (type inheritance example)
+**** Transitive closure (type inheritance example)
 
 Given a graph encoding a tree structure (e.g. type hierarchy), compute
 all super types for each node. This example uses a tiny fragment of
@@ -220,11 +233,20 @@ each vertex:
 *** fabric-facts query visualization
 
 The /fabric-facts/ module provides a map based [[./fabric-facts/src/dsl.org][DSL]] to specify fact
-queries based on graph pattern matching. The module also provides a
-[[./fabric-facts/src/viz.org][visualizer]] to help document & debug complex queries. E.g. the
-following query can be visualized (using Graphviz) like this:
+queries based on graph pattern matching (similar to [[http://www.w3.org/TR/sparql11-query/][SPARQL]]). The
+module also provides a [[./fabric-facts/src/viz.org][visualizer]] to help document & debug complex
+queries. E.g. the following query can be visualized (using Graphviz)
+like this:
 
 #+BEGIN_SRC clojure
+  ;; 1) match transitive mother relationships (w/ depth 2-4)
+  ;; 2) exclude rels to descendant "ex:P100"
+  ;; 3) match names for entities
+  ;; 4) optionally match descendant's DOB (only if before given date)
+  ;; 5) collected all DOBs into new result var
+  ;; 6) inject new result var ?res using string formatting
+  ;; 7) pre-bind/restrict possible values for ?p
+  ;; 8) order, group and select vars
   (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
                      {:minus [[?p "foaf:mother" "ex:P100"]]}
                      {:where [[?p "foaf:name" ?pname]]}
@@ -249,17 +271,27 @@ Excerpt of an example interaction with a /fabric-ld/ server from the
 command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
 
 #+BEGIN_SRC bash
+  # import facts from URI (currently EDN or N-Triples only)
+  http -f POST :8000/facts uri=http://schema.org/version/2.0/schema.nt
+  # {:body "adding 9023 facts from http://schema.org/version/2.0/schema.nt"}
+
   # add facts in EDN format about this project
   # EDN maps are a concise way to declare multiple relationships for
   # for a common subject and are automatically resolved to triples
   http -f POST :8000/facts \
-       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+       facts='{"projects:fabric" \
+               {"rdf:type" "foaf:Project" \
+                "schema:isPartOf" "projects:thing" \
+                "dcterms:creator" "people:toxi"}}'
   # {:body "adding 3 facts"}
 
   # register query: find all projects and all their facts, group by project
   http -f POST :8000/queries \
        id=projects \
-       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] \
+           :order ?p \
+           :group-by ?prj \
+           :select [?p ?o]}'
   # {:id "projects", :body "New query registered"}
 
   # get query results
@@ -275,12 +307,20 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
   #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
 #+END_SRC
 
+[[./fabric-ld/README#interacting-with-the-server][more examples]]
+
 *** fabric-facts queries & rule based inference
 
-This example uses a compute graph to store facts, fact queries and
-inference rules (based on queries) to create new facts. Since the
-queries and inference rules are expressed as vertex trees, taking part
-in the normal graph execution, this example demonstrates how easy it
+*Note: This example is somewhat out of date in that it hardly uses
+the more userfriendly and powerful query DSL and instead largely
+defines queries via low-level forms. For a better overview please
+consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the /[[./fabric-facts/README.org][facts module]]/,
+as well as the /[[./fabric-ld/README.org][fabric-ld]]/ module.*
+
+This example (and module) uses a compute graph to store facts, fact
+queries and inference rules (based on queries) to create new facts.
+Queries and inference rules are expressed as vertex trees, taking part
+in the normal graph execution. This example demonstrates how easy it
 is to use this architecture to build custom rule engines or use with
 Linked Data applications (the query engine features are heavily
 inspired by W3C SPARQL, albeit using Clojure syntax and no RDF
@@ -289,11 +329,6 @@ restrictions). Whenever facts are added or removed from the graph
 (somewhat equivalent to stored procedures in SQL). In complex queries,
 intermediate query vertices act as result cache and potentially
 limit/avoid work to do.
-
-*Note:* This example is somewhat out of date in that it hardly uses
-the more userfriendly and powerful query DSL and instead largely
-defines queries via low-level forms. For a better overview please
-consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the [[./fabric-facts/README.org][facts module]]...
 
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])

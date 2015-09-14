@@ -35,6 +35,14 @@ dot -Tsvg -o qviz.svg qviz.dot
 This example query shows most of the features of the query visualizer:
 
 #+BEGIN_SRC clojure
+  ;; 1) match transitive mother relationships (w/ depth 2-4)
+  ;; 2) exclude rels to descendant "ex:P100"
+  ;; 3) match names for entities
+  ;; 4) optionally match descendant's DOB (only if before given date)
+  ;; 5) collected all DOBs into new result var
+  ;; 6) inject new result var ?res using string formatting
+  ;; 7) pre-bind/restrict possible values for ?p
+  ;; 8) order, group and select vars
   (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
                      {:minus [[?p "foaf:mother" "ex:P100"]]}
                      {:where [[?p "foaf:name" ?pname]]}

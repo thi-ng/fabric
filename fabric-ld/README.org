@@ -130,7 +130,10 @@ Query specs are defined via EDN using the [[../fabric-facts/src/dsl.org][DSL]] o
   # register query: find all projects and all their facts, group by project
   http -f POST :8000/queries \
        id=projects \
-       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] \
+           :order ?p \
+           :group-by ?prj \
+           :select [?p ?o]}'
   # {:id "projects", :body "New query registered"}
 #+END_SRC
 
@@ -151,6 +154,7 @@ Supported response formats for query results:
 
 - =application/edn= (default)
 - =application/json=
+- =application/ld+json=
 - =application/sparql-results+json=
 - =text/csv=
 
