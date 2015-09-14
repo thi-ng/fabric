@@ -903,7 +903,7 @@ Graphviz file to generate the above example:
 
 #+BEGIN_SRC dot :tangle ../../assets/query-example01.dot
 digraph g {
-  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=9];
   edge[fontname="Inconsolata",fontsize=9];
 
   f1[label="1 [alice friend bob]"];
@@ -918,8 +918,8 @@ digraph g {
   f3 -> is; f3 -> ip; f3 -> io;
   f4 -> is; f4 -> ip; f4 -> io;
 
-  q1[label="Q1: [nil friend nil]"];
-  q2[label="Q2: [alice ?p ?o]"];
+  q1[label="Q1: [nil friend nil]\nintersection: #{1 2 3}"];
+  q2[label="Q2: [alice ?p ?o]\nintersection: #{1 3 4}"];
 
   sq1[label="[0 #{1 2 3 4}]",color="#cc0066"];
   pq1[label="[1 #{1 2 3}]",color="#cc6600"];
