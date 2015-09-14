@@ -899,9 +899,9 @@ maps of variable bindings.
 
 [[../../assets/query-example01.png]]
 
-Graphviz file to generate the above example:
+#+BEGIN_SRC dot :tangle ../../assets/query-example01.dot :exports none
+# Graphviz file to generate the above example:
 
-#+BEGIN_SRC dot :tangle ../../assets/query-example01.dot
 digraph g {
   node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=9];
   edge[fontname="Inconsolata",fontsize=9];

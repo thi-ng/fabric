@@ -29,7 +29,6 @@ dot -Tsvg -o qviz.svg qviz.dot
 #+END_SRC
 
 ** Examples
-
 *** All features
 
 This example query shows most of the features of the query visualizer:

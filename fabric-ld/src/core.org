@@ -47,7 +47,7 @@ protocols.
 
 [[../../assets/ld-overview.png]]
 
-#+BEGIN_SRC dot :tangle ../../assets/overview.dot :exports none
+#+BEGIN_SRC dot :tangle ../../assets/ld-overview.dot :exports none
 digraph g {
   node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
   edge[fontname="Inconsolata",fontsize=9];
@@ -1433,6 +1433,7 @@ a more efficient manner.
                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                            "schema"  "http://schema.org/"
+                           "sioc"    "http://rdfs.org/sioc/spec/"
                            "skos"    "http://www.w3.org/2004/02/skos/core#"
                            "vcard"   "http://www.w3.org/2006/vcard/ns#"
                            "void"    "http://rdfs.org/ns/void#"

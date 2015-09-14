@@ -79,7 +79,7 @@ There're many different ways to execute these two operational phases
 etc.) and the core library provides 3 different execution contexts
 (also fully configurable) to tailor the execution model for different
 use cases. For some problem domains choosing one model over another
-can provide major (500-1000%) speedups (e.g. see Vertex coloring
+can provide major (500-1000%) speedups (e.g. see [[#benchmarks][Vertex coloring]]
 example below).
 
 Common to all supplied execution models/contexts is the notion of
