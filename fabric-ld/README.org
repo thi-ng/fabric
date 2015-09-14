@@ -84,7 +84,10 @@ Then from the command line (e.g. using [[https://github.com/jkbrzt/httpie][httpi
   # EDN maps are a concise way to declare multiple relationships for
   # for a common subject and are automatically resolved to triples
   http -f POST :8000/facts \
-       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+       facts='{"projects:fabric" \
+               {"rdf:type" "foaf:Project" \
+                "schema:isPartOf" "projects:thing" \
+                "dcterms:creator" "people:toxi"}}'
   # {:body "adding 3 facts"}
 
   # EDN vectors in object position produce multiple triples
@@ -115,11 +118,11 @@ Supported response formats for triple dumps:
   # known vocabulary prefixes are expanded to full URIs
   http :8000/facts accept:text/csv limit==5 offset==5000
   # subject,predicate,object
-  # http://schema.org/ItemListOrderAscending,http://www.w3.org/2000/01/rdf-schema#comment,An ItemList ordered with lower values listed first.
-  # http://schema.org/dateIssued,http://www.w3.org/2000/01/rdf-schema#comment,The date the ticket was issued.
-  # http://schema.org/eligibleCustomerType,http://www.w3.org/2000/01/rdf-schema#comment,The type(s) of customers for which the given offer is valid.
-  # http://schema.org/AssessAction,http://www.w3.org/2000/01/rdf-schema#comment,"The act of forming one's opinion, reaction or sentiment."
-  # http://schema.org/DigitalAudioTapeFormat,http://www.w3.org/1999/02/22-rdf-syntax-ns#type,http://schema.org/Intangible
+  # <http://schema.org/DigitalAudioTapeFormat>,<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,<http://schema.org/Intangible>
+  # <http://schema.org/Canal>,<http://www.w3.org/2000/01/rdf-schema#subClassOf>,<http://schema.org/Thing>
+  # <http://schema.org/educationalAlignment>,<http://schema.org/rangeIncludes>,<http://schema.org/AlignmentObject>
+  # <http://schema.org/RsvpAction>,<http://www.w3.org/2000/01/rdf-schema#comment>,The act of notifying an event organizer as to whether you expect to attend the event.
+  # <http://schema.org/volumeNumber>,<http://schema.org/rangeIncludes>,<http://schema.org/Integer>
 #+END_SRC
 
 *** Adding queries
@@ -154,9 +157,8 @@ Supported response formats for query results:
 
 - =application/edn= (default)
 - =application/json=
-- =application/ld+json=
 - =application/sparql-results+json=
-- =text/csv=
+- =text/csv= or =application/sparql-results+csv= (both SPARQL flavor w/ quoted URIs)
 
 (support for =limit= & =offset= params as above)
 
