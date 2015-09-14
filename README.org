@@ -605,6 +605,13 @@ in-memory graphs are currently supported).
   collections)
 
 ** Benchmarks
+
+Different graph execution models can have a drastic impact on
+performance. Therefore, the /fabric-core/ module provides a number of
+configurations to experiment with different models (with only v. minor
+code changes), but it's also feasible for users to provide their own
+execution contexts.
+
 *** Single-source shortest path
 
 10,000 vertices, 30,000 paths, max. length 3 hops
