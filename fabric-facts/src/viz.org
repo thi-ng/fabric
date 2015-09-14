@@ -1,0 +1,124 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_4_gh:
+ - [[#namespace-thingfabricfactsqueryviz][Namespace: thi.ng.fabric.facts.queryviz]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
+* Namespace: thi.ng.fabric.facts.queryviz
+
+#+BEGIN_SRC clojure :noweb-ref query-viz
+  (defn cluster
+    [[qvars out] f]
+    (let [[qvars out'] (f [qvars []])]
+      [qvars
+       (-> out
+           (conj (str "subgraph cluster_" (gensym) " {"))
+           (into out')
+           (conj "}"))]))
+
+  (defn entity-attribs
+    [attribs]
+    (let [attribs (->> attribs
+                       (filter val)
+                       (map (fn [[k v]] (str (name k) "=\"" v \")))
+                       (str/join ", "))]
+      (if (seq attribs) (str "[" attribs "]") attribs)))
+
+  (defn make-node
+    [id attribs] (format "\"%s\"%s;" id (entity-attribs attribs)))
+
+  (defn transform-item
+    [x] (if (number? x) (str "num" x) x))
+
+  (defn transform-pattern
+    [[qvars out] attribs pattern]
+    (let [[s p o] (mapv transform-item pattern)]
+      (if (ff/qvar? (nth pattern 1))
+        [(update qvars p merge {:style "" :fontcolor (get-in qvars [p :color])})
+         (conj out (format "\"%s\" -> \"%s\" -> \"%s\"%s;" s p o (entity-attribs attribs)))]
+        [qvars
+         (conj out (format "\"%s\" -> \"%s\"%s;" s o (entity-attribs (update attribs :label str p))))])))
+
+  #_(defn transform-query-options
+      [attribs q]
+      (reduce
+       (fn [acc [opt f]]
+         (if (q opt) (conj acc (f attribs q)) acc))
+       [] {:filter transform-query-filter}))
+
+  (defmulti transform-sub-query
+    (fn [ctx attribs spec]
+      (prn ctx)
+      (some #{:where :optional :union :minus :path} (keys spec))))
+
+  (defmethod transform-sub-query :where
+    [ctx attribs q]
+    (cluster
+     ctx
+     (fn [ctx]
+       (reduce
+        #(transform-pattern % attribs %2)
+        ctx (:where q)))))
+
+  (defmethod transform-sub-query :optional
+    [ctx attribs q]
+    (let [attribs (assoc attribs :style "dashed" :label "optional:\n")]
+      (cluster
+       ctx
+       (fn [ctx]
+         (reduce
+          #(transform-pattern % attribs %2)
+          ctx (:optional q))))))
+
+  (defmethod transform-sub-query :union
+    [ctx attribs q]
+    (let [attribs (assoc attribs :style "dotted" :label "union:\n")]
+      (cluster
+       ctx
+       (fn [ctx]
+         (reduce
+          #(transform-pattern % attribs %2)
+          ctx (:union q))))))
+
+  (defmethod transform-sub-query :path
+    [ctx attribs q]
+    (let [attribs (assoc attribs :style "dotted" :label "path:\n")]
+      (cluster
+       ctx
+       (fn [ctx]
+         (reduce
+          #(transform-pattern % attribs %2)
+          ctx (:path q))))))
+
+  (def default-config
+    {:prelude ["node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];"
+               "edge[fontname=Inconsolata,fontsize=9];"
+               "rankdir=LR;"
+               "compound=true;"]
+     :qvars   {:color "#cc0099"}})
+
+  (defn transform-query
+    ([q]
+     (transform-query default-config q))
+    ([config q]
+     (let [qvars        (into {} (map #(vector % (:qvars config))) (into #{} (d/filter-tree ff/qvar? q)))
+           [qvars body] (reduce
+                         #(transform-sub-query % {} %2)
+                         [qvars []] (:q q))
+           nodes        (map #(apply make-node %) qvars)
+           body         (concat ["digraph {"] (:prelude config) nodes body ["}"])]
+       (str/join "\n" body))))
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/queryviz.clj :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.facts.queryviz
+    (:require
+     [thi.ng.fabric.core :as f]
+     [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.dstruct.core :as d]
+     [clojure.string :as str]))
+
+  <<query-viz>>
+#+END_SRC
