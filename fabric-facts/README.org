@@ -11,7 +11,7 @@
  - [[#module-definition][Module definition]]
      - [[#building--testing-this-project][Building & testing this project]]
      - [[#injected-properties][Injected properties]]
-         - [[#extra-module-dependencies][Extra module dependencies]]
+     - [[#extra-module-dependencies][Extra module dependencies]]
      - [[#leiningen-project-file][Leiningen project file]]
      - [[#clojurescript-html-test-harness][ClojureScript HTML test harness]]
      - [[#accessing-library-version-during-runtime][Accessing library version during runtime]]
@@ -23,7 +23,7 @@
 ** Overview
 
 This module provides the following features on top of the
-/fabric-core/ compute graph setup:
+/[[../fabric-core/README.org][fabric-core]]/ compute graph setup:
 
 - Triple or Quad fact graphs
 - Specialized, more lightweight fact vertices
@@ -48,6 +48,7 @@ This module provides the following features on top of the
   - Grouped & un-grouped result aggregation fns & expressions
   - Result limiting
 - Map based query expression DSL (EDN serializable)
+- Query visualization (via Graphviz)
 - Extensive query & sub-query reuse/caching
 - Intelligent recursive query tree removal
 - Queries are only computed once, results are cached and only updated
@@ -62,20 +63,21 @@ ALPHA quality, in active development.
 
 ** Example usage
 
-The [[../README.org#automatically-updating-fact-graph-queries-with-rule-based-inferencing][main README]] contains an example for this module and more detailed
-information can be found in the core and test namespaces. Literate
-programming FTW!
+The [[../README.org#fabric-facts-query-trees--rule-based-inference][main README]] contains an example for this module and more detailed
+information can be found in the core and test namespaces:
 
 * Namespaces
 
-- [[./src/core.org][thi.ng.fabric.facts.core]] - core fact graph & query tree functionality
-- [[./src/dsl.org][thi.ng.fabric.facts.dsl]] - Highlevel, declararite query DSL
-- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]] - RDF NTriples parser
+- [[./src/core.org][thi.ng.fabric.facts.core]] - Fact graph, indexing & query tree functionality
+- [[./src/dsl.org][thi.ng.fabric.facts.dsl]] - High-level, declarative query DSL
+- [[./src/viz.org][thi.ng.fabric.facts.queryviz]] - Visualization of DSL query specs
+- [[./src/nt.org][thi.ng.fabric.facts.io.ntriples]] - RDF N-Triples parser
 
 * Tests
 
-Currently there're 110+ tests & examples showing common usage patterns
-of this module:
+In addition to the examples in the literate source code, currently
+there're 150+ tests & examples showing common usage patterns of this
+module:
 
 - [[./test/core.org][thi.ng.fabric.facts.test.core]]
 
@@ -95,7 +97,7 @@ thi.ng/fabric-facts
 target/fabric-facts-<<conf-version()>>.js
 #+END_SRC
 
-*** Extra module dependencies
+** Extra module dependencies
 **** thi.ng/dstruct
 #+NAME: dep-dstruct
 #+BEGIN_SRC clojure

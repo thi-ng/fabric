@@ -1,0 +1,311 @@
+#+SETUPFILE: ../../common/setup.org
+
+* Contents                                                         :toc_4_gh:
+ - [[#namespace-thingfabricfactsqueryviz][Namespace: thi.ng.fabric.facts.queryviz]]
+     - [[#overview][Overview]]
+     - [[#examples][Examples]]
+         - [[#all-features][All features]]
+         - [[#lubm-benchmark-queries][LUBM benchmark queries]]
+     - [[#public-api][Public API]]
+     - [[#implementation][Implementation]]
+     - [[#complete-namespace-definition][Complete namespace definition]]
+
+* Namespace: thi.ng.fabric.facts.queryviz
+
+** Overview
+
+This namespace provides a query visualization engine to help
+documenting and debugging complex queries defined via the [[./dsl.org][query DSL]]
+provided by this module.
+
+The visualizer transforms query specs into the [[http://graphviz.org][Graphviz]] DOT format and
+can then be exported (via Graphviz) into a number of image formats:
+
+#+BEGIN_SRC bash
+# general graphviz command line usage to export as PNG
+dot -Tpng -o qviz.png qviz.dot
+# or SVG
+dot -Tsvg -o qviz.svg qviz.dot
+#+END_SRC
+
+** Examples
+*** All features
+
+This example query shows most of the features of the query visualizer:
+
+#+BEGIN_SRC clojure
+  ;; 1) match transitive mother relationships (w/ depth 2-4)
+  ;; 2) exclude rels to descendant "ex:P100"
+  ;; 3) match names for entities
+  ;; 4) optionally match descendant's DOB (only if before given date)
+  ;; 5) collected all DOBs into new result var
+  ;; 6) inject new result var ?res using string formatting
+  ;; 7) pre-bind/restrict possible values for ?p
+  ;; 8) order, group and select vars
+  (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
+                     {:minus [[?p "foaf:mother" "ex:P100"]]}
+                     {:where [[?p "foaf:name" ?pname]]}
+                     {:where [[?d "foaf:name" ?dname]]}
+                     {:optional [[?d "ex:dob" ?dob]]
+                      :filter   (< ?dob #inst "2000-01-01")}]
+         :aggregate {?birthdays (agg-collect ?dob)}
+         :bind      {?rel (str ?pname " -> " ?dname)}
+         :values    {?p #{"ex:P1" "ex:P2"}}
+         :group-by  ?p
+         :order     ?d
+         :select    [?p ?d ?rel ?birthdays]}
+       (query->graphviz)
+       (spit "qviz-ex01.dot"))
+#+END_SRC
+
+[[../../assets/qviz-ex01.png]]
+
+- Each subquery creates a cluster
+- All query variables (qvars) highlighted to better distinquish from
+  literals
+- Selected qvars highlighted in stronger color
+- =:optional= subqueries shown as dashed arcs
+- In =:path= subqueries the path part itself is represented as
+  additional cluster (w/ range attribs)
+- Result subtractions (=:minus= subqueries) shown as red arcs
+- Query/sub-query options shown in grey and their expressions linked
+  to all related qvars
+
+*Note*: See the [[./dsl.org][DSL namespace]] for a detailed description of the
+overall query spec and options.
+
+*** LUBM benchmark queries
+
+The [[http://swat.cse.lehigh.edu/projects/lubm/][Lehigh University Benchmark]] is one of the standard benchmarks in
+the RDF world. Here're visualize some the benchmark queries ([[http://swat.cse.lehigh.edu/projects/lubm/queries-sparql.txt][converted
+from SPARQL]]).
+
+First off, with default configuration (vertical layout, default colors):
+
+#+BEGIN_SRC clojure
+  (->> '{:prefixes {"ub" "http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#"}
+         :q [{:where [[?x "rdf:type" "ub:GraduateStudent"]
+                      [?y "rdf:type" "ub:University"]
+                      [?z "rdf:type" "ub:Department"]
+                      [?x "ub:memberOf" ?z]
+                      [?z "ub:subOrganizationOf" ?y]
+                      [?x "ub:undergraduateDegreeFrom" ?y]]}]}
+       (query->graphviz)
+       (spit "qviz-lubm-q2.dot"))
+#+END_SRC
+
+[[../../assets/qviz-lubm-q2.png]]
+
+The following example modifies the default config to use horizontal
+layout and different colors:
+
+#+BEGIN_SRC clojure
+  (->> '{:prefixes {"ub" "http://swat.cse.lehigh.edu/onto/univ-bench.owl#"}
+         :select   [?x ?z]
+         :q        [{:where [[?x "rdf:type" "ub:Student"]
+                             [?y "rdf:type" "ub:Faculty"]
+                             [?z "rdf:type" "ub:Course"]
+                             [?x "ub:advisor" ?y]
+                             [?y "ub:teacherOf" ?z]
+                             [?x "ub:takesCourse" ?z]]}]}
+       (query->graphviz
+        (-> default-config
+            (update :prelude conj "rankdir=LR;")
+            (assoc-in [:qvars :color] "#6699cc")
+            (assoc-in [:select :color] "#0099cc")))
+       (spit "qviz-lubm-q9.dot"))
+#+END_SRC
+
+[[../../assets/qviz-lubm-q9.png]]
+
+** Public API
+
+#+BEGIN_SRC clojure :noweb-ref public
+  (defn query->graphviz
+    ([q]
+     (query->graphviz default-config q))
+    ([config q]
+     (let [qvars (into {} (map #(vector % (:qvars config))) (unique-qvars q))
+           sel   (set (let [sel (:select q)]
+                        (if (or (nil? sel) (= :* sel))
+                          (keys qvars)
+                          (if (sequential? sel) sel [sel]))))
+           qvars (reduce
+                  (fn [acc k] (update acc k merge (:select config)))
+                  qvars sel)
+           ctx   (-> (reduce
+                      #(transform-sub-query % {} config %2)
+                      [qvars []] (:q q))
+                     (transform-query-options {} config q))
+           nodes (map #(apply make-node %) (first ctx))
+           body  (concat ["digraph g {"] (:prelude config) nodes (peek ctx) ["}"])]
+       (str/join "\n" body))))
+#+END_SRC
+
+** Implementation
+
+#+BEGIN_SRC clojure :noweb-ref query-viz
+  (defn unique-qvars
+    [q] (into #{} (d/filter-tree ff/qvar? (if (sequential? q) q [q]))))
+
+  (defn entity-attribs
+    [attribs]
+    (let [attribs (->> attribs
+                       (filter val)
+                       (map (fn [[k v]] (str (name k) "=\"" v \")))
+                       (str/join ", "))]
+      (if (seq attribs) (str "[" attribs "]") attribs)))
+
+  (defn make-node
+    [id attribs] (format "\"%s\"%s;" id (entity-attribs attribs)))
+
+  (defn make-edge
+    ([a b attr] (format "\"%s\" -> \"%s\"%s;" a b attr))
+    ([a b c attr] (format "\"%s\" -> \"%s\" -> \"%s\"%s;" a b c attr)))
+
+  (defn transform-item
+    [x] (if (number? x) (str "num" x) x))
+
+  (defn transform-pattern
+    [[qvars out] attribs pattern _]
+    (let [[s p o] (mapv transform-item pattern)]
+      (if (ff/qvar? (nth pattern 1))
+        [(update qvars p merge {:style "" :fontcolor (get-in qvars [p :color])})
+         (conj out (make-edge s p o (entity-attribs attribs)))]
+        [qvars
+         (conj out (make-edge s o (entity-attribs (update attribs :label str p))))])))
+
+  (defn transform-path-pattern
+    [[qvars out] attribs [s path o] q]
+    (let [s         (transform-item s)
+          o         (transform-item o)
+          ids       (repeatedly (count path) gensym)
+          path-opts (let [len (count path)]
+                      (merge {:min len :max len} (select-keys q [:min :max])))
+          path-id   (str "cluster_" (gensym))
+          attr-id   (gensym)
+          attribs   (entity-attribs attribs)]
+      [qvars
+       (-> out
+           (conj (str "subgraph " path-id " {"))
+           (conj (str "label=\"" path-opts "\";"))
+           (into (map #(make-node % {:label %2}) ids path))
+           (conj "}")
+           #_(conj (make-node attr-id {:label path-opts :color "#999999"}))
+           #_(conj (make-edge
+                    (first ids) attr-id
+                    (entity-attribs {:ltail path-id :color "#999999" :weight 0.5})))
+           (into
+            (map (fn [[a b]] (format "\"%s\" -> \"%s\"%s;" a b attribs)))
+            (partition 2 1 (d/wrap-seq ids s o))))]))
+
+  (defn transform-query-expr
+    [[qvars out] attribs config opt expr]
+    (let [id      (gensym)
+          label   (str/replace (pr-str expr) "\"" "\\\"")
+          config  (or (config opt) (:expr config))
+          attribs (entity-attribs (assoc config :label opt))
+          out     (conj out (make-node id (assoc config :label label)))]
+      [qvars
+       (into out (map #(make-edge % id attribs)) (unique-qvars expr))]))
+
+  (defn transform-query-expr-map
+    [ctx attribs config opt expr-map]
+    (let [config (or (config opt) (:expr config))]
+      (reduce
+       (fn [[qvars out] [k v]]
+         (let [id      (gensym)
+               label   (str/replace (pr-str v) "\"" "\\\"")
+               attribs (entity-attribs (assoc config :label opt))
+               out     (conj out (make-node id (assoc config :label label)))
+               uniques (unique-qvars v)
+               out     (into out (map #(make-edge % id attribs)) uniques)
+               out     (if-not (uniques k)
+                         (conj out (make-edge id k attribs))
+                         out)]
+           [qvars out]))
+       ctx expr-map)))
+
+  (defn transform-query-options
+    [ctx attribs config q]
+    (reduce
+     (fn [ctx [opt f]] (if-let [expr (q opt)] (f ctx attribs config opt expr) ctx))
+     ctx {:filter    transform-query-expr
+          :order     transform-query-expr
+          :group-by  transform-query-expr
+          :bind      transform-query-expr-map
+          :aggregate transform-query-expr-map
+          :values    transform-query-expr-map
+          :select    transform-query-expr}))
+
+  (defn cluster
+    [[qvars out] type f]
+    (let [[qvars out'] (f [qvars []])]
+      [qvars
+       (-> out
+           (conj (str "subgraph cluster_" (gensym) " {"))
+           (conj (str "label=\"" type "\";"))
+           (into out')
+           (conj "}"))]))
+
+  (defn cluster-sub-query
+    ([ctx attribs config q type]
+     (cluster-sub-query ctx attribs config transform-pattern q type))
+    ([ctx attribs config ptx q type]
+     (cluster
+      ctx type
+      (fn [ctx]
+        (-> (reduce #(ptx % attribs %2 q) ctx (type q))
+            (transform-query-options attribs config q))))))
+
+  (defn transform-sub-query
+    [ctx attribs config q]
+    (some
+     (fn [type]
+       (cond
+         (= :where type)
+         (cluster-sub-query ctx attribs config q type)
+
+         (= :minus type)
+         (let [attribs (assoc attribs :color "red" :label (str type "\\n"))]
+           (cluster-sub-query ctx attribs config q type))
+
+         (= :path type)
+         (let [attribs (assoc attribs :label (str type "\\n"))]
+           (cluster-sub-query
+            ctx attribs config transform-path-pattern
+            (update q :path (fn [p] [p]))
+            type))
+
+         (#{:optional :union} type)
+         (let [attribs (assoc attribs :style "dashed" :label (str type "\\n"))]
+           (cluster-sub-query ctx attribs config q type))
+
+         :else nil))
+     (keys q)))
+
+  (def default-config
+    {:prelude ["node[color=black,style=filled,fontname=Inconsolata,fontcolor=white,fontsize=9];"
+               "edge[fontname=Inconsolata,fontsize=9];"
+               "fontname=Inconsolata;"
+               "fontsize=9;"
+               "compound=true;"]
+     :qvars   {:color "#cc99cc"}
+     :select  {:color "#cc0099"}
+     :expr    {:color "#999999"}})
+#+END_SRC
+
+** Complete namespace definition
+
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/queryviz.cljc :noweb yes :mkdirp yes :padline no
+  (ns thi.ng.fabric.facts.queryviz
+    (:require
+     [thi.ng.fabric.core :as f]
+     [thi.ng.fabric.facts.core :as ff]
+     [thi.ng.dstruct.core :as d]
+     [clojure.string :as str]))
+
+  <<query-viz>>
+
+  <<public>>
+#+END_SRC

@@ -4,12 +4,14 @@
  - [[#namespace-thingfabricfactsdsl][Namespace: thi.ng.fabric.facts.dsl]]
      - [[#introduction][Introduction]]
      - [[#public-api][Public API]]
-     - [[#todo-examples][TODO Examples]]
+     - [[#examples][Examples]]
      - [[#query-specification][Query specification]]
          - [[#sub-query-types][Sub-query types]]
          - [[#query--sub-query-options][Query & sub-query options]]
      - [[#implementation][Implementation]]
      - [[#expressions][Expressions]]
+         - [[#overview--examples][Overview & examples]]
+         - [[#implementation][Implementation]]
          - [[#aggregation-expressions][Aggregation expressions]]
          - [[#grouping-expressions][Grouping expressions]]
      - [[#helper-functions][Helper functions]]
@@ -28,9 +30,12 @@ functionality, like an expression language to define result filters,
 query variable projection, variable injections, aggregations, sorting
 etc.
 
-The query spec DSL is highly inspired by the W3C SPARQL language,
-albeit expressed in a more Clojuresque way and not limited to RDF
-semantics.
+The overall approach to define queries is based on the idea of
+matching patterns in the graph, usually by specifying a mixture of
+/qvars/ (query variables) and fixed literals and/or other constraint
+expressions. The query spec DSL is highly inspired by the [[http://www.w3.org/TR/sparql11-query/][W3C SPARQL
+language]], albeit expressed in a more Clojuresque way and not limited
+to RDF semantics.
 
 Query specs are described as standard Clojure maps and therefore offer
 all the usual benefits including composability & EDN serialization. The
@@ -39,10 +44,10 @@ part of facts and then be able to define queries returning query specs
 (e.g. for UI templating/widgets), thus enabling a completely dynamic
 and datadriven approach to design applications/UIs.
 
-The expression language is responsible to compile variable lookups and
-result processing expressions into actual Clojure functions. The
-language is extensible via its multi-method implementation. See
-[[#expressions][section]] further below for details.
+The expression language part of the DSL is responsible to compile
+variable lookups and result processing expressions into actual Clojure
+functions. The language is extensible via its multi-method
+implementation. See [[#expressions][section]] further below for details.
 
 ** Public API
 
@@ -55,24 +60,29 @@ The only public part of this namespace consists of this single function:
         (compile-query-result g spec)))
 #+END_SRC
 
-** TODO Examples
+** Examples
 
 Dozens of examples can be found in the [[../test/core.org][test]] namespace for this module.
 For a general overview of query patterns and supported query types,
-please also see the [[core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
+please also see the [[./core.org#queries][Queries]] section in the =thi.ng.fabric.facts.core=
 namespace.
 
 #+BEGIN_SRC clojure
   (dsl/add-query-from-spec!
    graph
-   '{:select    [?res ?type ...]
-     :q         [{:where [[?res :title ?t] [?res :type ?type]]}
-                 {:optional [[?res :schema ?schema]]}]
-     :filter    (or (= ?res :toxi) (= ?type :person))
+   '{:q         [{:where [[?res schema ?schema] [?res type ?type]]}
+                 {:optional [[?res title ?title]]}]
+     :filter    (or (= ?res toxi) (= ?type person))
      :group-by  [?type ?res]
-     :aggregate {?num (agg-count)}
+     :aggregate {?num (agg-count ?res)}
      :order     ?type})
 #+END_SRC
+
+Via the thi.ng.fabric.facts.queryviz namespace, such query specs can
+also be visualized (using Graphviz). The following diagram is a visual
+representation of the query above:
+
+[[../../assets/qviz-dsl-ex01a.png]]
 
 ** Query specification
 
@@ -82,14 +92,15 @@ key is required, all others are optional.*
 | *Key*        | *Possible values*            | *Default* | *Description*                                        |
 |--------------+------------------------------+-----------+------------------------------------------------------|
 | =:q=         | Vector                       | none      | Vector of sub-queries (see below)                    |
-| =:select=    | =:*= or =[?a ?b ..]=         | :*        | Keep all or only given qvars in result maps          |
-| =:unique=    | true / false                 | false     | Ensure all qvars in each result map have unique vals |
-| =:filter=    | predicate fn / DSL expr      | none      | Keep only result maps for which fn returns truthy    |
-| =:limit=     | positive int                 | none      | Limit results to max. N items                        |
-| =:order=     | fn, qvar, qvar vec, DSL expr | none      | Sort results by given key fn                         |
-| =:group-by=  | fn, qvar, qvar vec, DSL expr | none      | Grouping criteria for results, causes result map     |
 | =:aggregate= | aggregation fn / DSL expr    | none      | Inject new qvars of aggregated values                |
 | =:bind=      | {?qvar fn}                   | none      | Inject new qvars in result maps                      |
+| =:filter=    | predicate fn / DSL expr      | none      | Keep only result maps for which fn returns truthy    |
+| =:group-by=  | fn, qvar, qvar vec, DSL expr | none      | Grouping criteria for results, causes result map     |
+| =:limit=     | positive int                 | none      | Limit results to max. N items                        |
+| =:order=     | fn, qvar, qvar vec, DSL expr | none      | Sort results by given key fn                         |
+| =:select=    | =:*= or =[?a ?b ..]=         | :*        | Keep all or only given qvars in result maps          |
+| =:unique=    | true / false                 | false     | Ensure all qvars in each result map have unique vals |
+| =:values=    | {?qvar #{v1 v2} ...}         | none      | Pre-bind qvar to set of possible values              |
 
 *** Sub-query types
 
@@ -98,7 +109,7 @@ The DSL supports the following sub-query types. Each type (apart from
 joined result set. The sub-query types only differ in how each
 sub-query's results are merged with those of others. Each sub-query
 can also specify a number of options to modify its result set. These
-options are described [[#sub-query-modifiers][over here]].
+options are described [[#query--sub-query-options][in this section]].
 
 **** :where - join queries
 
@@ -194,6 +205,26 @@ queries. So in cases where there're many similar queries, it is
 recommended to only apply top-level options, manipulating the final
 result set of a query.
 
+**** :aggregate
+
+TODO (see tests for various examples)
+
+**** :bind
+
+Inject (or overwrite) qvars in result maps (e.g. to format dates,
+concatenate strings etc.). The value of this option must be a map of
+={?qvar expression..}=
+
+#+BEGIN_SRC clojure
+  ;; find all persons and their first/surnames
+  ;; inject new qvar ?name (string concat) into results
+  ;; only return person & name
+  {:q [{:where [[?p firstname ?fn]
+                [?p surname ?sn]]
+        :bind {?name (str ?fn " " ?sn)}
+        :select [?p ?name]}]}
+#+END_SRC
+
 **** :filter
 
 A single DSL expression or Clojure predicate fn applied to each single
@@ -275,22 +306,6 @@ is essential for some queries, as shown below.
   #{{?x a, ?z c} {?x c, ?z a}}
 #+END_SRC
 
-**** :bind
-
-Inject (or overwrite) qvars in result maps (e.g. to format dates,
-concatenate strings etc.). The value of this option must be a map of
-={?qvar expression..}=
-
-#+BEGIN_SRC clojure
-  ;; find all persons and their first/surnames
-  ;; inject new qvar ?name (string concat) into results
-  ;; only return person & name
-  {:q [{:where [[?p firstname ?fn]
-                [?p surname ?sn]]
-        :bind {?name (str ?fn " " ?sn)}
-        :select [?p ?name]}]}
-#+END_SRC
-
 **** :values
 
 Pre-constrains qvars to a set of possible values. Unlike the =:filter=
@@ -310,10 +325,6 @@ potentially much smaller.
        {:optional [[?p author ?a]]}]
    :values {?a #{alice bob charlie}}}
 #+END_SRC
-
-**** :aggregate
-
-TODO (see tests for various examples)
 
 ** Implementation
 
@@ -456,6 +467,63 @@ TODO (see tests for various examples)
 
 ** Expressions
 
+Expressions in the DSL are defined as standard S-Expressions and in
+general follow the same rules as in Clojure/Lisp. However, due to the
+context in which they're used, there're slightly different evaluation
+semantics. Furthermore, the DSL does *not* differentiate between lists
+or vectors, so it's valid to use either =(expr (expr))= or =[expr
+[expr]]=. Using S-Expressions allows users to serialize query specs as
+EDN and the multi-method based implementation provides an easy-to-use
+mechanism to extend the DSL with more functionality.
+
+*** Overview & examples
+
+A simple query filter might state =(< ?age 21)= (or =[< ?age 21]=). As
+in standard Clojure, this is a predicate producing a boolean result.
+However, the DSL compiles this expression to this Clojure code:
+
+#+BEGIN_SRC clojure
+(fn [res] (< ((fn [r] (r '?age)) res) ((fn [_] 21) res)))
+#+END_SRC
+
+This indirection is needed because the qvar =?age= is not bound to a
+fixed value (remember, the result set of a query is a multi-set) and
+for a =:filter= expression this compiled function is applied to each
+individual result map in the set:
+
+#+BEGIN_SRC clojure
+  (def results '#{{?age 23 ?name "alice"} {?age 18 ?name "bob"}})
+
+  (filter (compile-expr '(< ?age 21)) results)
+  ;; ({?age 18, ?name "bob"})
+#+END_SRC
+
+The =compile-expr= multi-method is used recursively to analyze and
+compile a given DSL (sub)expression and (if possible) delegates to
+matched implementations:
+
+- =::const= - equivalent to =identity= (default catch-all)
+- =::qvar= - query variable lookup function
+- =::unary= - special overrides for single arity fns
+- =::binary= - special overrides for 2-arity fns
+- =::varargs= - fns with variable length arity
+
+**** Type checking
+
+The last 3 dispatch types above can make use of basic type checking of
+their arguments and will return =nil= if any of the args violates the
+type check. If type checking is disabled (e.g. see =str= below), any
+argument type can be used.
+
+**** Polymorphic
+
+Comparisons have been implemented using =c.c/compare= to allow not
+just comparing of numbers, but also strings, dates etc. This is only
+safe to use though, if it's known that both arguments are of the same
+type.
+
+*** Implementation
+
 #+BEGIN_SRC clojure :noweb-ref expr
   (def vararg-ops
     {'+    [number? +]
@@ -470,17 +538,17 @@ TODO (see tests for various examples)
     {'not   [nil not]
      'int   [number? int]
      'float [number? double]
-     'abs   [number? #(Math/abs %)]
-     'sqrt  [number? #(Math/sqrt %)]
-     'exp   [number? #(Math/exp %)]
-     'sin   [number? #(Math/sin %)]
-     'asin  [number? #(Math/asin %)]
-     'cos   [number? #(Math/cos %)]
-     'acos  [number? #(Math/acos %)]
-     'tan   [number? #(Math/tan %)]
-     'atan  [number? #(Math/atan %)]
-     'floor [number? #(long (Math/floor %))]
-     'ceil  [number? #(long (Math/ceil %))]
+     'abs   [number? #(if (neg? %) (- %) %)]
+     'sqrt  [number? #(Math/sqrt (double %))]
+     'exp   [number? #(Math/exp (double %))]
+     'sin   [number? #(Math/sin (double %))]
+     'asin  [number? #(Math/asin (double %))]
+     'cos   [number? #(Math/cos (double %))]
+     'acos  [number? #(Math/acos (double %))]
+     'tan   [number? #(Math/tan (double %))]
+     'atan  [number? #(Math/atan (double %))]
+     'floor [number? #(long (Math/floor (double %)))]
+     'ceil  [number? #(long (Math/ceil (double %)))]
      'round [number? #(Math/round (double %))]})
 
   (def binary-ops
@@ -488,9 +556,9 @@ TODO (see tests for various examples)
      '>     [nil nil #(pos? (compare % %2))]
      '<=    [nil nil #(<= (compare % %2) 0)]
      '>=    [nil nil #(>= (compare % %2) 0)]
-     'pow   [number? number? #(Math/pow % %2)]
-     'atan2 [number? number? #(Math/atan2 % %2)]
-     'logn  [number? number? #(/ (Math/log %) (Math/log %2))]})
+     'pow   [number? number? #(Math/pow (double %) (double %2))]
+     'atan2 [number? number? #(Math/atan2 (double %) (double %2))]
+     'logn  [number? number? #(/ (Math/log (double %)) (Math/log (double %2)))]})
 
   (defmulti compile-expr
     (fn [expr]
@@ -571,6 +639,17 @@ TODO (see tests for various examples)
 #+END_SRC
 
 *** Aggregation expressions
+
+These expressions are used to compute reductions and inject them as
+new qvars into the result set. Unlike the other expressions above,
+aggregation fns are provided the full result set (instead of just
+single results).
+
+*Important:* For queries making use of =:group-by= and =:aggregate=,
+the aggregation fns are applied to each group separately, thus only
+receiving sub-sets of the full result set. A decision had to be made
+which of the two options is processed earlier and =:group-by= made
+sense to take precedence in most use cases.
 
 #+BEGIN_SRC clojure :noweb-ref expr
   (defn aggregation-with

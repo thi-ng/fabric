@@ -3,9 +3,9 @@
 
 * Contents                                                         :toc_3_gh:
  - [[#about-the-project][About the project]]
-     - [[#todo-overview][TODO Overview]]
-     - [[#todo-status][TODO Status]]
-     - [[#todo-example-usage][TODO Example usage]]
+     - [[#overview][Overview]]
+     - [[#status][Status]]
+     - [[#example-usage][Example usage]]
  - [[#namespaces][Namespaces]]
  - [[#tests][Tests]]
  - [[#module-definition][Module definition]]
@@ -19,21 +19,24 @@
 
 * About the project
 
-** TODO Overview
+** Overview
 
-Compute graph infrastructure
+This module provides the general Compute graph infrastructure used by
+all other modules:
 
-** TODO Status
+- Core protocols
+- Compute graph
+- Default vertex
+- Common signal & collect functions
+- Execution contexts & schedulers
+
+** Status
 
 ALPHA quality, in active development.
 
-** TODO Example usage
+** Example usage
 
-#+BEGIN_SRC clojure
-  (require 'thi.ng.fabric.core)
-
-  ;; TODO some magic
-#+END_SRC
+See [[../README.org#general-compute-graph-examples][main README]] and test namespaces below for usage examples.
 
 * Namespaces
 

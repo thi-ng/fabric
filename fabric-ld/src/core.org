@@ -47,7 +47,7 @@ protocols.
 
 [[../../assets/ld-overview.png]]
 
-#+BEGIN_SRC dot :tangle ../../assets/overview.dot :exports none
+#+BEGIN_SRC dot :tangle ../../assets/ld-overview.dot :exports none
 digraph g {
   node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=11];
   edge[fontname="Inconsolata",fontsize=9];
@@ -248,12 +248,16 @@ always captures the full sets of facts.
 runtime sessions, any details of fact removals from earlier sessions
 will be lost.
 
-| *Key*   | *Value*       | *Required* | *Description*                              |
-|---------+---------------+------------+--------------------------------------------|
-| =:fn=   | function      | Y          | Log fn to log fact additions/removals      |
-| =:path= | format vector | Y          | Formatting vector for log destination path |
+| *Key*     | *Value*       | *Required* | *Description*                              |
+|-----------+---------------+------------+--------------------------------------------|
+| =:fn=     | function      | Y          | Log fn to log fact additions/removals      |
+| =:path=   | format vector | Y          | Formatting vector for log destination path |
+| =:buffer= | int           | N          | Buffer size for core.async channel         |
 
 - The default config uses =default-logger= as =:fn= option.
+- If unspecified, a buffer size of 1024 is used. For large graphs this
+  must be (drastically) increased, especially if the =:restore= option
+  is specified for the =LDGraph= component.
 - The path format vector /can/ have one date format element, which
   will be given the current timestamp, see [[#default-configuration][default config]] and
   [[https://github.com/thi-ng/strf/src/core.org#date-formatting][thi.ng/strf]] for details.
@@ -266,8 +270,9 @@ See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section
     (start
       [_]
       (info "starting fact log")
-      (let [log-fn ((:fn config) config prefixes)
-            logger (ff/add-fact-graph-logger (get-graph graph) log-fn)]
+      (let [log-fn   ((:fn config) config prefixes)
+            buf-size (config :buffer 1024)
+            logger   (ff/add-fact-graph-logger (get-graph graph) log-fn buf-size)]
         (run! #(log-fn [:add-fact %]) (get-facts graph))
         (assoc _ :logger logger)))
     (stop
@@ -285,7 +290,6 @@ See the [[../../fabric-facts/src/core.org#graph-logging][Graph logging]] section
     (let [path (strf/format (:path config) (strf/now))]
       (info "fact logger writing to:" path)
       (fn [evt]
-        (info :fact-log evt)
         (spit path (str (pr-str evt) "\n") :append true))))
 #+END_SRC
 
@@ -417,8 +421,13 @@ the =result-event-bus= (using =core.async/tap=).
           (recur)))))
 
   (defn untransform-pnames-in-query
-    [tx spec]
-    (let [spec (reduce
+    [prefixes spec]
+    (let [tx   (if-let [prefixes' (:prefixes spec)]
+                 (-> {:prefixes (merge (list-registry prefixes) prefixes')}
+                     (make-prefix-registry)
+                     (comp/start))
+                 prefixes)
+          spec (reduce
                 (fn [acc k]
                   (let [v (acc k)]
                     (cond
@@ -449,45 +458,70 @@ implements the =ITwoWayTransform= defined in the [[../../fabric-facts/src/core.o
 namespace. It is used as fact transform by the graph to store facts in
 a more efficient manner.
 
+:registry - pname -> uri
+:cache - pname -> pname instances
+
 #+BEGIN_SRC clojure :noweb-ref registry
-  (defrecord PrefixRegistry [config registry]
+  (defrecord PrefixRegistry [config prefixes sorted cache]
     comp/Lifecycle
     (start
       [_]
       (info "starting prefix registry")
-      (let [this (assoc _ :registry (atom {:prefixes (sorted-map)}))]
+      (let [this (assoc _
+                        :prefixes (atom (sorted-map))
+                        :sorted   (atom nil)
+                        :cache    (atom (hash-map)))]
         (run! (fn [[pre uri]] (register! this pre uri)) (:prefixes config))
         this))
     (stop
       [_]
       (info "stopping prefix registry")
-      (assoc _ :registry nil))
+      (assoc _ :prefixes nil :sorted nil :cache nil))
     IEntityRegistry
     (register!
       [_ prefix uri]
       (info "register! prefix:" prefix uri)
-      (swap! registry
-             (fn [reg]
-               (let [reg (assoc-in reg [:prefixes prefix] uri)]
-                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      (swap! prefixes assoc prefix uri)
+      (reset! sorted (ff/sort-prefixes @prefixes))
       _)
     (deregister!
       [_ prefix]
       (info "deregister! prefix:" prefix)
-      (swap! registry
-             (fn [reg]
-               (let [reg (update reg :prefixes dissoc prefix)]
-                 (assoc reg :sorted (ff/sort-prefixes (:prefixes reg))))))
+      (swap! prefixes dissoc prefix)
+      (reset! sorted (ff/sort-prefixes @prefixes))
       _)
     (list-registry
-      [_] (:prefixes @registry))
+      [_] @prefixes)
     (lookup
-      [_ prefix] (get-in @registry [:prefixes prefix]))
+      [_ prefix] (@prefixes prefix))
     ff/ITwoWayTransform
     (transform
-      [_ x] (ff/->prefix-string (:sorted @registry) x))
+      [_ x]
+      (if (string? x)
+        (if-let [v (find @cache x)]
+          (key v)
+          (reduce
+           (fn [acc p]
+             (if (.startsWith ^String x ^String (val p))
+               (let [pre  (first p)
+                     name (.substring ^String x (count (val p)))
+                     pn   (str pre \: name)]
+                 (reduced
+                  (if-let [v (find @cache pn)]
+                    (key v)
+                    (do (swap! cache assoc pn x) pn))))
+               acc))
+           x @sorted))
+        x))
     (untransform
-      [_ x] (ff/<-prefix-string (:prefixes @registry) x)))
+      [_ x]
+      (if (string? x)
+        (or (@cache x)
+            (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
+              (if-let [p (@prefixes p)]
+                (str p n)
+                x)))
+        x)))
 
   (defn make-prefix-registry
     [config]
@@ -683,6 +717,12 @@ a more efficient manner.
      {"@id" s}
      vals))
 
+  (defn- collect-qvars
+    [res spec]
+    (if-let [sel (:select spec)]
+      (if (sequential? sel) sel [sel])
+      (into #{} (mapcat keys) res)))
+
   ;; http://www.w3.org/TR/json-ld/
   (defmethod api-response ["application/ld+json" :default]
     [_ body _]
@@ -693,9 +733,7 @@ a more efficient manner.
   ;; http://www.w3.org/TR/sparql11-results-json/
   (defmethod api-response ["application/sparql-results+json" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                  (if (sequential? sel) sel [sel])
-                  (into #{} (mapcat keys) (:body body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
           qvars (mapv ff/qvar-name qvars)
           body  (map
                  (fn [res]
@@ -708,6 +746,11 @@ a more efficient manner.
         :results {:bindings body}}
        "application/sparql-results+json")))
 
+  (defmethod api-response ["application/sparql-results+json" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "application/sparql-results+json" body :query)))
+
   (defn- csv-response
     [body & opts]
     [(with-open [out (java.io.StringWriter.)]
@@ -716,31 +759,39 @@ a more efficient manner.
      "text/csv"])
 
   (defn- sparql-csv-item
-    [res qvar]
-    (let [x (res qvar)]
-      (if (uri? x) (str \< x \>) x)))
+    ([x]
+     (if (uri? x) (str \< x \>) x))
+    ([res qvar]
+     (sparql-csv-item (res qvar))))
 
+  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :default]
     [_ body _]
     (if-let [body' (:body body)]
-      (let [body' (if-let [cols (:columns body)] (cons cols body') body)]
+      (let [body' (map (fn [res] (mapv sparql-csv-item res)) body')
+            body' (if-let [cols (:columns body)] (cons cols body') body)]
         (csv-response body'))
       [(pr-str (:error body)) "text/csv"]))
 
-  ;; http://www.w3.org/TR/sparql11-results-csv-tsv/
   (defmethod api-response ["text/csv" :query]
     [_ body _]
-    (let [qvars (if-let [sel (get-in body [:spec :select])]
-                    (if (sequential? sel) sel [sel])
-                    (into #{} (mapcat keys) (:body body)))
-            qvars (vec (sort qvars))
-            body  (into [(mapv ff/qvar-name qvars)]
-                        (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
-                        (:body body))]
-        (csv-response body)))
+    (let [qvars (collect-qvars (:body body) (:spec body))
+          qvars (vec (sort qvars))
+          body  (into [(mapv ff/qvar-name qvars)]
+                      (map (fn [res] (mapv #(sparql-csv-item res %) qvars)))
+                      (:body body))]
+      (csv-response body)))
+
+  (defmethod api-response ["text/csv" :query-group]
+    [_ body _]
+    (let [body (update body :body #(into [] (mapcat identity) (vals %)))]
+      (api-response "text/csv" body :query)))
 
   (defmethod api-response ["application/sparql-results+csv" :query]
     [_ body _] (api-response "text/csv" body :query))
+
+  (defmethod api-response ["application/sparql-results+csv" :query]
+    [_ body _] (api-response "text/csv" body :query-group))
 
   (defn parse-accept-header
     [accept]
@@ -779,8 +830,34 @@ a more efficient manner.
      :int (fn [x] (strf/parse-int x 10 x))})
 
   (def validations
-    {:query   {:q [(v/sequential "must be a vector of sub-query maps") (v/min-length 1)]}
-     :opt-int (v/optional (v/pos "must be positive integer"))})
+    (let [qvar        (v/validator
+                       (fn [_ v] (ff/qvar? v)) "must be a qvar")
+          qvar-or-exp (v/optional
+                       (v/alts [(qvar) (v/sequential)]
+                               "must be qvar or expression"))
+          qvar-map    (v/optional
+                       ((v/validator
+                         (fn [_ v] (and (map? v) (every? ff/qvar? (keys v))))
+                         "must be a map with qvar keys")))
+          opt-int     (v/optional
+                       (v/pos "must be positive integer"))]
+      {:query   {:q         [(v/sequential "must be a vector of sub-query maps")
+                             (v/min-length 1)]
+                 :prefixes  (v/optional
+                             ((v/validator
+                               (fn [_ v] (and (map? v) (every? string? (keys v)) (every? string? (vals v))))
+                               "must be a map with only string keys and values")))
+                 :bind      qvar-map
+                 :values    qvar-map
+                 :aggregate qvar-map
+                 :select    (v/optional (v/alts [(v/equals :*) (qvar) (v/sequential)]
+                                                "must be :*, qvar or seq of qvars"))
+                 :filter    qvar-or-exp
+                 :group-by  qvar-or-exp
+                 :order-by  qvar-or-exp}
+       :qvar    qvar
+       :opt-int opt-int
+       :limit   [opt-int (v/optional (v/less-than 1001 "must be <= 1000"))]}))
 
   (defn coerce-params
     [coercs params]
@@ -824,20 +901,23 @@ a more efficient manner.
 **** Async handler wrapper
 
 #+BEGIN_SRC clojure :noweb-ref handler
+  (defn- deliver-delayed-response
+    [model ch handler]
+    (async/untap (result-event-bus model) ch)
+    (async/close! ch)
+    (handler))
+
   (defn delayed-response-handler
     [model ready? handler]
     (d/->deferred
      (go
        (let [ch  (async/tap (result-event-bus model) (async/chan))]
-         (loop []
-           (let [res (<! ch)]
-             (if (ready?)
-               (do
-                 (async/untap (result-event-bus model) ch)
-                 (async/close! ch)
-                 (debug :result res)
-                 (handler))
-               (recur))))))))
+         (loop [i 0]
+           (if (ready?)
+             (deliver-delayed-response model ch handler)
+             (do (<! ch)
+                 (info :delay-recur i)
+                 (recur (inc i)))))))))
 #+END_SRC
 
 **** Registry listing
@@ -884,7 +964,7 @@ a more efficient manner.
        req
        {:limit  :int
         :offset :int}
-       {:limit  :opt-int
+       {:limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [limit offset]}]
          (let [limit  (or limit 100)
@@ -913,11 +993,12 @@ a more efficient manner.
         :limit  :int
         :offset :int}
        {:spec   :query
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [spec limit offset] :as params}]
          (let [spec    (transform-query model spec)
                _       (info :one-off-query spec)
+               t0      (f/now)
                q       (add-query! model spec)
                handler (delayed-response-handler
                         model
@@ -932,6 +1013,7 @@ a more efficient manner.
                              :total  (count @q)
                              :offset offset
                              :spec   spec
+                             :time   (f/millis-since t0)
                              :body   body}
                             (if (:group-by spec) :query-group :query)
                             200)))]
@@ -965,13 +1047,14 @@ a more efficient manner.
         :offset :int}
        {:id     (v/required)
         :spec   {:q [(fn [_ v] (nil? v)) "spec must not have a :q key"]}
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id spec limit offset] :as params}]
          (let [q (lookup queries id)]
            (if-let [qq (:query q)]
              (let [limit  (or limit 100)
                    offset (or offset 0)
+                   t0     (f/now)
                    res    (if spec
                             (let [spec (select-keys spec [:filter :aggregate :order :group-by :select :bind])
                                   spec (transform-query model spec)
@@ -990,6 +1073,7 @@ a more efficient manner.
                  :total  (count res)
                  :offset offset
                  :spec   (:spec q)
+                 :time   (f/millis-since t0)
                  :body   body}
                 (if (:group-by spec) :query-group :query)
                 200))
@@ -1034,7 +1118,7 @@ a more efficient manner.
        {:limit  :int
         :offset :int}
        {:id     (v/required)
-        :limit  :opt-int
+        :limit  :limit
         :offset :opt-int}
        (fn [_ {:keys [id limit offset] :as params}]
          (let [r (lookup rules id)]
@@ -1245,7 +1329,8 @@ a more efficient manner.
                         [:add ["owl:Nothing" "rdfs:subClassOf" ?c]]]}
 
       :scm-sco  {:q    {:q [{:where [[?c1 "rdfs:subClassOf" ?c2]
-                                     [?c2 "rdfs:subClassOf" ?c3]]}]}
+                                     [?c2 "rdfs:subClassOf" ?c3]]
+                             :unique true}]}
                  :prod [[:add [?c1 "rdfs:subClassOf" ?c3]]]}
 
       :scm-eqc1 {:q    {:q [{:where [[?c1 "owl:equivalentClass" ?c2]]}]}
@@ -1348,8 +1433,13 @@ a more efficient manner.
                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                            "schema"  "http://schema.org/"
+                           "sioc"    "http://rdfs.org/sioc/spec/"
+                           "skos"    "http://www.w3.org/2004/02/skos/core#"
+                           "vcard"   "http://www.w3.org/2006/vcard/ns#"
+                           "void"    "http://rdfs.org/ns/void#"
                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :log      {:fn       default-logger
+                :buffer   (* 128 1024)
                 :path     ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
      :graph    {:import   [(io/resource "fabric.edn")]
                 ;;:restore  "session-20150910-222204.edn"

@@ -11,29 +11,28 @@ Clojure & Clojurescript. Written in a Literate Programming format.
      - [[#leiningen-coordinates][Leiningen coordinates]]
      - [[#overview][Overview]]
          - [[#general-compute-graph-concepts][General Compute Graph concepts]]
-         - [[#features][Features]]
+         - [[#project-features][Project features]]
      - [[#modules][Modules]]
      - [[#status][Status]]
+     - [[#example-usage][Example usage]]
+         - [[#general-compute-graph-examples][General compute graph examples]]
+         - [[#fabric-facts-query-visualization][fabric-facts query visualization]]
+         - [[#fabric-ld-server-example][fabric-ld server example]]
+         - [[#fabric-facts-query-trees--rule-based-inference][fabric-facts query trees & rule based inference]]
+         - [[#spreadsheet-like-computation][Spreadsheet like computation]]
      - [[#motivation--use-cases][Motivation & use cases]]
          - [[#alternative-programming-model][Alternative programming model]]
          - [[#pervasive-caching-easy-introspection-algorithm-visualization][Pervasive caching, easy introspection, algorithm visualization]]
-         - [[#reactive-programming-wip][Reactive programming (WIP)]]
-         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
          - [[#self-organizing-workflows][Self-organizing workflows]]
+         - [[#reactive-programming-wip][Reactive programming (WIP)]]
          - [[#semantic-knowledge-graphs-queries--reasoning][(Semantic) knowledge graphs, queries & reasoning]]
+         - [[#single-machine-or-distributed-processing][Single machine or distributed processing]]
          - [[#toolkit-w-clojurescript-support][Toolkit w/ Clojurescript support]]
      - [[#differences-to-map-reduce-and-dataflow-dags][Differences to Map-Reduce and dataflow DAGs]]
-     - [[#resources--related-work][Resources / related work]]
      - [[#benchmarks][Benchmarks]]
          - [[#single-source-shortest-path][Single-source shortest path]]
          - [[#vertex-coloring][Vertex coloring]]
-     - [[#example-usage][Example usage]]
-         - [[#single-source-shortest-path][Single-source shortest path]]
-         - [[#vertex-coloring-in-random-graphs][Vertex coloring in random graphs]]
-         - [[#transitive-closure-type-inheritance-example][Transitive closure (type inheritance example)]]
-         - [[#fabric-ld-server-example][fabric-ld server example]]
-         - [[#fabric-facts-module-example][fabric-facts module example]]
-         - [[#spreadsheet-like-computation][Spreadsheet like computation]]
+     - [[#resources--related-work][Resources / related work]]
  - [[#project-definition][Project definition]]
      - [[#injected-properties][Injected properties]]
      - [[#building-this-project][Building this project]]
@@ -49,11 +48,10 @@ Clojure & Clojurescript. Written in a Literate Programming format.
 ** Leiningen coordinates
 
 #+BEGIN_SRC clojure :noweb yes :noweb-ref lein-coords
-  [thi.ng/fabric "0.0.338"]
+  [thi.ng/fabric "0.0.376"]
 #+END_SRC
 
 ** Overview
-
 *** General Compute Graph concepts
 
 These libraries are built around the model of a directed, potentially
@@ -62,7 +60,7 @@ functions sending possibly transformed states to other vertices in the
 graph. All processing is done in two phases, both of which are score
 guided and completely customizable:
 
-- *Signalling*: The operations carried out by edge functions, each
+- *Signaling*: The operations carried out by edge functions, each
   accepting their source vertex' state value, transforming it and
   placing it in a signal map/queue of their target vertex. Vertices
   only signal if the user defined (or default) scoring function
@@ -70,7 +68,7 @@ guided and completely customizable:
 
 - *Collecting*: Each vertex can define its own collection function,
   responsible for processing any uncollected signal values and
-  producing a new state value. As with signalling, vertices only
+  producing a new state value. As with signaling, vertices only
   collect if their collection score exceeds a threshold value. This
   allows users to implement different collection behaviors (e.g.
   semi-lazy or batched or only after certain amount of uncollected
@@ -81,7 +79,7 @@ There're many different ways to execute these two operational phases
 etc.) and the core library provides 3 different execution contexts
 (also fully configurable) to tailor the execution model for different
 use cases. For some problem domains choosing one model over another
-can provide major (500-1000%) speedups (e.g. see Vertex coloring
+can provide major (500-1000%) speedups (e.g. see [[#benchmarks][Vertex coloring]]
 example below).
 
 Common to all supplied execution models/contexts is the notion of
@@ -101,16 +99,16 @@ for many problem domains. To avoid a monolithic one-fits-all approach
 and provide somewhat of a thematic focus, this project is structured
 into different modules (all described & linked below).
 
-*** Features
+*** Project features
 
 - Modular architecture (see [[#modules][Modules]] section below)
-- Easy-to-use API
+- Easy-to-use API, each module exposes both high & low-level functionality
+- Protocol based implementation for extensibility
 - Literate programming format w/ extensive docs, diagrams & examples
 - Over 150 tests
 
 **** fabric-core
 
-- Protocol based implementation
 - Customizable vertex, edge, graph & execution context types
 - 3 types of graph execution contexts built-in
 - Sync, async, parallel & continuous processing (and mixtures of)
@@ -125,7 +123,7 @@ into different modules (all described & linked below).
 
 **** fabric-facts
 
-- Knowledge graph (triple or quad based)
+- Semantic knowledge graph (triple or quad based)
 - Fully featured, efficient query engine using query trees
   - Graph pattern matching w/ variables
   - Sub-queries (joins, optional joins, unions, negation)
@@ -167,130 +165,51 @@ See the README of modules below for full feature sets...
 
 ALPHA quality, in active development.
 
-** Motivation & use cases
-*** Alternative programming model
-
-Some algorithms can be expressed more simply using the Signal/Collect
-model and allow for parallel execution.
-
-*** Pervasive caching, easy introspection, algorithm visualization
-
-Intermediate results can be easily reused by multiple consumbers and
-retrieved through vertex inspection. Compute graphs can also be
-visualized, allowing for the development of visual programming tools.
-
-*** Reactive programming (WIP)
-
-Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
-mandatory integration or reliance on React.js or DOM rendering cycle
-
-*** Single machine or distributed processing
-
-Distributed, multi-environment graphs not yet implemented (WIP)
-
-*** Self-organizing workflows
-
-Think self-updating visualizations when inputs are changing. Using
-custom collection thresholds, this model can also be extended to only
-operate when a minimum number of new signals has been received
-(throttling) or after a period of time since the last computation.
-
-*** (Semantic) knowledge graphs, queries & reasoning
-
-- Use compute graphs as auto-updating database using attached queries
-  & inference rules to automatically add or retract facts when certain
-  patterns are matched. Query results are cached in vertices and
-  available immediately. This behavior also allows (and is used) to
-  reuse intermediate sub-query results from similar queries, leading
-  to better performance.
-
-- Use as storage backend for [[http://thi.ng/trio][thi.ng/trio]]
-
-- Implement Rete-style rule engines, using vertices for pervasive
-  intermediate result caching and define custom signal and scoring
-  functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
-  module)
-
-*** Toolkit w/ Clojurescript support
-
-- Provide same functionality for both Clojure & Clojurescript
-
-** Differences to Map-Reduce and dataflow DAGs
-
-- Ordered OR unordered processing
-- Scored / thresholded processing
-  - custom scoring & signal functions can inhibit signals to neighboring vertices
-  - collection functions can ignore or delay processing of incoming signals
-- Individual mapping functions for each edge
-- Cycles (recursion) allowed and needed for some problems
-- Vertices only hold state, processing done in edges (i.e. single
-  values can be transformed in parallel via different signal functions from same vertex)
-- Graph processing stops after user defined threshold or when graph
-  has converged (i.e. no more active signals or outstanding
-  collections)
-
-** Resources / related work
-
-- http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
-- http://www.semantic-web-journal.net/system/files/swj971.pdf
-- http://signalcollect.com
-
-** Benchmarks
-*** Single-source shortest path
-
-10,000 vertices, 30,000 paths, max. length 3 hops
-
-Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
-
-|         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
-|---------+---------------------+---------------+-----------------------+-------------+----------|
-| Total   | 221ms               | 182ms         | 229ms                 | 309ms       | 130ms    |
-| Per op  | 6.1µs               | 3.1µs         | 4.0µs                 | 2.5µs       | 4.0µs    |
-
-*** Vertex coloring
-
-1000 vertices, max. 180 colors, 5% edge probability
-
-Measurements taken with 2010 MBP, 2.66 GHz Intel Core i7, 8GB RAM, Java 8
-
-|         | Synchronous (naive) | Probabilistic | Probabilistic (eager) | Eager async | Two-pass |
-|---------+---------------------+---------------+-----------------------+-------------+----------|
-| Total   | 1706ms              | 605ms         | 289ms                 | 361ms       | 825ms    |
-| Per op  | 3.9µs               | 3.8µs         | 2.2µs                 | 2.7µs       | 4.3µs    |
-| Signals | 122651              | 144580        | 122651                | 126198      | 182802   |
-| Colls   | 42960               | 12839         | 4001                  | 4772        | 6251     |
-
-TODO add charts
-
 ** Example usage
 
-Currently, the included test cases for each module act as the best
-demonstation of usage patterns and also show most of the currently
-implemented functionality:
+Currently, the included test cases and examples for each module act as
+the best demonstration of usage patterns and also show most of the
+currently implemented functionality:
 
-*** Single-source shortest path
+*** General compute graph examples
+**** Single-source shortest path
 
 Calculate minimum distance from a single node to all others
-(connected) in the graph. Also see benchmark above.
+(connected) in the graph. Also see [[#benchmarks][benchmarks]].
+
+Only these two custom signal & collect functions are needed (in
+addition to setting up the graph):
+
+#+BEGIN_SRC clojure
+  (defn signal-sssp
+    [vertex dist] (if-let [v @vertex] (+ dist v)))
+
+  (def collect-sssp
+    (f/collect-pure
+     (fn [val uncollected]
+       (if val (reduce min val uncollected) (reduce min uncollected)))))
+#+END_SRC
 
 [[./assets/sssp.jpg]]
 
+(Click image to view bigger version to see edge weights/distances)
+
 [[./fabric-core/test/sssp.org][source]]
 
-*** Vertex coloring in random graphs
+**** Vertex coloring in random graphs
 
-Assign each vertex a color from a limited pallete such that no two
+Assign each vertex a color from a limited pallette such that no two
 neighbors have the same color. This is one of the examples used for
-the above benchmarks. Please note the drastic difference between
-different execution models (synchronous vs. eager). If the number of
-possible colors is reduced further, the synchronous approach will not
-converge at all.
+the above benchmarks. Please note the drastic [[#benchmarks][performance difference]]
+between different execution models (synchronous vs. eager). If the
+number of possible colors is reduced further, the synchronous approach
+will not converge at all.
 
 [[./assets/vcolor.jpg]]
 
 [[./fabric-core/test/vertexcoloring.org][source]]
 
-*** Transitive closure (type inheritance example)
+**** Transitive closure (type inheritance example)
 
 Given a graph encoding a tree structure (e.g. type hierarchy), compute
 all super types for each node. This example uses a tiny fragment of
@@ -311,23 +230,69 @@ each vertex:
 
 [[./fabric-core/test/transclosure.org][source]]
 
+*** fabric-facts query visualization
+
+The /[[./fabric-facts/README.org][fabric-facts]]/ module provides a map based [[./fabric-facts/src/dsl.org][DSL]] to specify fact
+queries based on graph pattern matching (similar to [[http://www.w3.org/TR/sparql11-query/][SPARQL]]). The
+module also provides a [[./fabric-facts/src/viz.org][visualizer]] to help document & debug complex
+queries. E.g. the following query can be visualized (using Graphviz)
+like this:
+
+#+BEGIN_SRC clojure
+  ;; 1) match transitive mother relationships (w/ depth 2-4)
+  ;; 2) exclude rels to descendant "ex:P100"
+  ;; 3) match names for entities
+  ;; 4) optionally match descendant's DOB (only if before given date)
+  ;; 5) collected all DOBs into new result var
+  ;; 6) inject new result var ?res using string formatting
+  ;; 7) pre-bind/restrict possible values for ?p
+  ;; 8) order, group and select vars
+  (->> '{:q         [{:path [?p ["foaf:mother"] ?d] :min 2 :max 4}
+                     {:minus [[?p "foaf:mother" "ex:P100"]]}
+                     {:where [[?p "foaf:name" ?pname]]}
+                     {:where [[?d "foaf:name" ?dname]]}
+                     {:optional [[?d "ex:dob" ?dob]]
+                      :filter   (< ?dob #inst "2000-01-01")}]
+         :aggregate {?birthdays (agg-collect ?dob)}
+         :bind      {?rel (str ?pname " -> " ?dname)}
+         :values    {?p #{"ex:P1" "ex:P2"}}
+         :group-by  ?p
+         :order     ?d
+         :select    [?p ?d ?rel ?birthdays]}
+       (query->graphviz)
+       (spit "qviz-ex01.dot"))
+#+END_SRC
+
+[[./assets/qviz-ex01.png]]
+
 *** fabric-ld server example
 
-Excerpt of an example interaction with a /fabric-ld/ server from the
+Excerpt of an example interaction with a /[[./fabric-ld/README.org][fabric-ld]]/ server from the
 command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of curl for brevity):
 
 #+BEGIN_SRC bash
+  # import facts from URI (currently EDN or N-Triples only)
+  http -f POST :8000/facts uri=http://schema.org/version/2.0/schema.nt
+  # {:body "adding 9023 facts from http://schema.org/version/2.0/schema.nt"}
+
   # add facts in EDN format about this project
-  # EDN maps are a concise way to declare multiple relationships for
+  # EDN maps offser a concise way to declare multiple relationships for
   # for a common subject and are automatically resolved to triples
+  # facts can also be given as EDN triple vectors
   http -f POST :8000/facts \
-       facts='{"projects:fabric" {"rdf:type" "foaf:Project" "schema:isPartOf" "projects:thing" "dcterms:creator" "people:toxi"}}'
+       facts='{"http://thi.ng/fabric" \
+               {"rdf:type" "foaf:Project" \
+                "schema:isPartOf" "http://thi.ng" \
+                "dcterms:creator" "people:toxi"}}'
   # {:body "adding 3 facts"}
 
   # register query: find all projects and all their facts, group by project
   http -f POST :8000/queries \
        id=projects \
-       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] :order ?p :group-by ?prj :select [?p ?o]}'
+       q='{:q [{:where [[?prj "rdf:type" "foaf:Project"] [?prj ?p ?o]]}] \
+           :order ?p \
+           :group-by ?prj \
+           :select [?p ?o]}'
   # {:id "projects", :body "New query registered"}
 
   # get query results
@@ -337,18 +302,26 @@ command line (e.g. using [[https://github.com/jkbrzt/httpie][httpie]] instead of
   #         :order ?p,
   #         :group-by ?prj,
   #         :select [?p ?o]},
-  #  :body {"projects:fabric"
+  #  :body {"http://thi.ng/fabric"
   #         [{?p "http://purl.org/dc/terms/creator", ?o "people:toxi"}
-  #          {?p "http://schema.org/isPartOf", ?o "projects:thing"}
+  #          {?p "http://schema.org/isPartOf", ?o "http://thi.ng"}
   #          {?p "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ?o "http://xmlns.com/foaf/0.1/Project"}]}}
 #+END_SRC
 
-*** fabric-facts module example
+[[./fabric-ld/README#interacting-with-the-server][more examples]]
 
-This example uses a compute graph to store facts, fact queries and
-inference rules (based on queries) to create new facts. Since the
-queries and inference rules are expressed as vertex trees, taking part
-in the normal graph execution, this example demonstrates how easy it
+*** fabric-facts query trees & rule based inference
+
+*Note:* This example is somewhat out of date in that it hardly uses
+the more user-friendly and powerful query DSL and instead largely
+defines queries via low-level forms. For a better overview please
+consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the /[[./fabric-facts/README.org][facts module]]/,
+as well as the /[[./fabric-ld/README.org][fabric-ld]]/ module.
+
+This example (and module) uses a compute graph to store facts, fact
+queries and inference rules (based on queries) to create new facts.
+Queries and inference rules are expressed as vertex trees, taking part
+in the normal graph execution. This example demonstrates how easy it
 is to use this architecture to build custom rule engines or use with
 Linked Data applications (the query engine features are heavily
 inspired by W3C SPARQL, albeit using Clojure syntax and no RDF
@@ -357,11 +330,6 @@ restrictions). Whenever facts are added or removed from the graph
 (somewhat equivalent to stored procedures in SQL). In complex queries,
 intermediate query vertices act as result cache and potentially
 limit/avoid work to do.
-
-*Note:* This example is somewhat out of date in that it hardly uses
-the more userfriendly and powerful query DSL and instead largely
-defines queries via low-level forms. For a better overview please
-consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in the [[./fabric-facts/README.org][facts module]]...
 
 #+BEGIN_SRC clojure :tangle fabric-facts/babel/examples/example01.cljc :mkdirp yes :padline no
   (require '[thi.ng.fabric.core :as f])
@@ -387,9 +355,10 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
       [ancestor domain person]
       [ancestor range person]])
 
-  ;; Rule specs (join queries) and their production functions The fns
-  ;; take 3 args: the graph, the inference vertex (for context, though
-  ;; here unused) and a single query result
+  ;; Rule specs (all join queries) and their production functions
+  ;; The production fns take 3 args: the graph, the inference vertex
+  ;; (for context, though here unused) and a single query result
+  ;; from which a new fact is inferred...
 
   (def inference-rules
     {;; infer type of subject for any property which declares a domain
@@ -430,8 +399,8 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
 
   (f/execute! ctx)
 
-  ;; The `all` var is a defrecord holding all related process
-  ;; vertices of the query. Its result can obtained by dereferencing...
+  ;; The `all` var (defined above) is closing over all its related vertices.
+  ;; Its query result can obtained by dereferencing...
 
   (prn (sort @all))
   ;; ([ancestor domain person]
@@ -453,7 +422,7 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   ;;  [toxi parent noah]
   ;;  [toxi type person])                 ;; inferred
 
-  ;; Add another query, this time with variable bindings
+  ;; Add another query, this time with a variable binding (?p)
 
   (def people (ff/add-param-query! g '[?p type person] {}))
   (f/execute! ctx)
@@ -463,7 +432,7 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
 
   ;; complex queries can be more easily defined via query specs:
   ;; here, a filtered join query (reusing above people query) to only select
-  ;; people with age < 20 and inject a new result var ?num (result count)
+  ;; people with age < 20 and inject a new result var ?num (aggregated result count)
 
   (def children
     (dsl/add-query-from-spec!
@@ -575,6 +544,112 @@ consult the [[./fabric-facts/src/dsl.org][thi.ng.fabric.facts.dsl]] namespace in
   ;; :total 2280.0
 #+END_SRC
 
+** Motivation & use cases
+*** Alternative programming model
+
+Some algorithms can be expressed more simply using the Signal/Collect
+model and allow for parallel execution.
+
+*** Pervasive caching, easy introspection, algorithm visualization
+
+Intermediate results can be easily reused by multiple consumers and
+retrieved through vertex inspection. Compute graphs can also be
+visualized, allowing for the development of visual programming tools.
+
+*** Self-organizing workflows
+
+Think self-updating visualizations when inputs are changing. Using
+custom collection thresholds, this model can also be extended to only
+operate when a minimum number of new signals has been received
+(throttling) or after a period of time since the last computation.
+
+*** Reactive programming (WIP)
+
+Truly standalone reactive contexts *across* CLJ/CLJS, i.e. no
+mandatory integration or reliance on React.js or DOM rendering cycle
+
+*** (Semantic) knowledge graphs, queries & reasoning
+
+- Use compute graphs as auto-updating database using attached queries
+  & inference rules to automatically add or retract facts when certain
+  patterns are matched. Query results are cached in vertices and
+  available immediately. This behavior also allows (and is used) to
+  reuse intermediate sub-query results from similar queries, leading
+  to better performance.
+
+- Implement Rete-style rule engines, using vertices for pervasive
+  intermediate result caching and define custom signal and scoring
+  functions to inhibit obsolete work in the graph (see [[./fabric-facts/README.org][fabric-facts]]
+  module)
+
+*** Single machine or distributed processing
+
+Distributed, multi-environment graphs not yet implemented (WIP, only
+in-memory graphs are currently supported).
+
+*** Toolkit w/ Clojurescript support
+
+- Provide same functionality for both Clojure & Clojurescript
+** Differences to Map-Reduce and dataflow DAGs
+
+- Ordered OR unordered processing
+- Scored / thresholded processing
+  - custom scoring & signal functions can inhibit signals to neighboring vertices
+  - collection functions can ignore or delay processing of incoming signals
+- Individual mapping functions for each edge
+- Cycles (recursion) allowed and needed for some problems
+- Vertices only hold state, processing done in edges (i.e. single
+  values can be transformed in parallel via different signal functions from same vertex)
+- Graph processing stops after user defined threshold or when graph
+  has converged (i.e. no more active signals or outstanding
+  collections)
+
+** Benchmarks
+
+Different graph execution models can have a drastic impact on
+performance. Therefore, the /fabric-core/ module provides a number of
+configurations to experiment with different models (with only v. minor
+code changes), but it's also feasible for users to provide their own
+execution contexts.
+
+*** Single-source shortest path
+
+10,000 vertices, 30,000 paths, max. length 3 hops
+
+Measurements taken with Intel i7-4930K CPU @ 3.40GHz, 16GB RAM, Java 8
+
+|            | Synch (naive) | Probabilistic | Prob. (eager) | Eager async | Two-pass |
+|------------+---------------+---------------+---------------+-------------+----------|
+| Factor     |          1.33 |          1.22 |          1.49 |           1 |     1.32 |
+|------------+---------------+---------------+---------------+-------------+----------|
+| Total (ms) |           102 |           111 |            91 |         136 |      103 |
+| Signals    |         38532 |         44594 |         43239 |       38532 |    38532 |
+| Colls      |         13650 |         21914 |         15073 |       13650 |    13650 |
+#+TBLFM: @2$2..@2$6=trunc(vmax(@3$2..@3$6)/@+1,2)
+
+*** Vertex coloring
+
+1000 vertices, max. 180 colors, 5% edge probability
+
+Measurements taken with Intel i7-4930K CPU @ 3.40GHz, 16GB RAM, Java 8
+
+|            | Synch (naive) | Probabilistic | Prob. (eager) | Eager async | Two-pass |
+|------------+---------------+---------------+---------------+-------------+----------|
+| Factor     |             1 |          3.64 |          5.81 |        5.71 |     3.41 |
+|------------+---------------+---------------+---------------+-------------+----------|
+| Total (ms) |          1285 |           353 |           221 |         225 |      376 |
+| Signals    |        416960 |        143001 |        126665 |      128017 |   194062 |
+| Colls      |         36362 |          8474 |          3936 |        4235 |     6530 |
+#+TBLFM: @2$2..@2$6=trunc(vmax(@3$2..@3$6)/@+1,2)
+
+TODO add charts
+
+** Resources / related work
+
+- http://www.cs.cmu.edu/~wcohen/postscript/iswc-2010.pdf
+- http://www.semantic-web-journal.net/system/files/swj971.pdf
+- http://signalcollect.com
+
 * Project definition
 
 ** Injected properties                                             :noexport:
@@ -661,6 +736,7 @@ dependencies to all currently existing modules.
 
 | *Version* | *Released* | *Description*                                                                      |
 |-----------+------------+------------------------------------------------------------------------------------|
+|   0.0.376 | 2015-09-15 | query visualization/validation/prefixes, pname caching, DSL fixes, factlog update  |
 |   0.0.338 | 2015-09-12 | LD module updates, add response types, request validation, DSL bugfixes, more docs |
 |   0.0.312 | 2015-09-08 | no code changes, only include ld module as dependency to main fabric artefact      |
 |   0.0.310 | 2015-09-08 | add fabric-ld module, add alias indexing, large updates to docs                    |
@@ -671,7 +747,7 @@ dependencies to all currently existing modules.
 |   0.0.204 | 2015-08-28 | major query DSL extension, aggregation, FactVertex type                            |
 |   0.0.189 | 2015-08-27 | fact query DSL, query refactoring, doc updates                                     |
 |   0.0.167 | 2015-08-24 | fact transformers, path queries, fact query & inference refactoring                |
-|   0.0.144 | 2015-08-20 | fact query optimizations, NTriples parser, quad fact support                       |
+|   0.0.144 | 2015-08-20 | fact query optimizations, N-Triples parser, quad fact support                      |
 |   0.0.131 | 2015-08-17 | fact query updates & recursive removal                                             |
 |   0.0.123 | 2015-08-16 | async ctx updates & fact query index caching                                       |
 |   0.0.116 | 2015-08-15 | more reusable fact queries                                                         |

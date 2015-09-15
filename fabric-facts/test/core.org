@@ -72,13 +72,14 @@
 
 *** Path queries
 
-#+BEGIN_SRC dot :tangle ../babel/test-paths.dot
+#+BEGIN_SRC dot :tangle ../babel/test-paths.dot :exports none
   digraph g {
-  a -> b [label="p1"];
-  b -> c [label="p1"];
-  b -> c [label="p2"];
-  c -> d [label="p1"];
-  c -> e [label="p2"];
+    rankdir=LR;
+    a -> b [label="p1"];
+    b -> c [label="p1"];
+    b -> c [label="p2"];
+    c -> d [label="p1"];
+    c -> e [label="p2"];
   }
 #+END_SRC
 
@@ -332,7 +333,7 @@
     (is (== 1024 ((dsl/compile-expr '(int (pow ?a ?b))) '{?a 2 ?b 10})))
     (is (== 10 ((dsl/compile-expr '(int (logn ?a ?b))) '{?a 1024 ?b 2})))
     (is ((dsl/compile-expr '(match #"\w+" ?a)) '{?a "hello123"}))
-    (is ((dsl/compile-expr '(match "\w+" ?a)) '{?a "hello123"}))
+    (is ((dsl/compile-expr '(match "\\w+" ?a)) '{?a "hello123"}))
     (is (not ((dsl/compile-expr '(match #"\w+" ?a)) {})))
     (is ((dsl/compile-expr '(and ?a ?b)) '{?a 1024 ?b 2}))
     (is (not ((dsl/compile-expr '(and ?a ?b ?c)) '{?a 1024 ?b 2})))
