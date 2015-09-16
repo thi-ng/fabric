@@ -388,20 +388,21 @@
 
 #+BEGIN_SRC clojure :noweb-ref tests
   (deftest test-alias-index
-    (let [g (ff/fact-graph {:index (ff/alias-index-vertex #{'same-as})})
-          ctx (f/sync-execution-context {:graph g})
-          q1 (dsl/add-query-from-spec!
-              g '{:q [{:where [[?s ?p ?o]]}]})
-          q2 (dsl/add-query-from-spec!
-              g '{:q [{:where [[a ?p ?o]]}
-                      {:optional [[?o name ?n]]}]})
-          q3 (dsl/add-query-from-spec!
-              g '{:q [{:where [[aa ?p ?o]]}
-                      {:optional [[?o name ?n]]}]})
-          q4 (dsl/add-query-from-spec!
-              g '{:q [{:where [[?s ?p b]]}]})
-          q5 (dsl/add-query-from-spec!
-              g '{:q [{:where [[c ?p ?o]]}]})
+    (let [index (ff/new-fact-index {:index (ff/alias-index-vertex #{'same-as})})
+          g     (ff/fact-graph {:index index})
+          ctx   (f/sync-execution-context {:graph g})
+          q1    (dsl/add-query-from-spec!
+                 g '{:q [{:where [[?s ?p ?o]]}]})
+          q2    (dsl/add-query-from-spec!
+                 g '{:q [{:where [[a ?p ?o]]}
+                         {:optional [[?o name ?n]]}]})
+          q3    (dsl/add-query-from-spec!
+                 g '{:q [{:where [[aa ?p ?o]]}
+                         {:optional [[?o name ?n]]}]})
+          q4    (dsl/add-query-from-spec!
+                 g '{:q [{:where [[?s ?p b]]}]})
+          q5    (dsl/add-query-from-spec!
+                 g '{:q [{:where [[c ?p ?o]]}]})
           facts '#{[a p1 b]
                    [b name bob]
                    [a same-as aa]

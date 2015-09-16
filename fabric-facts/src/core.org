@@ -39,8 +39,6 @@
      - [[#generic-helpers][Generic helpers]]
          - [[#converting-maps-to-facts--triples][Converting maps to facts / triples]]
      - [[#complete-namespace-definition][Complete namespace definition]]
-     - [[#todo-questions][TODO Questions]]
-         - [[#maps-as-facts][maps as facts?]]
 
 * Namespace: thi.ng.fabric.facts.core
 ** Protocols
@@ -51,7 +49,7 @@ and their roles are described in more detail throughout this document.
 #+BEGIN_SRC clojure :noweb-ref protos
   (defprotocol IFactGraph
     (facts [_])
-    (fact-indices [_])
+    (fact-index [_])
     (fact-transform [_])
     (add-fact! [_ t])
     (remove-fact! [_ t]))
@@ -61,8 +59,12 @@ and their roles are described in more detail throughout this document.
     (cache! [_ type k v])
     (expire! [_ type k]))
 
-  (defprotocol IFactIndex
+  (defprotocol IIndexSignal
     (index-signal-handler [_]))
+
+  (defprotocol IFactIndex
+    (fact-indices [_])
+    (add-index-selections! [_ g pattern]))
 
   (defprotocol IFactQuery
     (raw-pattern [_]))
@@ -209,6 +211,67 @@ The module currently implements two types of indices:
 - indexing with dynamic entity aliasing (equivalence/synonym)
 
 Both are described (incl. examples) [[#index-vertices][further below]].
+
+#+BEGIN_SRC clojure :noweb-ref index
+  (defrecord FactIndex
+      [cache indices ctors]
+    IFactIndex
+    (fact-indices
+      [_] @indices)
+    (add-index-selections!
+      [_ g pattern]
+      (into []
+            (map-indexed
+             (fn [i x]
+               (let [sel [i x]]
+                 (if-let [sel' (get-in @cache [type sel])]
+                   (do (debug :reuse-index-sel sel) sel')
+                   (add-index-selection! g _ sel)))))
+            pattern))
+    ICache
+    (cached
+      [_ type k] (get-in @cache [type k]))
+    (cache!
+      [_ type k v] (swap! cache assoc-in [type k] v) v)
+    (expire!
+      [_ type k] (swap! cache update type dissoc k) nil)
+    f/IGraphComponent
+    (component-type
+      [_] :fact-index)
+    (add-to-graph!
+      [_ g]
+      (->> ctors
+           (mapv (fn [ctor] (let [v (ctor g)] (info :ctor ctor :v v) (f/add-vertex! g nil nil v))))
+           (reset! indices))
+      _)
+    (remove-from-graph!
+      [_ g] (err/unsupported!))
+    (remove-from-graph!
+      [_ g parent] (err/unsupported!)))
+
+  (defn new-fact-index
+    ":len   - fact length (default 3)
+     :index - index vertex ctor fn or seq of ctors"
+    ([]
+     (new-fact-index {}))
+    ([{:keys [len index]
+       :or {len 3, index default-index-vertex}}]
+     (let [ctors (cond
+                   (fn? index)
+                   (mapv (fn [i] (index #(nth % i))) (range len))
+
+                   (and (sequential? index)
+                        (every? fn? index))
+                   (vec index)
+
+                   :else
+                   (err/illegal-arg!
+                    ":index must be a ctor fn or seq of ctors"))]
+       (map->FactIndex
+        {:cache   (atom {})
+         :indices (atom {})
+         :ctors   ctors}))))
+#+END_SRC
 
 **** Fact transformation
 
@@ -446,10 +509,12 @@ keys:
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defrecord FactGraph
-      [g indices facts cache ftx]
+      [g index facts cache ftx]
     f/IComputeGraph
     (add-vertex!
       [_ val vspec] (f/add-vertex! g val vspec))
+    (add-vertex!
+      [_ val vspec ctor] (f/add-vertex! g val vspec ctor))
     (remove-vertex!
       [_ v] (f/remove-vertex! g v))
     (vertex-for-id
@@ -468,8 +533,8 @@ keys:
     IFactGraph
     (facts
       [_] (keys @facts))
-    (fact-indices
-      [_] indices)
+    (fact-index
+      [_] index)
     (fact-transform
       [_] ftx)
     (add-fact!
@@ -479,7 +544,7 @@ keys:
             (let [v (f/add-vertex! g f' nil fact-vertex)]
               (f/notify-watches g [:add-fact f])
               (debug :add-fact f f')
-              (run! #(f/add-edge! g v % signal-fact :add) @indices)
+              (run! #(f/add-edge! g v % signal-fact :add) (fact-indices index))
               (swap! facts assoc f' v)
               v))))
     (remove-fact!
@@ -488,7 +553,7 @@ keys:
         (if-let [v (@facts f')]
           (do
             (debug :remove-fact f f')
-            (run! #(f/add-edge! g v % signal-fact :remove) @indices)
+            (run! #(f/add-edge! g v % signal-fact :remove) (fact-indices index))
             (swap! facts dissoc f')
             (f/notify-watches g [:remove-fact f])
             (f/remove-vertex! g v)
@@ -509,31 +574,22 @@ keys:
   (defn fact-graph
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
-    :len       - fact length (default 3)
-    :index     - index vertex ctor fn or seq of ctors
+    :index     - FactIndex instance
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
-    ([{:keys [graph len index transform]
-       :or   {graph     (f/compute-graph)
-              len       3
-              index     default-index-vertex
-              transform identity-transform}}]
-     (let [indices (atom nil)
-           g       (map->FactGraph
-                    {:indices indices
-                     :facts   (atom {})
-                     :cache   (atom {})
-                     :ftx     transform
-                     :g       graph})
-           index   (cond
-                     (fn? index)         (mapv (fn [i] (index #(nth % i))) (range len))
-                     (sequential? index) index
-                     :else               (err/illegal-arg!
-                                          ":index must be a ctor fn or seq of ctors"))]
-       (reset!
-        indices
-        (mapv (fn [ctor] (add-index-vertex! graph (ctor g))) index))
+    ([{:keys [graph len index transform]}]
+     (assert (or (nil? index)
+                 (and (satisfies? IFactIndex index)
+                      (satisfies? f/IGraphComponent index))))
+     (let [index (or index (new-fact-index))
+           g     (map->FactGraph
+                  {:index index
+                   :facts (atom {})
+                   :cache (atom {})
+                   :ftx   (or transform identity-transform)
+                   :g     (or graph (f/compute-graph))})]
+       (f/add-to-graph! index g)
        g)))
 #+END_SRC
 
@@ -547,7 +603,7 @@ to deal with them directly, though).
 
 **** IndexVertex type
 
-#+BEGIN_SRC clojure :noweb-ref index-v
+#+BEGIN_SRC clojure :noweb-ref index
   (deftype IndexVertex
       [id index prev-index uncollected signal-map new-edges outs
        signal-fn collect-fn]
@@ -617,18 +673,14 @@ to deal with them directly, though).
       [_] @signal-map)
     (uncollected-signals
       [_] @uncollected)
-    IFactIndex
+    IIndexSignal
     (index-signal-handler
       [_] signal-fn))
 #+END_SRC
 
 **** Default index vertex
 
-#+BEGIN_SRC clojure :noweb-ref index-v
-  (defn add-index-vertex!
-    [g ctor]
-    (f/add-vertex! g nil nil ctor))
-
+#+BEGIN_SRC clojure :noweb-ref index
   (defn- collect-index
     [index]
     (let [tx (map #(update % 2 index))
@@ -756,7 +808,7 @@ document.)/
 
 ***** Implementation
 
-#+BEGIN_SRC clojure :noweb-ref index-v
+#+BEGIN_SRC clojure :noweb-ref index
   (defn collect-alias-index
     [g props index-fn]
     (let [props (atom (set props))
@@ -985,47 +1037,41 @@ In code form this same graph could be constructed like this:
 *** Index selection
 
 #+BEGIN_SRC clojure :noweb-ref queries
-  (defn index-selection
-    [g sel]
-    (if-let [sel' (cached g ::index-sel sel)]
-      (do (debug :reuse-index-sel sel) sel')
-      (let [index  (@(fact-indices g) (first sel))
-            vertex (f/add-vertex!
-                    g nil
-                    {::f/score-signal-fn f/score-signal-with-new-edges
-                     ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})
-            isel   (reify
-                     IQueryResult
-                     (pre-result-vertex
-                       [_] nil)
-                     (result-vertex
-                       [_] vertex)
-                     f/IGraphComponent
-                     (component-type
-                       [_] :index-sel)
-                     (add-to-graph!
-                       [_ g] _)
-                     (remove-from-graph!
-                       [_ g] (f/remove-from-graph! _ g nil))
-                     (remove-from-graph!
-                       [_ g parent]
-                       (if (f/none-or-single-user? vertex parent)
-                         (do (debug "removing :index-sel" sel)
-                             (expire! g ::index-sel sel)
-                             (f/disconnect-neighbor! index vertex)
-                             (f/remove-vertex! g vertex)
-                             true)
-                         (do (f/disconnect-neighbor! vertex parent)
-                             false))))]
-        (f/add-edge! g index vertex ((index-signal-handler index) sel) nil)
-        (cache! g ::index-sel sel isel))))
+  (defn add-index-selection!
+    [g index sel]
+    (let [index-v ((fact-indices index) (first sel))
+          vertex  (f/add-vertex!
+                   g nil
+                   {::f/score-signal-fn f/score-signal-with-new-edges
+                    ::f/collect-fn      (f/collect-pure (fn [_ in] (peek in)))})
+          isel    (reify
+                    IQueryResult
+                    (pre-result-vertex
+                      [_] nil)
+                    (result-vertex
+                      [_] vertex)
+                    f/IGraphComponent
+                    (component-type
+                      [_] :index-sel)
+                    (add-to-graph!
+                      [_ g] _)
+                    (remove-from-graph!
+                      [_ g] (f/remove-from-graph! _ g nil))
+                    (remove-from-graph!
+                      [_ g parent]
+                      (if (f/none-or-single-user? vertex parent)
+                        (do (debug "removing :index-sel" sel)
+                            (expire! index ::index-sel sel)
+                            (f/disconnect-neighbor! index-v vertex)
+                            (f/remove-vertex! g vertex)
+                            true)
+                        (do (f/disconnect-neighbor! vertex parent)
+                            false))))]
+      (f/add-edge! g index-v vertex ((index-signal-handler index-v) sel) nil)
+      (cache! index ::index-sel sel isel)))
 
   (defn index-sel-choice
     [coll] {::choices (set coll)})
-
-  (defn make-index-selections
-    [g pattern]
-    (into [] (map-indexed #(index-selection g [% %2])) pattern))
 #+END_SRC
 
 *** Basic pattern query
@@ -1048,7 +1094,7 @@ triple graph (or =[nil nil nil nil]= for quads).
        (if-let [q (and (empty? opts) (cached g ::queries pattern))]
          (do (debug :reuse-basic-query pattern) q)
          (let [[s p o] pattern
-               sels (make-index-selections g pattern)
+               sels (add-index-selections! (fact-index g) g pattern)
                acc  (f/add-vertex!
                      g {} {::f/collect-fn collect-select})
                res  (f/add-vertex!
@@ -2084,7 +2130,7 @@ The following example demonstrates all these rules:
   (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
   (declare select-keys* qvar? add-query! add-query-join!)
-  (declare index-selection index-sel-choice make-index-selections)
+  (declare default-index-vertex add-index-selection! index-sel-choice)
 
   <<protos>>
 
@@ -2096,7 +2142,7 @@ The following example demonstrates all these rules:
 
   <<fact-v>>
 
-  <<index-v>>
+  <<index>>
 
   <<fact-tx>>
 
@@ -2109,19 +2155,3 @@ The following example demonstrates all these rules:
   <<logger>>
 #+END_SRC
 
-** TODO Questions
-
-*** maps as facts?
-
-- maybe more convenient, but not strictly facts
-- requires custom fact transforms & query patterns (also maps)
-- how to deal with adding new facts, merged into original map?
-  - just provide map translations: map->facts (use trio triple-seq conversion)
-
-#+BEGIN_SRC clojure
-  ;; example map
-  {"P-123" {:name "karsten" :nick "toxi" :address {:country "uk", :city "london"}}}
-
-  ;; query: subjects with name & city
-  {?n :name ?city [:address :city]}
-#+END_SRC
