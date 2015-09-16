@@ -2,6 +2,7 @@
 
 * Contents                                                         :toc_4_gh:
  - [[#namespace-thingfabricfactscore][Namespace: thi.ng.fabric.facts.core]]
+     - [[#overview][Overview]]
      - [[#protocols][Protocols]]
      - [[#core-types--concepts][Core types & concepts]]
          - [[#facts][Facts]]
@@ -41,6 +42,72 @@
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.facts.core
+** Overview
+
+[[../../assets/facts-overview.png]]
+
+#+BEGIN_SRC dot :tangle ../../assets/facts-overview.dot :exports none
+digraph g {
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=9];
+  edge[fontname="Inconsolata",fontsize=9];
+  fontname="Inconsolata";
+  fontsize=9;
+  compound=true;
+
+  subgraph cluster0 {
+    label="thi.ng.fabric.core";
+    ctx[label="Execution context"];
+    ctx -> ComputeGraph;
+  }
+
+  subgraph cluster1 {
+    label="thi.ng.fabric.facts";
+
+    f1[label="FactVertex"];
+    f2[label="FactVertex"];
+
+    FactIndex[color="#ff6600"];
+    iv1[label="IndexVertex", color="#ff6600"];
+    iv2[label="IndexVertex", color="#ff6600"];
+    iv3[label="IndexVertex", color="#ff6600"];
+
+    isel1[label="Index selection\nvertex", color="#cc0099"];
+    isel2[label="Index selection\nvertex", color="#cc0099"];
+    isel3[label="Index selection\nvertex", color="#cc0099"];
+    isel4[label="Index selection\nvertex", color="#cc0099"];
+
+    q1[label="Query", color="#0099cc"];
+    q2[label="Query", color="#0099cc"];
+    q3[label="Query", color="#0099cc"];
+
+    qcache[label="Query cache", color="#6699cc"];
+    selcache[label="Selection cache", color="#cc9999"];
+
+    ComputeGraph -> FactGraph -> f1; FactGraph -> f2;
+    f1 -> iv1; f1 -> iv2; f1 -> iv3;
+    f2 -> iv1; f2 -> iv2; f2 -> iv3;
+
+    FactGraph -> FactIndex -> selcache;
+    FactGraph -> qcache;
+
+    FactIndex -> iv1 -> isel1;
+    FactIndex -> iv2 -> isel2;
+    FactIndex -> iv3 -> isel3;
+    iv3 -> isel4;
+
+    isel1 -> q1 -> q3;
+    isel2 -> q1;
+    isel3 -> q1;
+    isel1 -> q2 -> q3;
+    isel2 -> q2;
+    isel4 -> q2;
+
+    selcache -> isel1; selcache -> isel2; selcache -> isel3; selcache -> isel4;
+    qcache -> q1; qcache -> q2; qcache -> q3;
+  }
+}
+#+END_SRC
+
 ** Protocols
 
 These protocols act as the main public & internal API for this module
