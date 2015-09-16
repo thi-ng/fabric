@@ -510,7 +510,7 @@ keys:
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :len       - fact length (default 3)
-    :index     - index vertex ctor (default default-index-vertex)
+    :index     - index vertex ctor fn or seq of ctors
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
@@ -525,8 +525,15 @@ keys:
                      :facts   (atom {})
                      :cache   (atom {})
                      :ftx     transform
-                     :g       graph})]
-       (reset! indices (mapv #(add-index-vertex! graph (index g %)) (range len)))
+                     :g       graph})
+           index   (cond
+                     (fn? index)         (mapv (fn [i] (index #(nth % i))) (range len))
+                     (sequential? index) index
+                     :else               (err/illegal-arg!
+                                          ":index must be a ctor fn or seq of ctors"))]
+       (reset!
+        indices
+        (mapv (fn [ctor] (add-index-vertex! graph (ctor g))) index))
        g)))
 #+END_SRC
 
@@ -572,6 +579,8 @@ to deal with them directly, though).
       [_] (count @uncollected))
     (connect-to!
       [_ v sig-fn opts]
+      ;; TODO refactor opts to include index pattern match
+      ;; TODO only connect if this index is compatible w/ desired pattern
       (swap! outs assoc v [sig-fn opts])
       (swap! new-edges inc)
       (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
@@ -621,8 +630,8 @@ to deal with them directly, though).
     (f/add-vertex! g nil nil ctor))
 
   (defn- collect-index
-    [idx]
-    (let [tx (map (fn [[op vid t]] [op vid (nth t idx)]))
+    [index]
+    (let [tx (map #(update % 2 index))
           rf (completing
               (fn [acc [op vid x]]
                 (case op
@@ -654,19 +663,20 @@ to deal with them directly, though).
         [idx (if-let [v (vals @vertex)] (into #{} (mapcat identity) v) ::none)])))
 
   (defn default-index-vertex
-    [g idx]
-    (fn
-      [id _ _]
-      (IndexVertex.
-       id
-       (atom {})              ;; index
-       (atom nil)             ;; prev
-       (atom [])              ;; uncollected
-       (atom {})              ;; sig-map
-       (atom 0)               ;; new-edges
-       (atom {})              ;; outs
-       signal-index-select
-       (collect-index idx))))
+    [index]
+    (fn [g]
+      (fn
+        [id _ _]
+        (IndexVertex.
+         id
+         (atom {})              ;; index
+         (atom nil)             ;; prev
+         (atom [])              ;; uncollected
+         (atom {})              ;; sig-map
+         (atom 0)               ;; new-edges
+         (atom {})              ;; outs
+         signal-index-select
+         (collect-index index)))))
 #+END_SRC
 
 **** Alias index vertex (fact triples only)
@@ -748,11 +758,11 @@ document.)/
 
 #+BEGIN_SRC clojure :noweb-ref index-v
   (defn collect-alias-index
-    [g props idx]
+    [g props index-fn]
     (let [props (atom (set props))
           rf    (fn [[index aliases :as acc] [op vid t]]
                   (let [[s p o] t
-                        x (nth t idx)
+                        x (index-fn t)
 
                         [index aliases]
                         (case op
@@ -775,7 +785,7 @@ document.)/
                         aliases
                         (if (@props p)
                           (case op
-                            :add    (let [_ (debug idx :unify s o :pred p)
+                            :add    (let [_ (debug :unify s o :pred p)
                                           aliases (uf/union aliases s o)
                                           facts'  (cond
                                                     (@props o)
@@ -789,10 +799,10 @@ document.)/
                                                       (into #{} (filter #(= o (nth % 1))) (facts g)))
 
                                                     :else nil)]
-                                      (debug idx :unify-facts facts')
+                                      (debug :unify-facts facts')
                                       (reduce
                                        (fn [acc [s _ o]]
-                                         (debug idx :unify s o)
+                                         (debug :unify s o)
                                          (uf/union acc s o))
                                        aliases facts'))
                             :remove (-> aliases
@@ -805,9 +815,9 @@ document.)/
                     [index aliases]))]
       (f/collect-pure
        (fn [val incoming]
-         ;;(debug idx :old-index val)
+         ;;(debug :old-index val)
          (let [val (reduce rf val incoming)]
-           ;;(debug idx :new-index val)
+           ;;(debug :new-index val)
            val)))))
 
   (defn signal-alias-index-select
@@ -831,18 +841,19 @@ document.)/
 
   (defn alias-index-vertex
     [alias-props]
-    (fn [g idx]
-      (fn [id _ _]
-        (IndexVertex.
-         id
-         (atom [{} (uf/disjoint-set)])
-         (atom nil)               ;; prev
-         (atom [])                ;; uncollected
-         (atom {})                ;; sig-map
-         (atom 0)                 ;; new-edges
-         (atom {})                ;; outs
-         signal-alias-index-select
-         (collect-alias-index g alias-props idx)))))
+    (fn [index]
+      (fn [g]
+        (fn [id _ _]
+          (IndexVertex.
+           id
+           (atom [{} (uf/disjoint-set)])
+           (atom nil)               ;; prev
+           (atom [])                ;; uncollected
+           (atom {})                ;; sig-map
+           (atom 0)                 ;; new-edges
+           (atom {})                ;; outs
+           signal-alias-index-select
+           (collect-alias-index g alias-props index))))))
 #+END_SRC
 
 ** Queries
