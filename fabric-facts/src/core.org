@@ -46,14 +46,15 @@
 
 [[../../assets/facts-overview.png]]
 
-#+BEGIN_SRC dot :tangle ../../assets/facts-overview.dot :exports none
+#+BEGIN_SRC dot :tangle ../../assets/facts-overview.dot :exports none :padline no
 digraph g {
   node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=9];
   edge[fontname="Inconsolata",fontsize=9];
   fontname="Inconsolata";
   fontsize=9;
   compound=true;
-
+  rankdir=LR;
+  
   subgraph cluster0 {
     label="thi.ng.fabric.core";
     ctx[label="Execution context"];
@@ -76,19 +77,21 @@ digraph g {
     isel3[label="Index selection\nvertex", color="#cc0099"];
     isel4[label="Index selection\nvertex", color="#cc0099"];
 
-    q1[label="Query", color="#0099cc"];
-    q2[label="Query", color="#0099cc"];
-    q3[label="Query", color="#0099cc"];
+    q1[label="Query 1", color="#0099cc"];
+    q2[label="Query 2", color="#0099cc"];
+    q3[label="Query 3", color="#0099cc"];
 
     qcache[label="Query cache", color="#6699cc"];
-    selcache[label="Selection cache", color="#cc9999"];
+    rcache[label="Rule cache", color="#66cc99"];
+    scache[label="Selection cache", color="#cc9999"];
 
     ComputeGraph -> FactGraph -> f1; FactGraph -> f2;
     f1 -> iv1; f1 -> iv2; f1 -> iv3;
     f2 -> iv1; f2 -> iv2; f2 -> iv3;
 
-    FactGraph -> FactIndex -> selcache;
+    FactGraph -> FactIndex -> scache;
     FactGraph -> qcache;
+    FactGraph -> rcache;
 
     FactIndex -> iv1 -> isel1;
     FactIndex -> iv2 -> isel2;
@@ -102,8 +105,21 @@ digraph g {
     isel2 -> q2;
     isel4 -> q2;
 
-    selcache -> isel1; selcache -> isel2; selcache -> isel3; selcache -> isel4;
-    qcache -> q1; qcache -> q2; qcache -> q3;
+    rule[label="Inference\nrule", color="#00cc99"];
+    q1 -> rule;
+    rcache -> rule[style="dashed"];
+    
+    scache -> isel1; scache -> isel2; scache -> isel3; scache -> isel4;
+    qcache -> q1[style="dashed"]; qcache -> q2[style="dashed"]; qcache -> q3[style="dashed"];
+
+    dsl[label="Query DSL"];
+    dsl -> q1[style="dashed"];
+    dsl -> q2[style="dashed"];
+    dsl -> q3[style="dashed"];
+
+    qviz[label="Query\nvisualization"];
+    qviz -> dsl;
+    
   }
 }
 #+END_SRC

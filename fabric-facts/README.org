@@ -22,6 +22,8 @@
 
 ** Overview
 
+[[../assets/facts-overview.png]]
+
 This module provides the following features on top of the
 /[[../fabric-core/README.org][fabric-core]]/ compute graph setup:
 
