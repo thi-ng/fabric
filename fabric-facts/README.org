@@ -24,6 +24,99 @@
 
 [[../assets/facts-overview.png]]
 
+#+BEGIN_SRC dot :tangle ../assets/facts-overview.dot :exports none :padline no
+digraph g {
+  node[color="black",style="filled",fontname="Inconsolata",fontcolor="white",fontsize=9];
+  edge[fontname="Inconsolata",fontsize=9];
+  fontname="Inconsolata";
+  fontsize=9;
+  compound=true;
+  rankdir=LR;
+
+  subgraph cluster0 {
+    label="thi.ng.fabric.core";
+    ctx[label="Execution context"];
+    ctx -> ComputeGraph;
+  }
+
+  subgraph cluster1 {
+    label="thi.ng.fabric.facts";
+
+    f1[label="FactVertex 1", color="#ff0033"];
+    f2[label="FactVertex 2", color="#ff0033"];
+
+    FactIndex[color="#ff6600"];
+    iv1[label="IndexVertex 1", color="#ff6600"];
+    iv2[label="IndexVertex 2", color="#ff6600"];
+    iv3[label="IndexVertex N", color="#ff6600"];
+    scache[label="Selection cache", color="#cc9999"];
+
+    isel1[label="Index selection\nvertex", color="#cc0099"];
+    isel2[label="Index selection\nvertex", color="#cc0099"];
+    isel3[label="Index selection\nvertex", color="#cc0099"];
+    isel4[label="Index selection\nvertex", color="#cc0099"];
+
+    q1[label="Query 1", color="#0099cc"];
+    q2[label="Query 2", color="#0099cc"];
+    q3[label="Query N", color="#0099cc"];
+
+    qcache[label="Query cache", color="#6699cc"];
+    rcache[label="Rule cache", color="#66cc99"];
+
+    FactGraph -> ComputeGraph;
+
+    f1 -> iv1; f1 -> iv2; f1 -> iv3;
+    f2 -> iv1; f2 -> iv2; f2 -> iv3;
+
+    FactGraph -> FactIndex -> scache;
+    FactGraph -> qcache;
+    FactGraph -> rcache;
+
+    ftx[label="FactTransform", color="#ff3333"];
+    FactGraph -> ftx;
+    ftx -> f1; ftx -> f2;
+
+    FactIndex -> iv1[style="dashed"];
+    iv1 -> isel1;
+    FactIndex -> iv2[style="dashed"];
+    iv2 -> isel2;
+    FactIndex -> iv3[style="dashed"];
+    iv3 -> isel3;
+    iv3 -> isel4;
+
+    isel1 -> q1 -> q3;
+    isel2 -> q1;
+    isel3 -> q1;
+    isel1 -> q2 -> q3;
+    isel2 -> q2;
+    isel4 -> q2;
+
+    rule[label="Inference\nrule", color="#00cc99"];
+    q1 -> rule;
+    rcache -> rule[style="dashed"];
+
+    scache -> isel1; scache -> isel2; scache -> isel3; scache -> isel4;
+    qcache -> q1[style="dashed"]; qcache -> q2[style="dashed"]; qcache -> q3[style="dashed"];
+
+    dsl[label="Query DSL"];
+    dsl -> q1[style="dashed"];
+    dsl -> q2[style="dashed"];
+    dsl -> q3[style="dashed"];
+
+    qviz[label="Query\nvisualization"];
+    dsl -> qviz;
+
+    nt[label="N-Triples"];
+    edn[label="EDN"];
+    conv[label="Fact import/\nconversion"];
+
+    nt -> conv;
+    edn -> conv;
+    conv -> FactGraph[style="dashed"];
+  }
+}
+#+END_SRC
+
 This module provides the following features on top of the
 /[[../fabric-core/README.org][fabric-core]]/ compute graph setup:
 
