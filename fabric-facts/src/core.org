@@ -6,18 +6,22 @@
      - [[#protocols][Protocols]]
      - [[#core-types--concepts][Core types & concepts]]
          - [[#facts][Facts]]
+             - [[#converting-maps-to-facts--triples][Converting maps to facts / triples]]
+             - [[#convertingimporting-facts-from-other-sources][Converting/importing facts from other sources]]
              - [[#factvertex-implementation][FactVertex implementation]]
              - [[#constructor][Constructor]]
          - [[#factgraph][FactGraph]]
-             - [[#fact-indexing][Fact indexing]]
-             - [[#fact-transformation][Fact transformation]]
              - [[#entity-caching][Entity caching]]
-             - [[#graph-implementation][Graph implementation]]
+             - [[#implementation][Implementation]]
+             - [[#constructor][Constructor]]
+         - [[#fact-indexing][Fact indexing]]
+             - [[#implementation][Implementation]]
              - [[#constructor][Constructor]]
          - [[#index-vertices][Index vertices]]
              - [[#indexvertex-type][IndexVertex type]]
              - [[#default-index-vertex][Default index vertex]]
              - [[#alias-index-vertex-fact-triples-only][Alias index vertex (fact triples only)]]
+         - [[#fact-transformation][Fact transformation]]
      - [[#queries][Queries]]
          - [[#overview][Overview]]
          - [[#highlevel-query-declaration][Highlevel query declaration]]
@@ -38,7 +42,6 @@
      - [[#signal--collect-functions][Signal & collect functions]]
      - [[#graph-logging][Graph logging]]
      - [[#generic-helpers][Generic helpers]]
-         - [[#converting-maps-to-facts--triples][Converting maps to facts / triples]]
      - [[#complete-namespace-definition][Complete namespace definition]]
 
 * Namespace: thi.ng.fabric.facts.core
@@ -60,9 +63,9 @@ and their roles are described in more detail throughout this document.
     (remove-fact! [_ t]))
 
   (defprotocol ICache
-    (cached [_ type k])
-    (cache! [_ type k v])
-    (expire! [_ type k]))
+    (cached [_ k] [_ type k])
+    (cache! [_ k v] [_ type k v])
+    (expire! [_ k] [_ type k]))
 
   (defprotocol IIndexSignal
     (index-signal-handler [_]))
@@ -86,14 +89,16 @@ and their roles are described in more detail throughout this document.
 ** Core types & concepts
 *** Facts
 
-Facts are simply vectors of (currently 3 or 4) items, e.g. =[subject
-predicate object]= (for triples) and stored in custom vertices. A
-=FactVertex= is more lightweight than a standard =Vertex=, configured
-to never collect (facts are immutable) and signal only once when added
-(or removed) from the graph.
+A fact is best understood as a basic statement of truth, based on the
+English SPO sentence structure: Facts are simply vectors of (currently
+3 or 4) items, e.g. =[subject predicate object]= (for triples) and
+stored in custom vertices. A =FactVertex= is more lightweight than a
+standard =Vertex=, configured to never collect (facts are immutable)
+and signal only once when added (or removed) from the graph.
 
-Any Clojure value can be used as fact item, though in most
-cases you'll want to use strings, keywords, symbols, UUIDs or numbers.
+(Almost) any Clojure value (although you should avoid lazy-seqs) can
+be used as fact sub-item, though in most cases you'll want to use
+strings, keywords, symbols, UUIDs or numbers.
 
 Example facts:
 
@@ -102,18 +107,104 @@ Example facts:
 [:P123 :name "Alice"]
 
 ;; toxi is author of fabric
-'[toxi author fabric]
+'[toxi author-of fabric]
 
 ;; in transaction UUID we state "XYZ" has a template function f
 [#uuid "cffedb78-0e16-4f7e-8494-a19b749e771b" "XYZ" :template-fn (fn [title] [:div [:h1 title]])]
 #+END_SRC
 
+**** Converting maps to facts / triples
+
+Clojure's hashmaps provide a natural way to express nested
+relationships, but cannot be directly used as facts themselves. The
+function =map->facts= recursively converts a given hashmap into a
+lazy-seq of facts (*conceptually works for triples only*).
+
+Conversion rules:
+
+- Top-level keys are used as subjects and MUST each have a map as
+  value, where their keys are used as predicates and their values as
+  objects.
+- Clojure maps in object position are translated into UUID strings in
+  order to allow the nested map to become a subject itself. In RDF
+  terms, this is equivalent to [[http://www.w3.org/TR/rdf11-concepts/#section-blank-nodes][BNodes]].
+- Sequential types (vectors, lists) in object position cause multiple
+  triples with same subject & predicate to be emitted. If any of the
+  items in the object sequence is a map, it will be treated as BNode
+  as described in previous rule
+
+The following example demonstrates all these rules:
+
+#+BEGIN_SRC clojure
+  ;; this example uses common RDF/Linked Data vocabularies to express
+  ;; various relationships...
+  (map->facts
+   {"people:toxi"
+    {"rdf:type"          "schema:Person"
+     "schema:givenName"  "Karsten"
+     "schema:familyName" "Schmidt"
+     "foaf:nick"         "toxi"
+     "foaf:account"      [{"rdf:type"                    "foaf:OnlineAccount"
+                           "foaf:accountServiceHomepage" "https://twitter.com/"
+                           "foaf:accountName"            "toxi"}
+                          {"rdf:type"                    "foaf:OnlineAccount"
+                           "foaf:accountServiceHomepage" "https://github.com/"
+                           "foaf:accountName"            "postspectacular"}]
+     "schema:memberOf"   ["orgs:postspectacular"
+                          "orgs:thing"]
+     "schema:gender"     "male"
+     "schema:jobTitle"   "Computational Designer"}})
+
+  ;; (["people:toxi" "rdf:type" "schema:Person"]
+  ;;  ["people:toxi" "schema:givenName" "Karsten"]
+  ;;  ["people:toxi" "schema:familyName" "Schmidt"]
+  ;;  ["people:toxi" "foaf:nick" "toxi"]
+  ;;  ["people:toxi" "foaf:account" "b2c1c57e-2967-44fe-8b66-135ec6fa80bf"]
+  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "rdf:type" "foaf:OnlineAccount"]
+  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountServiceHomepage" "https://twitter.com/"]
+  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountName" "toxi"]
+  ;;  ["people:toxi" "foaf:account" "4e6fba86-92ec-4422-a8a2-c80150ddb885"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "rdf:type" "foaf:OnlineAccount"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountServiceHomepage" "https://github.com/"]
+  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountName" "postspectacular"]
+  ;;  ["people:toxi" "schema:memberOf" "orgs:postspectacular"]
+  ;;  ["people:toxi" "schema:memberOf" "orgs:thing"]
+  ;;  ["people:toxi" "schema:gender" "male"]
+  ;;  ["people:toxi" "schema:jobTitle" "Computational Designer"])
+#+END_SRC
+
+#+BEGIN_SRC clojure :noweb-ref map-convert
+  (defn- bnode-facts
+    [s p o]
+    (let [bn (strf/new-uuid)] (cons [s p bn] (map->facts o bn))))
+
+  (defn- map->facts*
+    [s]
+    (fn [[p o]]
+      (cond
+        (sequential? o) (mapcat (fn [o] (if (map? o) (bnode-facts s p o) [[s p o]])) o)
+        (map? o)        (bnode-facts s p o)
+        :else           [[s p o]])))
+
+  (defn map->facts
+    ([fact-map]
+     (mapcat (fn [[s v]] (mapcat (map->facts* s) v)) fact-map))
+    ([fact-map s]
+     (mapcat (map->facts* s) fact-map)))
+#+END_SRC
+
+**** Converting/importing facts from other sources
+
+The [[./nt.org][thi.ng.fabric.io.ntriples]] namespace provides a parser to convert
+RDF N-Triples into a seq of facts (vectors). Format for other common
+Linked Data formats is planned (Turtle, JSON-LD etc.)
+
 **** FactVertex implementation
 
-As with the default =Vertex= type defined in the /fabric-core/ module,
+As with the default =Vertex= type defined in the /[[../../fabric-core/src/core.org#vertex][fabric-core]]/ module,
 a vertex' state can be obtained by dereferencing it via Clojure's =@=
 reader macro or =deref=. The =FactVertex= impl will throw errors for
-many operations supported by the default vertex. This is because
+many operations supported by the default vertex. This is, because
 unlike standard vertices, facts (as values) in a graph must be
 immutable. The only mutable aspects of a =FactVertex= are related to
 connectivity and signalling (e.g. each fact vertex is automatically
@@ -192,316 +283,23 @@ by the =FactGraph= when a new fact is to be added.
 
 *** FactGraph
 
-Facts are stored in a =FactGraph= instance which has been configured
-with a maximum fact length (currently 3 or 4 items per fact, *all
-facts in a graph MUST have the same length*). The default
+Facts are stored as vertices in a =FactGraph= instance which has been
+configured with a maximum fact length (currently 3 or 4 items per
+fact, *all facts in a graph MUST have the same length*). The default
 implementation of the =FactGraph= wraps an existing =IComputeGraph=
 instance (used as backend) and provides an extended API via the
 =IFactGraph= and =ICache= protocols.
 
-**** Fact indexing
-
-The =FactGraph= indexes all facts by their individual items (e.g.
-subject, predicate and object values). These indices are special
-vertices, are customizable, and automatically added during graph
-construction. All fact vertices are automatically connected to (and
-only to!) these indices. When queries are added to the graph, they
-indirectly attach themselves to these indices (via intermediate index
-selection vertices, see [[#queries][Queries]] section below) and are notified each
-time their index selection is changing.
-
-The module currently implements two types of indices:
-
-- plain fact components
-- indexing with dynamic entity aliasing (equivalence/synonym)
-
-Both are described (incl. examples) [[#index-vertices][further below]].
-
-#+BEGIN_SRC clojure :noweb-ref index
-  (defrecord FactIndex
-      [cache indices ctors]
-    IFactIndex
-    (fact-indices
-      [_] @indices)
-    (add-index-selections!
-      [_ g pattern]
-      (into []
-            (map-indexed
-             (fn [i x]
-               (let [sel [i x]]
-                 (if-let [sel' (get-in @cache [type sel])]
-                   (do (debug :reuse-index-sel sel) sel')
-                   (add-index-selection! g _ sel)))))
-            pattern))
-    ICache
-    (cached
-      [_ type k] (get-in @cache [type k]))
-    (cache!
-      [_ type k v] (swap! cache assoc-in [type k] v) v)
-    (expire!
-      [_ type k] (swap! cache update type dissoc k) nil)
-    f/IGraphComponent
-    (component-type
-      [_] :fact-index)
-    (add-to-graph!
-      [_ g]
-      (->> ctors
-           (mapv (fn [ctor] (let [v (ctor g)] (info :ctor ctor :v v) (f/add-vertex! g nil nil v))))
-           (reset! indices))
-      _)
-    (remove-from-graph!
-      [_ g] (err/unsupported!))
-    (remove-from-graph!
-      [_ g parent] (err/unsupported!)))
-
-  (defn new-fact-index
-    ":len   - fact length (default 3)
-     :index - index vertex ctor fn or seq of ctors"
-    ([]
-     (new-fact-index {}))
-    ([{:keys [len index]
-       :or {len 3, index default-index-vertex}}]
-     (let [ctors (cond
-                   (fn? index)
-                   (mapv (fn [i] (index #(nth % i))) (range len))
-
-                   (and (sequential? index)
-                        (every? fn? index))
-                   (vec index)
-
-                   :else
-                   (err/illegal-arg!
-                    ":index must be a ctor fn or seq of ctors"))]
-       (map->FactIndex
-        {:cache   (atom {})
-         :indices (atom {})
-         :ctors   ctors}))))
-#+END_SRC
-
-**** Fact transformation
-
-The =ITwoWayTransform= protocol allows the graph to invisibly store
-transformed facts, possibly in more compact form than specified by the
-user. When a fact is added, the =transform= method of the transform
-is applied. Queries automatically call =untransform= on their results,
-so the user will be oblivious to the changed internal representation.
-
-*Custom implementations MUST follow this rule:*
-
-- Query variables (e.g. =?a=, Clojure symbols prefixed with =?=) and
-  =nil= values MUST NOT be transformed.
-
-***** Identity transform
-
-This is a null transform (NOP), used when no fact transform is given
-for a graph.
-
-#+BEGIN_SRC clojure :noweb-ref fact-tx
-  (def identity-transform
-    (reify ITwoWayTransform
-      (transform [_ x] x)
-      (untransform [_ x] x)))
-#+END_SRC
-
-***** String prefix replacements
-
-This transform is useful when dealing with Linked Data (RDF), where
-most items are URIs. It's common practice in the LD community to
-specify prefixes for various often used vocabularies. E.g. We might
-define a prefix map and transform like this:
-
-#+BEGIN_SRC clojure
-  (def prefixes
-    {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-     "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
-     "owl"  "http://www.w3.org/2002/07/owl#"})
-
-  (def tx (prefix-transform prefixes))
-
-  (transform tx "http://www.w3.org/2002/07/owl#Ontology")
-  ;; ["owl" "Ontology"]
-
-  (untransform tx ["owl" "Ontology"])
-  ;; "http://www.w3.org/2002/07/owl#Ontology"
-#+END_SRC
-
-The transform phase takes such a prefix map and value. If value is a
-string, attempts to find prefix from map and if found returns a 2-elem
-vector of =[prefix name]=, else original.
-
-The untransformer too takes the same prefix map and a value. If the
-value is a vector as produced by the transformation fn and has a known
-prefix, returns expanded string or else original value.
-
-*Important note:* This transform only applies to single fact
- sub-items, to apply it to full facts, wrap it with others in
- =combine-transforms= (described below).
-
-#+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn sort-prefixes
-    [prefixes] (rseq (vec (sort-by #(count (peek %)) prefixes))))
-
-  (defn prefix-vector-transform
-    [prefixes]
-    (let [prefixes' (sort-prefixes prefixes)]
-      (reify ITwoWayTransform
-        (transform
-          [_ x]
-          (if (string? x)
-            (reduce
-             (fn [acc p]
-               (if (zero? (.indexOf ^String x ^String (peek p)))
-                 (reduced [(first p) (subs x (count (peek p)))])
-                 acc))
-             x prefixes')
-            x))
-        (untransform
-          [_ x]
-          (if (vector? x)
-            (if-let [p (prefixes (first x))]
-              (str p (nth x 1))
-              x)
-            x)))))
-#+END_SRC
-
-This second version of this transform is very similar and only differs
-in its transformed result type: Instead of a vector, it produces a
-string of =prefix:name=.
-
-#+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn ->prefix-string
-    [prefixes' x]
-    (if (string? x)
-      (reduce
-       (fn [acc p]
-         (if (zero? (.indexOf ^String x ^String (peek p)))
-           (reduced (str (first p) \: (subs x (count (peek p)))))
-           acc))
-       x prefixes')
-      x))
-
-  (defn <-prefix-string
-    [prefixes x]
-    (if (string? x)
-      (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
-        (if-let [p (prefixes p)]
-          (str p n)
-          x))
-      x))
-
-  (defn prefix-string-transform
-    [prefixes]
-    (let [prefixes' (sort-prefixes prefixes)]
-      (reify ITwoWayTransform
-        (transform
-          [_ x] (->prefix-string prefixes' x))
-        (untransform
-          [_ x] (<-prefix-string prefixes x)))))
-#+END_SRC
-
-***** Global fact item indexing
-
-This transform too applies to fact sub-items only (see note in
-previous section) and maps values to/from unique index IDs.
-
-In Clojure, the reverse index uses Zach Tellman's
-org.clojure/data.int-map]] for faster and more memory efficient
-behavior.
-
-#+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn global-index-transform
-    []
-    (let [index (atom #?(:clj  {:fwd {} :rev (imap/int-map) :id 0}
-                         :cljs {:fwd {} :rev {} :id 0}))]
-      (reify ITwoWayTransform
-        (transform
-          [_ x]
-          (if (or (nil? x) (qvar? x))
-            x
-            (or ((@index :fwd) x)
-                (let [curr (volatile! nil)]
-                  (swap! index
-                         #(let [id (:id %)]
-                            (vreset! curr id)
-                            (-> %
-                                (update :id inc)
-                                (update :fwd assoc x id)
-                                (update :rev assoc id x))))
-                  @curr))))
-        (untransform
-          [_ id] ((@index :rev) id id)))))
-#+END_SRC
-
-***** Higher-order transforms & composition
-
-Transforms can be composed using the functions below:
-
-- =compose-transforms= applies the given transforms serially (via
-  =reduce=) and in reverse order for =untransform=.
-
-- =one-way-transform= takes an =ITwoWayTransform= and modifies it to
-  use =identity= as its reverse transformation, therefore keeping
-  transformed values.
-
-- =combine-transforms= applies 3 or 4 transforms in parallel (one per
-  fact component) to (un)transform a single fact
-
-#+BEGIN_SRC clojure :noweb-ref fact-tx
-  (defn compose-transforms
-    [& transforms]
-    (let [rtx (reverse transforms)]
-      (reify ITwoWayTransform
-        (transform [_ x]
-          (reduce #(transform %2 %) x transforms))
-        (untransform [_ x]
-          (reduce #(untransform %2 %) x rtx)))))
-
-  (defn one-way-transform
-    [tx]
-    (reify ITwoWayTransform
-      (transform [_ x] (transform tx x))
-      (untransform [_ x] x)))
-
-  (defn combine-transforms
-    ([tx len]
-     (apply combine-transforms (repeat len tx)))
-    ([txs txp txo]
-     (reify ITwoWayTransform
-       (transform [_ fact]
-         [(transform txs (first fact))
-          (transform txp (nth fact 1))
-          (transform txo (nth fact 2))])
-       (untransform [_ fact]
-         [(untransform txs (first fact))
-          (untransform txp (nth fact 1))
-          (untransform txo (nth fact 2))])))
-    ([txt txs txp txo]
-     (reify ITwoWayTransform
-       (transform [_ fact]
-         [(transform txt (first fact))
-          (transform txs (nth fact 1))
-          (transform txp (nth fact 2))
-          (transform txo (nth fact 3))])
-       (untransform [_ fact]
-         [(untransform txt (first fact))
-          (untransform txs (nth fact 1))
-          (untransform txp (nth fact 2))
-          (untransform txo (nth fact 3))]))))
-#+END_SRC
-
 **** Entity caching
 
 The =ICache= protocol is used to cache various query related entities
-for DRY reasons. Intermediate result caching is not just done for
-performance reasons, but also to minimize memory usage, since queries
-often make use of similar patterns and sub-patterns (e.g. two separate
-query joins might use the same underlying pattern as LHS or RHS).
-Currently the cache is an atom with a nested map and these top-level
-keys:
+for DRY reasons and the =FactGraph= makes heavy use of this.
+Intermediate result caching is not just done for performance reasons,
+but also to minimize memory usage, since queries often utilize similar
+patterns and sub-patterns (e.g. two separate query joins might use the
+same underlying pattern as LHS or RHS). Currently the cache is an atom
+with a nested map and these top-level keys:
 
-- =::index-sel= - caches vertices selecting a specific key from any of
-  the indices (or a wildcard selection). These vertices basically act
-  as sub-sub-queries of a specific fact component.
 - =::queries= - caches existing single-pattern queries based on their
   query pattern (only basic & parametric queries without options are
   cached). Note: the cached values are NOT vertices, but query
@@ -510,11 +308,11 @@ keys:
 - =::rules= - caches inference rules based on their ID (also
   defrecords)
 
-**** Graph implementation
+**** Implementation
 
 #+BEGIN_SRC clojure :noweb-ref graph
   (defrecord FactGraph
-      [g index facts cache ftx]
+      [g index facts cache ftx fact-ctor]
     f/IComputeGraph
     (add-vertex!
       [_ val vspec] (f/add-vertex! g val vspec))
@@ -546,7 +344,7 @@ keys:
       [_ f]
       (let [f' (transform ftx f)]
         (or (@facts f')
-            (let [v (f/add-vertex! g f' nil fact-vertex)]
+            (let [v (f/add-vertex! g f' nil fact-ctor)]
               (f/notify-watches g [:add-fact f])
               (debug :add-fact f f')
               (run! #(f/add-edge! g v % signal-fact :add) (fact-indices index))
@@ -580,31 +378,141 @@ keys:
     "Creates a new FactGraph instance configured with given options map:
     :graph     - backing IComputeGraph (default fabric.core/compute-graph)
     :index     - FactIndex instance
+    :fact-ctor - Fact vertex ctor fn (default fact-vertex)
     :transform - fact transform (default identity-transform)"
     ([]
      (fact-graph {}))
-    ([{:keys [graph len index transform]}]
+    ([{:keys [graph len index fact-ctor transform]}]
      (assert (or (nil? index)
                  (and (satisfies? IFactIndex index)
                       (satisfies? f/IGraphComponent index))))
      (let [index (or index (new-fact-index))
            g     (map->FactGraph
-                  {:index index
-                   :facts (atom {})
-                   :cache (atom {})
-                   :ftx   (or transform identity-transform)
-                   :g     (or graph (f/compute-graph))})]
+                  {:index     index
+                   :facts     (atom {})
+                   :fact-ctor (or fact-ctor fact-vertex)
+                   :cache     (atom {})
+                   :ftx       (or transform identity-transform)
+                   :g         (or graph (f/compute-graph))})]
        (f/add-to-graph! index g)
        g)))
 #+END_SRC
 
+*** Fact indexing
+
+The =FactGraph= indexes all facts by their individual terms (e.g.
+subject, predicate and object values). These indices are special
+vertices, are customizable, and automatically added during graph
+construction. All fact vertices are automatically connected to (and
+usually /only/ to!) these indices. When queries are added to the
+graph, they indirectly attach themselves to these indices (via
+intermediate index selection vertices, see [[#queries][Queries]] section below) and
+then are notified each time their index selection is changing (during
+graph execution only!).
+
+The module currently implements two types of indices:
+
+- literal/plain fact terms
+- indexing with dynamic entity aliasing (equivalence/synonym)
+
+Both are described (incl. examples) [[#index-vertices][further below]].
+
+The =FactIndex= caches so called "index selection" vertices, each
+selecting a specific key from any of the indices (or from a set of
+values, or a wildcard selection). These vertices basically act as
+sub-sub-queries of a specific fact component and can be shared by
+multiple queries.
+
+**** Implementation
+
+The =FactIndex= needs to be instantiated *before* calling the
+=fact-graph= constructor function (or if not specified, a default
+config will be used). The =FactIndex= type implements
+=IGraphComponent= and is added to a graph during the latter's
+construction.
+
+*Therefore, do not share =FactIndex= instances between multiple
+graphs!*
+
+#+BEGIN_SRC clojure :noweb-ref index
+  (defrecord FactIndex
+      [cache indices ctors]
+    IFactIndex
+    (fact-indices
+      [_] @indices)
+    (add-index-selections!
+      [_ g pattern]
+      (into []
+            (map-indexed
+             (fn [i x]
+               (let [sel [i x]]
+                 (if-let [sel' (@cache sel)]
+                   (do (debug :reuse-index-sel sel) sel')
+                   (cache! index sel (add-index-selection! g _ sel)))))
+            pattern))
+    ICache
+    (cached
+      [_ k] (@cache k))
+    (cache!
+      [_ k v] (swap! cache assoc k v) v)
+    (expire!
+      [_ k] (swap! cache dissoc k) nil)
+    f/IGraphComponent
+    (component-type
+      [_] :fact-index)
+    (add-to-graph!
+      [_ g]
+      (->> ctors
+           (mapv (fn [ctor] (let [v (ctor g)] (info :ctor ctor :v v) (f/add-vertex! g nil nil v))))
+           (reset! indices))
+      _)
+    (remove-from-graph!
+      [_ g] (err/unsupported!))
+    (remove-from-graph!
+      [_ g parent] (err/unsupported!)))
+#+END_SRC
+
+**** Constructor
+
+#+BEGIN_SRC clojure :noweb-ref index
+  (defn new-fact-index
+    ":len   - fact length (default 3)
+     :index - index vertex ctor fn or seq of ctors"
+    ([]
+     (new-fact-index {}))
+    ([{:keys [len index]
+       :or {len 3, index default-index-vertex}}]
+     (let [ctors (cond
+                   (fn? index)
+                   (mapv (fn [i] (index #(nth % i))) (range len))
+
+                   (and (sequential? index)
+                        (every? fn? index))
+                   (vec index)
+
+                   :else
+                   (err/illegal-arg!
+                    ":index must be a ctor fn or seq of ctors"))]
+       (map->FactIndex
+        {:cache   (atom {})
+         :indices (atom {})
+         :ctors   ctors}))))
+#+END_SRC
+
 *** Index vertices
 
-Index vertices are automatically created during graph construction.
-This is the helper function used by the =FactGraph= constructor to
-create a single fact component index vertex. The diagram in the
-following section shows how these vertices are used (users don't need
-to deal with them directly, though).
+Index vertices are automatically created during graph construction as
+part of the process of adding the =FactIndex=.
+
+The =IndexVertex= type is a customizable vertex implementation used by
+both of the currently available indexing methods (below). The
+=IndexVertex='s role is to build a lookup table of individual fact
+terms, e.g. all subjects and link each term to a set of matching
+=FactVertices=. The diagram in the [[#queries][Queries]] section shows how these
+vertices are used.
+
+Apart from optional configuration, and unless special indexes are
+required, users don't ever need to deal with them directly, though...
 
 **** IndexVertex type
 
@@ -640,8 +548,6 @@ to deal with them directly, though).
       [_] (count @uncollected))
     (connect-to!
       [_ v sig-fn opts]
-      ;; TODO refactor opts to include index pattern match
-      ;; TODO only connect if this index is compatible w/ desired pattern
       (swap! outs assoc v [sig-fn opts])
       (swap! new-edges inc)
       (debug id "edge to" (f/vertex-id v) "(" (pr-str opts) ") new:" @new-edges)
@@ -769,7 +675,8 @@ values declared as synonyms/aliases. Example:
 ***** Behaviors
 
 The alias merging is implemented on top of a Disjoint set (or
-Unionfind) datastructure and has the following features and behaviors:
+Unionfind) datastructure (defined in the [[http://thi.ng/dstruct][thi.ng/dstruct]] project) and
+has the following features and behaviors:
 
 - *Order independence* - declaring an equivalence before adding facts
   produces the same result as declaring it after facts have been
@@ -796,19 +703,22 @@ Unionfind) datastructure and has the following features and behaviors:
   (ff/add-fact! graph '[bb equiv bob])
 #+END_SRC
 
-In query patterns, aliases are *not* resolved for qvars. I.e. using
-the above graph/facts as example, the query pattern =[bobby ?pred
-?obj]= *will match* the facts about subject =bob= and =bobby=, but the
-pattern =[?subj url "http://bob.com"]= will always only bind qvar
-=?subj= to =bob=, but not relate any of =bob='s aliases (only the
-original facts are matched). That also means the following query (with
-filter) will only produce an empty result set:
+***** Aliases in queries
+
+Since query variables in query patterns are bound to values of
+actually existing facts, aliases are *not* resolved for qvars. I.e.
+using the above graph/facts as example, the query pattern =[bobby
+?pred ?obj]= *will match* the facts about subjects =bob= and =bobby=,
+but the pattern =[?subj url "http://bob.com"]= will always only bind
+qvar =?subj= to =bob=, and *not* relate any of =bob='s aliases (only
+the original facts are matched). That also means the following query
+(with filter) will only produce an empty result set:
 
 #+BEGIN_SRC clojure
   {:where [[?subj url "http://bob.com"]] :filter (= ?subj "bobby")}
 #+END_SRC
 
-/(Queries are described in more detail in the next section of this
+/(Queries are described in more detail in a separate section of this
 document.)/
 
 ***** Implementation
@@ -911,6 +821,213 @@ document.)/
            (atom {})                ;; outs
            signal-alias-index-select
            (collect-alias-index g alias-props index))))))
+#+END_SRC
+
+*** Fact transformation
+
+The =ITwoWayTransform= protocol allows the graph to invisibly store
+transformed facts, possibly in more compact form than specified by the
+user. When a fact is added, the =transform= method of the transform
+is applied. Queries automatically call =untransform= on their results,
+so the user will be oblivious to the changed internal representation.
+
+*Custom implementations MUST follow this rule:*
+
+- Query variables (e.g. =?a=, Clojure symbols prefixed with =?=) and
+  =nil= values MUST NOT be transformed.
+
+***** Identity transform
+
+This is a null transform (NOP), used when no fact transform is given
+for a graph.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (def identity-transform
+    (reify ITwoWayTransform
+      (transform [_ x] x)
+      (untransform [_ x] x)))
+#+END_SRC
+
+***** String prefix replacements
+
+This transform is useful when dealing with Linked Data (RDF), where
+most items are URIs and often share a common vocabulary. Therefore,
+it's common practice in the LD community to specify prefixes for
+various, frequently used vocabularies. E.g. We might define a prefix
+map and transform like this:
+
+#+BEGIN_SRC clojure
+  (def prefixes
+    {"rdf"  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     "rdfs" "http://www.w3.org/2000/01/rdf-schema#"
+     "owl"  "http://www.w3.org/2002/07/owl#"})
+
+  (def tx (prefix-string-transform prefixes))
+
+  (transform tx "http://www.w3.org/2002/07/owl#Ontology")
+  ;; "owl:Ontology"]
+
+  (untransform tx "owl:Ontology")
+  ;; "http://www.w3.org/2002/07/owl#Ontology"
+#+END_SRC
+
+The transform phase takes such a prefix map and value. If the value is
+a string, attempts to find a registered prefix from the map and if
+found produces a string of =prefix:name=, else returns the original.
+
+The untransformer too takes the same prefix map and a value. If the
+value is a prefix string as produced by the transformation fn and has
+a known prefix, returns expanded string or else original value.
+
+The =prefix-string-transform= also implements the =ICache= protocol,
+so that new prefixes can be added/removed dynamically.
+
+*Important note:* This transform only applies to single fact
+sub-items, to apply it to full facts, wrap it with others in
+=combine-transforms= (described below).
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn sort-prefixes
+    [prefixes] (rseq (vec (sort-by #(count (peek %)) prefixes))))
+
+  (defn prefix-string-transform
+    [prefixes]
+    (let [prefixes (atom (into (sorted-map) prefixes))
+          :sorted  (atom (sort-prefixes @prefixes))
+          cache    (atom (hash-map))]
+      (reify ITwoWayTransform
+        (transform
+          [_ x]
+          (if (string? x)
+            (if-let [v (find @cache x)]
+              (key v)
+              (reduce
+               (fn [acc p]
+                 (if (.startsWith ^String x ^String (val p))
+                   (let [pre  (first p)
+                         name (.substring ^String x (count (val p)))
+                         pn   (str pre \: name)]
+                     (reduced
+                      (if-let [v (find @cache pn)]
+                        (key v)
+                        (do (swap! cache assoc pn x) pn))))
+                   acc))
+               x @sorted))
+            x))
+        (untransform
+          [_ x]
+          (if (string? x)
+            (or (@cache x)
+                (let [[[_ p n]] (re-seq #"^(\w[\w\-_]+):([\w\-_]*)$" x)]
+                  (if-let [p (@prefixes p)]
+                    (str p n)
+                    x)))
+            x))
+        ICache
+        (cached
+          [_ prefix] (@cache prefix))
+        (cache!
+          [_ prefix uri]
+          (info "register! prefix:" prefix uri)
+          (->> (swap! prefixes assoc prefix uri)
+               (sort-prefixes)
+               (reset! sorted)))
+        (expire!
+          [_ prefix]
+          (info "deregister! prefix:" prefix)
+          (->> (swap! prefixes dissoc prefix uri)
+               (sort-prefixes)
+               (reset! sorted))))))
+#+END_SRC
+
+***** Global fact item indexing
+
+This transform too applies to fact sub-items only (see note in
+previous section) and maps values to/from unique index IDs.
+
+In Clojure, the reverse index uses Zach Tellman's
+org.clojure/data.int-map]] for faster and more memory efficient
+behavior.
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn global-index-transform
+    []
+    (let [index (atom #?(:clj  {:fwd {} :rev (imap/int-map) :id 0}
+                         :cljs {:fwd {} :rev {} :id 0}))]
+      (reify ITwoWayTransform
+        (transform
+          [_ x]
+          (if (or (nil? x) (qvar? x))
+            x
+            (or ((@index :fwd) x)
+                (let [curr (volatile! nil)]
+                  (swap! index
+                         #(let [id (:id %)]
+                            (vreset! curr id)
+                            (-> %
+                                (update :id inc)
+                                (update :fwd assoc x id)
+                                (update :rev assoc id x))))
+                  @curr))))
+        (untransform
+          [_ id] ((@index :rev) id id)))))
+#+END_SRC
+
+***** Higher-order transforms & composition
+
+Transforms can be composed using the functions below:
+
+- =compose-transforms= applies the given transforms serially (via
+  =reduce=) and in reverse order for =untransform=.
+
+- =one-way-transform= takes an =ITwoWayTransform= and modifies it to
+  use =identity= as its reverse transformation, therefore keeping
+  transformed values.
+
+- =combine-transforms= applies 3 or 4 transforms in parallel (one per
+  fact component) to (un)transform a single fact
+
+#+BEGIN_SRC clojure :noweb-ref fact-tx
+  (defn compose-transforms
+    [& transforms]
+    (let [rtx (reverse transforms)]
+      (reify ITwoWayTransform
+        (transform [_ x]
+          (reduce #(transform %2 %) x transforms))
+        (untransform [_ x]
+          (reduce #(untransform %2 %) x rtx)))))
+
+  (defn one-way-transform
+    [tx]
+    (reify ITwoWayTransform
+      (transform [_ x] (transform tx x))
+      (untransform [_ x] x)))
+
+  (defn combine-transforms
+    ([tx len]
+     (apply combine-transforms (repeat len tx)))
+    ([txs txp txo]
+     (reify ITwoWayTransform
+       (transform [_ fact]
+         [(transform txs (first fact))
+          (transform txp (nth fact 1))
+          (transform txo (nth fact 2))])
+       (untransform [_ fact]
+         [(untransform txs (first fact))
+          (untransform txp (nth fact 1))
+          (untransform txo (nth fact 2))])))
+    ([txt txs txp txo]
+     (reify ITwoWayTransform
+       (transform [_ fact]
+         [(transform txt (first fact))
+          (transform txs (nth fact 1))
+          (transform txp (nth fact 2))
+          (transform txo (nth fact 3))])
+       (untransform [_ fact]
+         [(untransform txt (first fact))
+          (untransform txs (nth fact 1))
+          (untransform txp (nth fact 2))
+          (untransform txo (nth fact 3))]))))
 #+END_SRC
 
 ** Queries
@@ -1073,7 +1190,7 @@ In code form this same graph could be constructed like this:
                         (do (f/disconnect-neighbor! vertex parent)
                             false))))]
       (f/add-edge! g index-v vertex ((index-signal-handler index-v) sel) nil)
-      (cache! index ::index-sel sel isel)))
+      isel))
 
   (defn index-sel-choice
     [coll] {::choices (set coll)})
@@ -2027,85 +2144,6 @@ function which is called with a single arg, a 2-element vector of
 #+END_SRC
 
 ** Generic helpers
-*** Converting maps to facts / triples
-
-Clojure's hashmaps provide a natural way to express nested
-relationships, but cannot be directly used as facts. The function
-=map->facts= recursively converts a given hashmap into a lazy-seq of
-facts (triples).
-
-Conversion rules:
-
-- toplevel keys are used as subjects and MUST each have a map as
-  value, where their keys are used as predicates and their values as
-  objects.
-- maps in object position are translated into UUID strings in order to
-  allow the nested map to become a subject itself. In RDF terms, this
-  is equivalent to BNodes.
-- sequential types (vectors, lists) in object position cause multiple
-  triples with same subject & predicate to be emitted. If any of the
-  items in the object sequence is a map, it will be treated as BNode as
-  described in previous rule
-
-The following example demonstrates all these rules:
-
-#+BEGIN_SRC clojure
-  (map->facts
-   {"people:toxi"
-    {"rdf:type"          "schema:Person"
-     "schema:givenName"  "Karsten"
-     "schema:familyName" "Schmidt"
-     "foaf:nick"         "toxi"
-     "foaf:account"      [{"rdf:type" "foaf:OnlineAccount"
-                           "foaf:accountServiceHomepage" "https://twitter.com/"
-                           "foaf:accountName" "toxi"}
-                          {"rdf:type" "foaf:OnlineAccount"
-                           "foaf:accountServiceHomepage" "https://github.com/"
-                           "foaf:accountName" "postspectacular"}]
-     "schema:memberOf"   ["orgs:postspectacular"
-                          "orgs:thing"]
-     "schema:gender"     "male"
-     "schema:jobTitle"   "Computational Designer"}})
-
-  ;; (["people:toxi" "rdf:type" "schema:Person"]
-  ;;  ["people:toxi" "schema:givenName" "Karsten"]
-  ;;  ["people:toxi" "schema:familyName" "Schmidt"]
-  ;;  ["people:toxi" "foaf:nick" "toxi"]
-  ;;  ["people:toxi" "foaf:account" "b2c1c57e-2967-44fe-8b66-135ec6fa80bf"]
-  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "rdf:type" "foaf:OnlineAccount"]
-  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountServiceHomepage" "https://twitter.com/"]
-  ;;  ["b2c1c57e-2967-44fe-8b66-135ec6fa80bf" "foaf:accountName" "toxi"]
-  ;;  ["people:toxi" "foaf:account" "4e6fba86-92ec-4422-a8a2-c80150ddb885"]
-  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "rdf:type" "foaf:OnlineAccount"]
-  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountServiceHomepage" "https://github.com/"]
-  ;;  ["4e6fba86-92ec-4422-a8a2-c80150ddb885" "foaf:accountName" "postspectacular"]
-  ;;  ["people:toxi" "schema:memberOf" "orgs:postspectacular"]
-  ;;  ["people:toxi" "schema:memberOf" "orgs:thing"]
-  ;;  ["people:toxi" "schema:gender" "male"]
-  ;;  ["people:toxi" "schema:jobTitle" "Computational Designer"])
-#+END_SRC
-
-#+BEGIN_SRC clojure :noweb-ref helpers
-  (declare map->facts)
-
-  (defn- bnode-facts
-    [s p o]
-    (let [bn (strf/new-uuid)] (cons [s p bn] (map->facts o bn))))
-
-  (defn- map->facts*
-    [s]
-    (fn [[p o]]
-      (cond
-        (sequential? o) (mapcat (fn [o] (if (map? o) (bnode-facts s p o) [[s p o]])) o)
-        (map? o)        (bnode-facts s p o)
-        :else           [[s p o]])))
-
-  (defn map->facts
-    ([fact-map]
-     (mapcat (fn [[s v]] (mapcat (map->facts* s) v)) fact-map))
-    ([fact-map s]
-     (mapcat (map->facts* s) fact-map)))
-#+END_SRC
 
 ** Complete namespace definition
 
@@ -2136,10 +2174,13 @@ The following example demonstrates all these rules:
 
   (declare select-keys* qvar? add-query! add-query-join!)
   (declare default-index-vertex add-index-selection! index-sel-choice)
+  (declare map->facts)
 
   <<protos>>
 
   <<helpers>>
+
+  <<map-convert>>
 
   <<sig-coll>>
 
