@@ -448,8 +448,8 @@ graphs!*
                (let [sel [i x]]
                  (if-let [sel' (@cache sel)]
                    (do (debug :reuse-index-sel sel) sel')
-                   (cache! index sel (add-index-selection! g _ sel)))))
-            pattern))
+                   (cache! _ sel (add-index-selection! g _ sel)))))
+            pattern)))
     ICache
     (cached
       [_ k] (@cache k))
@@ -893,7 +893,7 @@ sub-items, to apply it to full facts, wrap it with others in
   (defn prefix-string-transform
     [prefixes]
     (let [prefixes (atom (into (sorted-map) prefixes))
-          :sorted  (atom (sort-prefixes @prefixes))
+          sorted   (atom (sort-prefixes @prefixes))
           cache    (atom (hash-map))]
       (reify ITwoWayTransform
         (transform
@@ -935,7 +935,7 @@ sub-items, to apply it to full facts, wrap it with others in
         (expire!
           [_ prefix]
           (info "deregister! prefix:" prefix)
-          (->> (swap! prefixes dissoc prefix uri)
+          (->> (swap! prefixes dissoc prefix)
                (sort-prefixes)
                (reset! sorted))))))
 #+END_SRC
@@ -1183,7 +1183,7 @@ In code form this same graph could be constructed like this:
                       [_ g parent]
                       (if (f/none-or-single-user? vertex parent)
                         (do (debug "removing :index-sel" sel)
-                            (expire! index ::index-sel sel)
+                            (expire! index sel)
                             (f/disconnect-neighbor! index-v vertex)
                             (f/remove-vertex! g vertex)
                             true)
@@ -2126,11 +2126,18 @@ function which is called with a single arg, a 2-element vector of
      (let [ch        (async/chan buf-size)
            watch-id  (f/random-id)
            log->chan #(go (>! ch %))]
-       (async/thread
-         (loop []
-           (when-let [t (<!! ch)]
-             (log-fn t)
-             (recur))))
+       #?(:clj
+          (async/thread
+            (loop []
+              (when-let [t (<!! ch)]
+                (log-fn t)
+                (recur))))
+          :cljs
+          (go
+            (loop []
+              (when-let [t (<! ch)]
+                (log-fn t)
+                (recur)))))
        (f/add-watch! g :add-fact watch-id log->chan)
        (f/add-watch! g :remove-fact watch-id log->chan)
        (info "started fact logger with buffer" buf-size)
@@ -2167,8 +2174,9 @@ function which is called with a single arg, a 2-element vector of
           [thi.ng.fabric.core :as f]
           [thi.ng.xerror.core :as err]
           [thi.ng.strf.core :as strf]
+          [thi.ng.dstruct.unionfind :as uf]
           [clojure.set :as set]
-          [cljs.core.async :as async :refer [<! <!! >!]])]))
+          [cljs.core.async :as async :refer [<! take! >!]])]))
 
   (def ^:private MAX_LIMIT #?(:clj Long/MAX_VALUE :cljs (.-MAX_VALUE js/Number)))
 
