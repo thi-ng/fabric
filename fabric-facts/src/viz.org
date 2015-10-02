@@ -14,6 +14,8 @@
 
 ** Overview
 
+*Note: This namespace is currently only available in the Clojure version.*
+
 This namespace provides a query visualization engine to help
 documenting and debugging complex queries defined via the [[./dsl.org][query DSL]]
 provided by this module.
@@ -297,7 +299,7 @@ layout and different colors:
 
 ** Complete namespace definition
 
-#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/queryviz.cljc :noweb yes :mkdirp yes :padline no
+#+BEGIN_SRC clojure :tangle ../babel/src/thi/ng/fabric/facts/queryviz.clj :noweb yes :mkdirp yes :padline no
   (ns thi.ng.fabric.facts.queryviz
     (:require
      [thi.ng.fabric.core :as f]
