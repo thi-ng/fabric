@@ -1172,6 +1172,7 @@ a more efficient manner.
               :put    (PUT route [] (handler model prefixes queries rules))
               :delete (DELETE route [] (handler model prefixes queries rules))
               :head   (HEAD route [] (handler model prefixes queries rules))
+              :any    (ANY route [] (handler model prefixes queries rules))
               (throw
                (IllegalArgumentException.
                 (str "Unknown HTTP method: " method "for route: " route))))))
@@ -1571,7 +1572,7 @@ a more efficient manner.
      [manifold.deferred :as d]
      [aleph.http :as http]
      [byte-streams :as bs]
-     [compojure.core :as compojure :refer [GET POST PUT DELETE HEAD]]
+     [compojure.core :as compojure :refer [GET POST PUT DELETE HEAD ANY]]
      [compojure.route :as route]
      [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
      [ring.middleware.stacktrace :refer [wrap-stacktrace]]
