@@ -1160,24 +1160,45 @@ a more efficient manner.
                      routes)]
       routes))
 
+  (defn- inject-routes
+    [config model prefixes queries rules routes]
+    (->> routes
+         (map
+          (fn [[method route handler]]
+            (info :inject-route method route handler)
+            (case method
+              :get    (GET route [] (handler model prefixes queries rules))
+              :post   (POST route [] (handler model prefixes queries rules))
+              :put    (PUT route [] (handler model prefixes queries rules))
+              :delete (DELETE route [] (handler model prefixes queries rules))
+              :head   (HEAD route [] (handler model prefixes queries rules))
+              :any    (ANY route [] (handler model prefixes queries rules))
+              (throw
+               (IllegalArgumentException.
+                (str "Unknown HTTP method: " method "for route: " route))))))
+         (filter identity)))
+
   (defn app-routes
     [config model prefixes queries rules]
-    (wrap-middleware
+    ((:middleware config)
      config
-     (compojure/routes
-      (GET    "/facts"       [] (list-facts-handler model))
-      (POST   "/facts"       [] (add-facts-handler model))
-      (POST   "/query"       [] (one-off-query-handler model))
-      (POST   "/queries"     [] (register-query-handler model queries))
-      (GET    "/queries"     [] (list-registry-handler queries))
-      (GET    "/queries/:id" [] (query-result-handler model queries))
-      (DELETE "/queries/:id" [] (delete-query-handler queries))
-      (GET    "/rules"       [] (list-registry-handler rules))
-      (POST   "/rules"       [] (register-rule-handler model rules))
-      (GET    "/rules/:id"   [] (rule-result-handler rules))
-      (DELETE "/rules/:id"   [] (delete-rule-handler rules))
-      (GET    "/prefixes"    [] (list-registry-handler prefixes ["prefix" "uri"] identity))
-      (route/not-found "404"))))
+     (apply compojure/routes
+            (concat
+             (inject-routes config model prefixes queries rules (:inject-routes config))
+             [(GET    "/facts"       [] (list-facts-handler model))
+              (POST   "/facts"       [] (add-facts-handler model))
+              (POST   "/query"       [] (one-off-query-handler model))
+              (POST   "/queries"     [] (register-query-handler model queries))
+              (GET    "/queries"     [] (list-registry-handler queries))
+              (GET    "/queries/:id" [] (query-result-handler model queries))
+              (DELETE "/queries/:id" [] (delete-query-handler queries))
+              (GET    "/rules"       [] (list-registry-handler rules))
+              (POST   "/rules"       [] (register-rule-handler model rules))
+              (GET    "/rules/:id"   [] (rule-result-handler rules))
+              (DELETE "/rules/:id"   [] (delete-rule-handler rules))
+              (GET    "/prefixes"    [] (list-registry-handler prefixes ["prefix" "uri"] identity))
+              (route/resources "/")
+              (route/not-found "404")]))))
 
   (defrecord Handler [config model prefixes queries rules routes]
     comp/Lifecycle
@@ -1424,18 +1445,32 @@ a more efficient manner.
 #+BEGIN_SRC clojure :noweb-ref config
   (defn default-config
     []
-    {:prefixes {:prefixes {"dcterms" "http://purl.org/dc/terms/"
+    {:prefixes {:prefixes {"adms"    "http://www.w3.org/ns/adms#"
+                           "bio"     "http://purl.org/vocab/bio/0.1/"
+                           "cc"      "http://creativecommons.org/ns#"
+                           "dcterms" "http://purl.org/dc/terms/"
                            "doap"    "http://usefulinc.com/ns/doap#"
                            "fabric"  "http://ns.thi.ng/fabric#"
                            "foaf"    "http://xmlns.com/foaf/0.1/"
-                           "geo"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
+                           "format"  "http://www.w3.org/ns/formats/"
+                           "http"    "http://www.w3.org/2011/http#"
+                           "geom"    "http://geovocab.org/geometry#"
+                           "gn"      "http://www.geonames.org/ontology#"
+                           "mo"      "http://purl.org/ontology/mo/"
+                           "org"     "http://www.w3.org/ns/org#"
                            "owl"     "http://www.w3.org/2002/07/owl#"
+                           "pos"     "http://www.w3.org/2003/01/geo/wgs84_pos#"
+                           "prov"    "http://www.w3.org/ns/prov#"
+                           "qb"      "http://purl.org/linked-data/cube#"
                            "rdf"     "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                           "rel"     "http://purl.org/vocab/relationship/"
                            "rdfs"    "http://www.w3.org/2000/01/rdf-schema#"
                            "schema"  "http://schema.org/"
+                           "sd"      "http://www.w3.org/ns/sparql-service-description#"
                            "sioc"    "http://rdfs.org/sioc/spec/"
                            "skos"    "http://www.w3.org/2004/02/skos/core#"
                            "vcard"   "http://www.w3.org/2006/vcard/ns#"
+                           "voaf"    "http://purl.org/vocommons/voaf#"
                            "void"    "http://rdfs.org/ns/void#"
                            "xsd"     "http://www.w3.org/2001/XMLSchema#"}}
      :log      {:fn       default-logger
@@ -1450,8 +1485,10 @@ a more efficient manner.
                            inf-rules-props
                            inf-rules-class-semantics
                            inf-rules-schema)}
-     :handler  {:routes   app-routes
-                :dev      true}
+     :handler  {:routes        app-routes
+                :inject-routes []
+                :middleware    wrap-middleware
+                :dev           true}
      :server   {:port     8000}})
 #+END_SRC
 
@@ -1535,7 +1572,7 @@ a more efficient manner.
      [manifold.deferred :as d]
      [aleph.http :as http]
      [byte-streams :as bs]
-     [compojure.core :as compojure :refer [GET POST DELETE]]
+     [compojure.core :as compojure :refer [GET POST PUT DELETE HEAD ANY]]
      [compojure.route :as route]
      [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
      [ring.middleware.stacktrace :refer [wrap-stacktrace]]
