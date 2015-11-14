@@ -306,7 +306,7 @@ execution context. Users can subscribe to execution results by tapping
 the =result-event-bus= (using =core.async/tap=).
 
 #+BEGIN_SRC clojure :noweb-ref model
-  (defrecord LDGraphModel [graph prefixes ctx queue rbus rbus-in]
+  (defrecord LDGraphModel [graph prefixes ctx queue rbus rbus-in config]
     comp/Lifecycle
     (start
       [_]
@@ -314,7 +314,10 @@ the =result-event-bus= (using =core.async/tap=).
       (let [queue   (async/chan)
             rbus-in (async/chan)
             rbus    (async/mult rbus-in)
-            ctx     (f/async-execution-context {:graph (get-graph graph) :result rbus-in})
+            ctx     (f/async-execution-context
+                     {:graph   (get-graph graph)
+                      :max-ops (:max-ops config)
+                      :result  rbus-in})
             this    (assoc _ :ctx ctx :queue queue :rbus rbus :rbus-in rbus-in)]
         (model-work-queue-processor queue rbus)
         (model-result-log rbus)
@@ -390,7 +393,7 @@ the =result-event-bus= (using =core.async/tap=).
 
   (defn make-graph-model
     [config]
-    (map->LDGraphModel {}))
+    (map->LDGraphModel {:config config}))
 #+END_SRC
 
 **** Model helper functions
@@ -539,7 +542,10 @@ a more efficient manner.
       [_]
       (info "starting query registry")
       (let [this (assoc _ :registry (atom (sorted-map)))]
-        (run! (fn [[id spec]] (register! this (name id) spec)) (:specs config))
+        (run!
+         (fn [[id spec]]
+           (register! this (name id) (transform-query model spec)))
+         (:specs config))
         this))
     (stop
       [_]
@@ -1479,7 +1485,7 @@ a more efficient manner.
      :graph    {:import   [(io/resource "fabric.edn")]
                 ;;:restore  "session-20150910-222204.edn"
                 :index    (ff/alias-index-vertex #{"owl:sameAs"})}
-     :model    {}
+     :model    {:max-ops  100000000}
      :queries  {:specs    {"types" '{:q [{:where [[?s "rdf:type" ?type]]}]}}}
      :rules    {:specs    (merge
                            inf-rules-props
