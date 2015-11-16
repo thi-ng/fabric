@@ -123,7 +123,10 @@ Supported config options:
 | =:restore= | string  | N          | Path to graph log file to restore on startup                     |
 | =:index=   | fn      | Y          | Index vertex constructor fn                                      |
 
-- local file names listed in =:facts= must end with =.edn= or =.nt= (for N-Triples)
+- sources listed for =:import= must be pairs of =[type
+  path-uri-or-stream]=, supported type keywords are =:edn=,
+  =:ntriples= or =:uri=, the latter determines type from URI response's
+  Content-type header
 - remote URIs must also produce EDN or N-Triples, but type is detected
   automatically (based on =Content-Type= response header)
 - remote URIs returning HTTP 303 redirects are followed (up to 2x)
@@ -137,14 +140,13 @@ Supported config options:
       (info "initializing graph...")
       (let [opts (merge {:transform (ff/combine-transforms prefixes 3)} config)
             g    (ff/fact-graph opts)]
-        (doseq [uri (:import config)]
+        (doseq [[type uri] (:import config)]
           (try
-            (let [^String uri' (.toString uri)
-                  [facts err]  (cond
-                                 (.startsWith uri' "http") (load-facts-from-uri uri)
-                                 (.endsWith uri' ".edn")   (parse-edn-facts (slurp uri))
-                                 (.endsWith uri' ".nt")    [(nt/parse-ntriples (slurp uri))]
-                                 :else                     [nil "Unsupported content type"])]
+            (let [[facts err] (case type
+                                :uri      (load-facts-from-uri uri)
+                                :edn      (parse-edn-facts (slurp uri))
+                                :ntriples [(nt/parse-ntriples (slurp uri))]
+                                [nil "Unsupported content type"])]
               (if facts
                 (do (info "adding" (count facts) "facts from" uri)
                     (run! #(ff/add-fact! g %) facts))
@@ -1168,49 +1170,41 @@ a more efficient manner.
 
   (defn- inject-routes
     [config model prefixes queries rules routes]
-    (->> routes
-         (map
-          (fn [[method route handler]]
-            (info :inject-route method route handler)
-            (case method
-              :get    (GET route [] (handler model prefixes queries rules))
-              :post   (POST route [] (handler model prefixes queries rules))
-              :put    (PUT route [] (handler model prefixes queries rules))
-              :delete (DELETE route [] (handler model prefixes queries rules))
-              :head   (HEAD route [] (handler model prefixes queries rules))
-              :any    (ANY route [] (handler model prefixes queries rules))
-              (throw
-               (IllegalArgumentException.
-                (str "Unknown HTTP method: " method "for route: " route))))))
-         (filter identity)))
+    (sequence
+     (comp
+      (map
+       (fn [handler]
+         (info :inject-route-handler handler)
+         (handler config model prefixes queries rules)))
+      (filter identity))
+     routes))
 
   (defn app-routes
     [config model prefixes queries rules]
-    ((:middleware config)
-     config
-     (apply compojure/routes
-            (concat
-             (inject-routes config model prefixes queries rules (:inject-routes config))
-             [(GET    "/facts"       [] (list-facts-handler model))
-              (POST   "/facts"       [] (add-facts-handler model))
-              (POST   "/query"       [] (one-off-query-handler model))
-              (POST   "/queries"     [] (register-query-handler model queries))
-              (GET    "/queries"     [] (list-registry-handler queries))
-              (GET    "/queries/:id" [] (query-result-handler model queries))
-              (DELETE "/queries/:id" [] (delete-query-handler queries))
-              (GET    "/rules"       [] (list-registry-handler rules))
-              (POST   "/rules"       [] (register-rule-handler model rules))
-              (GET    "/rules/:id"   [] (rule-result-handler rules))
-              (DELETE "/rules/:id"   [] (delete-rule-handler rules))
-              (GET    "/prefixes"    [] (list-registry-handler prefixes ["prefix" "uri"] identity))
-              (route/resources "/")
-              (route/not-found "404")]))))
+    (apply compojure/routes
+           (concat
+            (inject-routes config model prefixes queries rules (:inject-routes config))
+            [(GET    "/facts"       [] (list-facts-handler model))
+             (POST   "/facts"       [] (add-facts-handler model))
+             (POST   "/query"       [] (one-off-query-handler model))
+             (POST   "/queries"     [] (register-query-handler model queries))
+             (GET    "/queries"     [] (list-registry-handler queries))
+             (GET    "/queries/:id" [] (query-result-handler model queries))
+             (DELETE "/queries/:id" [] (delete-query-handler queries))
+             (GET    "/rules"       [] (list-registry-handler rules))
+             (POST   "/rules"       [] (register-rule-handler model rules))
+             (GET    "/rules/:id"   [] (rule-result-handler rules))
+             (DELETE "/rules/:id"   [] (delete-rule-handler rules))
+             (GET    "/prefixes"    [] (list-registry-handler prefixes ["prefix" "uri"] identity))
+             (route/resources "/")
+             (route/not-found "404")])))
 
   (defrecord Handler [config model prefixes queries rules routes]
     comp/Lifecycle
     (start [_]
       (info "starting handler...")
-      (let [routes ((:routes config) config model prefixes queries rules)]
+      (let [routes ((:routes config) config model prefixes queries rules)
+            routes ((:middleware config) config routes)]
         (assoc _ :routes routes)))
     (stop [_]
       (info "stopping handler..."))
@@ -1482,7 +1476,7 @@ a more efficient manner.
      :log      {:fn       default-logger
                 :buffer   (* 128 1024)
                 :path     ["session" #(strf/format-date :yyyymmdd-hhmmss %) ".edn"]}
-     :graph    {:import   [(io/resource "fabric.edn")]
+     :graph    {:import   [[:edn (io/resource "fabric.edn")]]
                 ;;:restore  "session-20150910-222204.edn"
                 :index    (ff/alias-index-vertex #{"owl:sameAs"})}
      :model    {:max-ops  100000000}
